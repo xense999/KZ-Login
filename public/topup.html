@@ -150,22 +150,18 @@
       }, 6000);
     }
 
-    // Window controls
-    async function getTauriWindow() {
-      if (window.__TAURI__) {
-        const { getCurrentWindow } = window.__TAURI__.window;
-        return getCurrentWindow();
+    // Window controls via Tauri 2 internal IPC
+    function tauriInvoke(cmd, args = {}) {
+      if (window.__TAURI_INTERNALS__?.invoke) {
+        return window.__TAURI_INTERNALS__.invoke(cmd, args);
       }
-      return null;
     }
 
-    document.getElementById('btn-min').addEventListener('click', async () => {
-      const win = await getTauriWindow();
-      if (win) win.minimize();
+    document.getElementById('btn-min').addEventListener('click', () => {
+      tauriInvoke('plugin:window|minimize');
     });
-    document.getElementById('btn-close').addEventListener('click', async () => {
-      const win = await getTauriWindow();
-      if (win) win.close();
+    document.getElementById('btn-close').addEventListener('click', () => {
+      tauriInvoke('plugin:window|close');
     });
   </script>
 </body>
