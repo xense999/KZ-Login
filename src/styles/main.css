@@ -1,0 +1,122 @@
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ── 亮色主題（預設）── iOS 26 Liquid Glass */
+:root {
+  --bg:       #f2f2f7;
+  --surface:  #ffffff;
+  --surface2: #f2f2f7;
+  --surface3: #e5e5ea;
+  --border:   rgba(0, 0, 0, 0.08);
+  --border2:  rgba(0, 0, 0, 0.05);
+  --text:     rgba(0, 0, 0, 0.88);
+  --text2:    rgba(0, 0, 0, 0.65);
+  --text3:    rgba(0, 0, 0, 0.42);
+  --hover-tint:   rgba(0, 0, 0, 0.04);
+  --input-bg:     rgba(0, 0, 0, 0.04);
+  --input-border: rgba(0, 0, 0, 0.10);
+  --ctx-menu-bg:  rgba(248, 248, 250, 0.94);
+  --ctx-shadow:   0 8px 24px rgba(0,0,0,0.14), 0 2px 6px rgba(0,0,0,0.08);
+  --card-shadow:  0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.05);
+  --card-filter:  none;
+  --card-border:  none;
+  --scrollbar:    rgba(0, 0, 0, 0.14);
+  --titlebar-bg:  rgba(242, 242, 247, 0.85);
+  --titlebar-blur: blur(20px) saturate(160%);
+  --primary-color:    #007aff;
+  --primary-bg:       rgba(0, 122, 255, 0.10);
+  --primary-bg-hover: rgba(0, 122, 255, 0.16);
+  --primary-border:   rgba(0, 122, 255, 0.25);
+  --interactive-active-bg: rgba(0, 122, 255, 0.08);
+  --green: #28c840;
+  --warn:  #ff9500;
+  --red:   #ff3b30;
+  --blue:  #007aff;
+  --amber: #ff9500;
+  /* compat aliases */
+  --glass:       rgba(0, 0, 0, 0.04);
+  --glass-hover: rgba(0, 0, 0, 0.06);
+  --ctx-hover:       rgba(0, 0, 0, 0.05);
+  --ctx-sep-color:   rgba(0, 0, 0, 0.07);
+  --spin-track:      rgba(0, 0, 0, 0.12);
+  --pill-hover-border: rgba(0, 0, 0, 0.14);
+}
+
+/* ── 暗色主題 ── iOS 26 Dark */
+:root[data-theme="dark"] {
+  --bg:       #000000;
+  --surface:  #1c1c1e;
+  --surface2: #2c2c2e;
+  --surface3: #3a3a3c;
+  --border:   rgba(84, 84, 88, 0.65);
+  --border2:  rgba(84, 84, 88, 0.35);
+  --text:     #ffffff;
+  --text2:    rgba(235, 235, 245, 0.60);
+  --text3:    rgba(235, 235, 245, 0.30);
+  --hover-tint:   rgba(255, 255, 255, 0.05);
+  --input-bg:     rgba(255, 255, 255, 0.07);
+  --input-border: rgba(84, 84, 88, 0.65);
+  --ctx-menu-bg:  #1c1c1e;
+  --ctx-shadow:   0 8px 32px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.4);
+  --card-shadow:  none;
+  --card-filter:  none;
+  --card-border:  none;
+  --scrollbar:    rgba(255, 255, 255, 0.14);
+  --titlebar-bg:  rgba(28, 28, 30, 0.90);
+  --titlebar-blur: blur(20px) saturate(160%);
+  --primary-color:    #0a84ff;
+  --primary-bg:       rgba(10, 132, 255, 0.15);
+  --primary-bg-hover: rgba(10, 132, 255, 0.22);
+  --primary-border:   rgba(10, 132, 255, 0.35);
+  --interactive-active-bg: rgba(10, 132, 255, 0.12);
+  --green: #30d158;
+  --warn:  #ff9f0a;
+  --red:   #ff453a;
+  --blue:  #0a84ff;
+  --amber: #ff9f0a;
+  --glass:       rgba(255, 255, 255, 0.05);
+  --glass-hover: rgba(255, 255, 255, 0.08);
+  --ctx-hover:       rgba(255, 255, 255, 0.08);
+  --ctx-sep-color:   rgba(255, 255, 255, 0.07);
+  --spin-track:      rgba(255, 255, 255, 0.20);
+  --pill-hover-border: rgba(255, 255, 255, 0.16);
+}
+
+html, body, #app {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body {
+  font-family: -apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
+  font-size: 14px;
+  background: transparent;
+  color: var(--text);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+input {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 2px;
+}

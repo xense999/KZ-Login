@@ -1,0 +1,56 @@
+<script setup lang="ts">
+import { onMounted } from "vue";
+import { useAccountsStore } from "../stores/accounts";
+
+const props = defineProps<{
+  token: string;
+  games: { sn: string; sid: string; sname: string }[];
+}>();
+const emit = defineEmits<{ saved: [] }>();
+const store = useAccountsStore();
+
+onMounted(() => {
+  const id = crypto.randomUUID();
+
+  store.addAccount({
+    id,
+    alias: "Beanfun 帳號",
+    email: "",
+    token: props.token,
+    gameAccounts: [...props.games].reverse().map((g) => ({ ...g, localName: null })),
+  });
+
+  // Restore alias if we've previously renamed an account with the same sub-accounts
+  const key = props.games.map(g => g.sname).sort().join("|");
+  const mem: Record<string, string> = JSON.parse(
+    localStorage.getItem("kusei:alias_memory") ?? "{}"
+  );
+  if (mem[key]) {
+    store.updateAlias(id, mem[key]);
+  }
+
+  emit("saved");
+});
+</script>
+
+<template>
+  <div class="ok-page">
+    <div class="ok-icon">
+      <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" width="48" height="48">
+        <circle cx="24" cy="24" r="22" stroke="var(--green)" stroke-width="1.5" opacity="0.25"/>
+        <path d="M14 24l7 7L34 16" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h2>登入成功</h2>
+    <p>正在儲存…</p>
+  </div>
+</template>
+
+<style scoped>
+.ok-page {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px; flex: 1; padding: 24px;
+}
+h2 { font-size: 16px; font-weight: 600; color: var(--text); }
+p  { font-size: 13px; color: var(--text2); }
+</style>
