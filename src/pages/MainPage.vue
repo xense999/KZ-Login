@@ -2,7 +2,6 @@
 import { ref, computed, onMounted } from "vue";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useAccountsStore, type BeanfunAccount } from "../stores/accounts";
 
 const HUES = [210, 150, 270, 35, 0, 190];
@@ -247,17 +246,8 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
 async function openTopup(acc: BeanfunAccount) {
   if (!acc.token) return;
   const label = `topup-${acc.id.replace(/[^a-zA-Z0-9]/g, "")}`;
-  const existing = await WebviewWindow.getByLabel(label);
-  if (existing) await existing.close();
   const url = `https://tw.beanfun.com/TW/auth.aspx?channel=gash&page_and_query=default.aspx%3Fservice_code%3D999999%26service_region%3DT0&web_token=${acc.token}`;
-  new WebviewWindow(label, {
-    url,
-    title: `儲值 — ${acc.alias}`,
-    width: 870,
-    height: 512,
-    resizable: true,
-    center: true,
-  });
+  await invoke('open_topup', { label, url, title: `儲值 — ${acc.alias}` });
 }
 
 function cleanError(msg: string): string {

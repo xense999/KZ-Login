@@ -347,6 +347,48 @@ async fn auto_login(
     Ok(AutoLoginResult { sid: result.sid, otp: result.otp })
 }
 
+// ─── Top-up Window ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.close();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+
+    let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+    let init_script = format!(
+        r#"(function(){{
+            var _t='{}';
+            function _r(){{
+                try{{
+                    var h=location.href.replace(/\/$/,'');
+                    if(h==='https://tw.beanfun.com'||h==='https://tw.beanfun.com/TW'||h.endsWith('/bflogin/default.aspx')||h.endsWith('/Login/Index')){{
+                        location.replace(_t);
+                    }}
+                }}catch(_){{}}
+            }}
+            _r();
+            window.addEventListener('load',_r);
+        }})();"#,
+        escaped
+    );
+
+    let parsed_url: tauri::utils::config::WebviewUrl = tauri::WebviewUrl::External(
+        url.parse::<reqwest::Url>().map_err(|e| e.to_string())?.into()
+    );
+    tauri::WebviewWindowBuilder::new(&app, &label, parsed_url)
+        .title(&title)
+        .inner_size(870.0, 512.0)
+        .resizable(true)
+        .center()
+        .initialization_script(&init_script)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ─── Launch Game ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -446,7 +488,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, get_otp,
-            auto_login, ping_session, diagnose_windows, launch_game
+            auto_login, ping_session, diagnose_windows, launch_game, open_topup
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
