@@ -363,12 +363,11 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
             function _r(){{
                 try{{
                     var h=location.href.replace(/\/$/,'');
-                    if(h==='https://tw.beanfun.com'||h==='https://tw.beanfun.com/TW'||h.endsWith('/bflogin/default.aspx')||h.endsWith('/Login/Index')){{
+                    if(h==='https://tw.beanfun.com'){{
                         location.replace(_t);
                     }}
                 }}catch(_){{}}
             }}
-            _r();
             window.addEventListener('load',_r);
         }})();"#,
         escaped
