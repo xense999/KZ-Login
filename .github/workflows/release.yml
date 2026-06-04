@@ -29,9 +29,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 久世登入器 ${{ github.ref_name }}
           releaseBody: 請從下方 Assets 下載安裝檔（.msi 或 .exe）。
           releaseDraft: false
           prerelease: false
+          updaterJsonPreferNsis: true
