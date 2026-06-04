@@ -17,7 +17,7 @@ onMounted(() => {
     alias: "Beanfun 帳號",
     email: "",
     token: props.token,
-    gameAccounts: [...props.games].reverse().map((g) => ({ ...g, localName: null })),
+    gameAccounts: [...props.games].map((g) => ({ ...g, localName: null })),
   });
 
   // Restore alias if we've previously renamed an account with the same sub-accounts
