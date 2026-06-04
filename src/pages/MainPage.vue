@@ -249,17 +249,14 @@ async function openTopup(acc: BeanfunAccount) {
   const label = `topup-${acc.id.replace(/[^a-zA-Z0-9]/g, "")}`;
   const existing = await WebviewWindow.getByLabel(label);
   if (existing) { await existing.setFocus(); return; }
-  const beanfunUrl = `https://tw.beanfun.com/TW/auth.aspx?channel=gash&page_and_query=default.aspx%3Fservice_code%3D999999%26service_region%3DT0&web_token=${acc.token}`;
-  const wrapperUrl = `/topup.html?url=${encodeURIComponent(beanfunUrl)}&title=${encodeURIComponent("儲值 — " + acc.alias)}`;
+  const url = `https://tw.beanfun.com/TW/auth.aspx?channel=gash&page_and_query=default.aspx%3Fservice_code%3D999999%26service_region%3DT0&web_token=${acc.token}`;
   new WebviewWindow(label, {
-    url: wrapperUrl,
+    url,
     title: `儲值 — ${acc.alias}`,
     width: 870,
     height: 512,
     resizable: true,
     center: true,
-    decorations: false,
-    transparent: true,
   });
 }
 
