@@ -299,7 +299,7 @@ fn parse_game_accounts(html: &str) -> Result<Vec<GameAccount>, BeanfunError> {
             Some(GameAccount {
                 sn: sn.to_string(),
                 sid: sid.to_string(),
-                sname: sname.to_string(),
+                sname: html_decode(sname),
             })
         })
         .collect();
@@ -463,6 +463,49 @@ fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {
         .map(|&b| if b <= 0x7F { b as char } else { '?' })
         .collect();
     Ok(raw.trim_matches('\0').to_string())
+}
+
+fn html_decode(s: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"&#(?:x([0-9a-fA-F]+)|([0-9]+));|&(amp|lt|gt|quot|apos|nbsp);").unwrap()
+    });
+
+    let mut result = String::with_capacity(s.len());
+    let mut last_end = 0;
+
+    for cap in re.captures_iter(s) {
+        let m = cap.get(0).unwrap();
+        result.push_str(&s[last_end..m.start()]);
+
+        if let Some(hex) = cap.get(1) {
+            if let Ok(code) = u32::from_str_radix(hex.as_str(), 16) {
+                if let Some(c) = char::from_u32(code) {
+                    result.push(c);
+                }
+            }
+        } else if let Some(dec) = cap.get(2) {
+            if let Ok(code) = dec.as_str().parse::<u32>() {
+                if let Some(c) = char::from_u32(code) {
+                    result.push(c);
+                }
+            }
+        } else if let Some(named) = cap.get(3) {
+            match named.as_str() {
+                "amp"  => result.push('&'),
+                "lt"   => result.push('<'),
+                "gt"   => result.push('>'),
+                "quot" => result.push('"'),
+                "apos" => result.push('\''),
+                "nbsp" => result.push('\u{00A0}'),
+                _      => result.push_str(m.as_str()),
+            }
+        }
+
+        last_end = m.end();
+    }
+    result.push_str(&s[last_end..]);
+    result
 }
 
 /// Simple percent-decode (%XX only, `+` treated as literal)
