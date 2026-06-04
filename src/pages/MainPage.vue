@@ -248,7 +248,7 @@ async function openTopup(acc: BeanfunAccount) {
   if (!acc.token) return;
   const label = `topup-${acc.id.replace(/[^a-zA-Z0-9]/g, "")}`;
   const existing = await WebviewWindow.getByLabel(label);
-  if (existing) { await existing.setFocus(); return; }
+  if (existing) await existing.close();
   const url = `https://tw.beanfun.com/TW/auth.aspx?channel=gash&page_and_query=default.aspx%3Fservice_code%3D999999%26service_region%3DT0&web_token=${acc.token}`;
   new WebviewWindow(label, {
     url,
