@@ -57,6 +57,11 @@ npm run tauri build    # 打包安裝檔
 - 本工具不儲存任何帳號密碼；OTP 密碼僅於記憶體中短暫存在，程式關閉後即消失。
 - 因使用本工具導致的帳號警告、封鎖或任何損失，作者概不負責。
 
+## 貢獻者
+
+- [Kuze](https://github.com/xense999) — 作者
+- [Claude](https://claude.ai) — AI 協作開發
+
 ## 致謝
 
 - [pungin/Beanfun](https://github.com/pungin/Beanfun) — Beanfun API 實作參考
