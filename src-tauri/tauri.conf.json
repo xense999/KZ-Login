@@ -1,6 +1,6 @@
 {
   "productName": "久世登入器",
-  "version": "0.1.4",
+  "version": "0.1.0",
   "identifier": "com.kusei.login",
   "build": {
     "frontendDist": "../dist",
@@ -34,13 +34,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2ODczRTkzQ0RCRTNDQzAKUldUQVBMN05rejZIcHBOQy9pN0F5bGNsRzNIbDVic3lKcUR2ZkNPWUZTWmZHRUE5cTk2VnlDZjYK",
-      "endpoints": [
-        "https://github.com/xense999/KZ-Login/releases/latest/download/latest.json"
-      ]
-    }
   }
 }

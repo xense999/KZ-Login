@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { useTheme } from "../composables/useTheme";
-import { getVersion } from "@tauri-apps/api/app";
 
 const emit = defineEmits<{ back: [] }>();
 
@@ -15,15 +12,8 @@ const STORAGE_KEY = "kusei:game_path";
 const gamePath = ref("");
 const saved = ref(false);
 
-const appVersion = ref("");
-const updateStatus = ref<"idle" | "checking" | "downloading" | "up-to-date" | "error">("idle");
-const updateProgress = ref(0);
-const updateError = ref("");
-const newVersion = ref("");
-
-onMounted(async () => {
+onMounted(() => {
   gamePath.value = localStorage.getItem(STORAGE_KEY) ?? "";
-  appVersion.value = await getVersion();
 });
 
 async function browse() {
@@ -44,36 +34,6 @@ function clear() {
   gamePath.value = "";
   localStorage.removeItem(STORAGE_KEY);
 }
-
-async function checkUpdate() {
-  updateStatus.value = "checking";
-  updateError.value = "";
-  updateProgress.value = 0;
-  try {
-    const update = await check();
-    if (!update?.available) {
-      updateStatus.value = "up-to-date";
-      setTimeout(() => { updateStatus.value = "idle"; }, 3000);
-      return;
-    }
-    newVersion.value = update.version;
-    updateStatus.value = "downloading";
-    let downloaded = 0;
-    let total = 0;
-    await update.downloadAndInstall((event) => {
-      if (event.event === "Started") {
-        total = event.data.contentLength ?? 0;
-      } else if (event.event === "Progress") {
-        downloaded += event.data.chunkLength;
-        updateProgress.value = total > 0 ? Math.round((downloaded / total) * 100) : 0;
-      }
-    });
-    await relaunch();
-  } catch (e) {
-    updateStatus.value = "error";
-    updateError.value = String(e);
-  }
-}
 </script>
 
 <template>
@@ -87,36 +47,6 @@ async function checkUpdate() {
             <button :class="{ active: theme === 'neutral' }" @click="setTheme('neutral')">亮色</button>
             <button :class="{ active: theme === 'dark' }" @click="setTheme('dark')">暗色</button>
           </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="row">
-          <div>
-            <span class="row-title">檢查更新</span>
-            <div class="row-desc" style="margin-top:2px">
-              <template v-if="updateStatus === 'up-to-date'">已是最新版本</template>
-              <template v-else-if="updateStatus === 'downloading'">
-                下載中 {{ newVersion }}… {{ updateProgress > 0 ? updateProgress + '%' : '' }}
-              </template>
-              <template v-else-if="updateStatus === 'error'">{{ updateError }}</template>
-              <template v-else>目前版本 v{{ appVersion }}</template>
-            </div>
-          </div>
-          <button
-            class="btn-update"
-            :disabled="updateStatus === 'checking' || updateStatus === 'downloading'"
-            :class="{
-              'is-checking': updateStatus === 'checking',
-              'up-to-date': updateStatus === 'up-to-date',
-              'is-error': updateStatus === 'error',
-            }"
-            @click="checkUpdate"
-          >
-            <span v-if="updateStatus === 'checking' || updateStatus === 'downloading'" class="spin-sm"></span>
-            <template v-else-if="updateStatus === 'up-to-date'">✓</template>
-            <template v-else>更新</template>
-          </button>
         </div>
       </div>
 
@@ -271,34 +201,6 @@ async function checkUpdate() {
   color: var(--text);
 }
 .seg button:not(.active):hover { color: var(--text); }
-
-/* ── 更新按鈕 ── */
-.btn-update {
-  flex-shrink: 0;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 7px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text2);
-  min-width: 56px;
-  text-align: center;
-  transition: background 0.12s, color 0.12s;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-}
-.btn-update:hover:not(:disabled) { background: var(--surface3); color: var(--text); }
-.btn-update:disabled { opacity: 0.5; cursor: default; }
-.btn-update.up-to-date { color: var(--green); border-color: rgba(50,215,75,0.3); background: rgba(50,215,75,0.08); }
-.btn-update.is-error { color: var(--warn); border-color: rgba(255,159,10,0.3); }
-
-.spin-sm {
-  display: inline-block; width: 11px; height: 11px;
-  border: 1.5px solid var(--spin-track);
-  border-top-color: var(--text);
-  border-radius: 50%; animation: spin 0.7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── 底部按鈕 ── */
 .bottom-bar {
