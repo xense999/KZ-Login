@@ -286,7 +286,7 @@ function cleanError(msg: string): string {
         @contextmenu.prevent="openContextMenu($event, acc.id)"
       >
         <div class="av" :style="{ background: `hsl(${hue(acc.id)},40%,18%)`, color: `hsl(${hue(acc.id)},70%,70%)` }">
-          {{ acc.alias[0]?.toUpperCase() }}
+          <img src="/avatar.png" class="av-icon" />
         </div>
         <div class="acc-info">
           <template v-if="renamingAlias === acc.id">
@@ -512,6 +512,10 @@ function cleanError(msg: string): string {
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 600;
+  overflow: hidden;
+}
+.av-icon {
+  width: 100%; height: 100%; object-fit: cover;
 }
 
 .acc-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
