@@ -34,7 +34,7 @@
 2. 點擊「自動登入」按鈕
 3. 應用程式自動填入帳號與 OTP 密碼並送出登入
 
-擷圖
+**擷圖**
 
 <img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/ea952079-5315-4ab2-b8d6-6a5af01353b3" />　　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/8eef0927-f69f-4339-8fbe-8576067693d1" />　　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/a3e69754-d863-4a86-9084-f25c7ab99175" />
 
