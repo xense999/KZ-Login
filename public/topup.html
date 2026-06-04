@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>儲值</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #f2f2f7;
+      --titlebar-bg: rgba(242,242,247,0.90);
+      --border2: rgba(0,0,0,0.05);
+      --text: rgba(0,0,0,0.88);
+      --text2: rgba(0,0,0,0.65);
+      --text3: rgba(0,0,0,0.42);
+      --glass-hover: rgba(0,0,0,0.06);
+      --red: #ff3b30;
+    }
+    :root[data-theme="dark"] {
+      --bg: #000000;
+      --titlebar-bg: rgba(28,28,30,0.92);
+      --border2: rgba(84,84,88,0.35);
+      --text: #ffffff;
+      --text2: rgba(235,235,245,0.60);
+      --text3: rgba(235,235,245,0.30);
+      --glass-hover: rgba(255,255,255,0.08);
+      --red: #ff453a;
+    }
+
+    html, body { height: 100%; overflow: hidden; background: transparent; }
+
+    body {
+      font-family: -apple-system, "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .titlebar {
+      height: 42px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      background: var(--titlebar-bg);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      border-bottom: 1px solid var(--border2);
+      -webkit-app-region: drag;
+      app-region: drag;
+    }
+
+    .title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text2);
+      letter-spacing: 0.01em;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    .win-controls {
+      margin-left: auto;
+      display: flex;
+      gap: 2px;
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+
+    .wbtn {
+      width: 26px; height: 22px;
+      background: none; border: none;
+      color: var(--text3);
+      font-size: 12px;
+      border-radius: 5px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .wbtn:hover { background: var(--glass-hover); color: var(--text2); }
+    .wbtn.close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
+
+    iframe {
+      flex: 1;
+      border: none;
+      width: 100%;
+    }
+
+    .blocked {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--text2);
+      font-size: 14px;
+    }
+    .blocked a {
+      color: #007aff;
+      font-size: 13px;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="titlebar" data-tauri-drag-region>
+    <span class="title" id="page-title">儲值</span>
+    <div class="win-controls">
+      <button class="wbtn" id="btn-min">&#x2212;</button>
+      <button class="wbtn close" id="btn-close">&#x2715;</button>
+    </div>
+  </div>
+  <iframe id="frame" allow="payment *"></iframe>
+  <div class="blocked" id="blocked" style="display:none">
+    <span>無法在內嵌視窗中載入儲值頁面</span>
+    <a id="ext-link" href="#" target="_blank">在瀏覽器中開啟</a>
+  </div>
+
+  <script>
+    // Apply theme
+    const theme = localStorage.getItem('kusei:theme') || 'neutral';
+    if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+
+    // Read URL + title from query params
+    const params = new URLSearchParams(location.search);
+    const url = params.get('url') || '';
+    const title = params.get('title') || '儲值';
+
+    document.getElementById('page-title').textContent = title;
+
+    const frame = document.getElementById('frame');
+    const blocked = document.getElementById('blocked');
+    const extLink = document.getElementById('ext-link');
+    extLink.href = url;
+
+    if (url) {
+      frame.src = url;
+      frame.onerror = () => { frame.style.display = 'none'; blocked.style.display = 'flex'; };
+      // Detect X-Frame-Options block (no reliable cross-origin way; use load timeout)
+      let loaded = false;
+      frame.onload = () => { loaded = true; };
+      setTimeout(() => {
+        if (!loaded) { frame.style.display = 'none'; blocked.style.display = 'flex'; }
+      }, 6000);
+    }
+
+    // Window controls
+    async function getTauriWindow() {
+      if (window.__TAURI__) {
+        const { getCurrentWindow } = window.__TAURI__.window;
+        return getCurrentWindow();
+      }
+      return null;
+    }
+
+    document.getElementById('btn-min').addEventListener('click', async () => {
+      const win = await getTauriWindow();
+      if (win) win.minimize();
+    });
+    document.getElementById('btn-close').addEventListener('click', async () => {
+      const win = await getTauriWindow();
+      if (win) win.close();
+    });
+  </script>
+</body>
+</html>
