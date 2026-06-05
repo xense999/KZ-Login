@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 const emit = defineEmits<{
   cancel: [];
@@ -10,7 +11,9 @@ const emit = defineEmits<{
 type Status = "loading" | "waiting" | "expired" | "error";
 const status = ref<Status>("loading");
 const qrImage = ref("");
+const deeplink = ref("");
 const errorMsg = ref("");
+const linkCopied = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 onMounted(() => startQr());
@@ -18,13 +21,21 @@ onUnmounted(() => { if (pollTimer) clearTimeout(pollTimer); });
 
 async function startQr() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-  status.value = "loading"; qrImage.value = ""; errorMsg.value = "";
+  status.value = "loading"; qrImage.value = ""; deeplink.value = ""; errorMsg.value = "";
   try {
-    const result = await invoke<{ bitmap_base64: string }>("qr_start");
+    const result = await invoke<{ bitmap_base64: string; deeplink?: string }>("qr_start");
     qrImage.value = result.bitmap_base64;
+    deeplink.value = result.deeplink ?? "";
     status.value = "waiting";
     schedulePoll();
   } catch (e) { status.value = "error"; errorMsg.value = String(e); }
+}
+
+async function copyDeeplink() {
+  if (!deeplink.value) return;
+  await writeText(deeplink.value);
+  linkCopied.value = true;
+  setTimeout(() => { linkCopied.value = false; }, 2000);
 }
 
 function schedulePoll() { pollTimer = setTimeout(poll, 2000); }
@@ -64,6 +75,9 @@ async function poll() {
           <div class="pulse-dot" style="animation-delay:.5s"></div>
         </div>
         <span class="status-txt">等待掃描</span>
+        <button v-if="deeplink" class="btn-link" @click="copyDeeplink">
+          {{ linkCopied ? "已複製 ✓" : "連結版本" }}
+        </button>
       </template>
 
       <template v-else-if="status === 'expired'">
@@ -131,6 +145,18 @@ async function poll() {
 @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.2;transform:scale(.6);} }
 
 .status-txt { font-size: 13px; color: var(--text2); }
+
+.btn-link {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text3);
+  transition: background 0.12s, color 0.12s;
+}
+.btn-link:hover { background: var(--glass-hover); color: var(--text2); }
 
 .spinner-lg {
   width: 32px; height: 32px;
