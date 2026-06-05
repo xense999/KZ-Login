@@ -356,9 +356,25 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
-    let target_url = url.clone();
-    let app_nav   = app.clone();
-    let label_nav = label.clone();
+    let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+    let init_script = format!(
+        r#"(function(){{
+            var _t='{}';
+            function _r(){{
+                try{{
+                    var h=location.href.replace(/\/$/,'');
+                    if(h==='https://tw.beanfun.com'){{
+                        if(!sessionStorage.getItem('_bf_redirected')){{
+                            sessionStorage.setItem('_bf_redirected','1');
+                            location.replace(_t);
+                        }}
+                    }}
+                }}catch(_){{}}
+            }}
+            window.addEventListener('load',_r);
+        }})();"#,
+        escaped
+    );
 
     let parsed_url: tauri::utils::config::WebviewUrl = tauri::WebviewUrl::External(
         url.parse::<reqwest::Url>().map_err(|e| e.to_string())?.into()
@@ -369,24 +385,7 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         .inner_size(870.0, 512.0)
         .resizable(true)
         .center()
-        .on_navigation(move |nav_url| {
-            let trimmed = nav_url.as_str().trim_end_matches('/');
-            if trimmed == "https://tw.beanfun.com" {
-                let target = target_url.clone();
-                let app2   = app_nav.clone();
-                let label2 = label_nav.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    if let Some(win) = app2.get_webview_window(&label2) {
-                        let escaped = target.replace('\'', "\\'");
-                        let _ = win.eval(&format!("window.location.replace('{}')", escaped));
-                    }
-                });
-                false
-            } else {
-                true
-            }
-        })
+        .initialization_script(&init_script)
         .build()
         .map_err(|e| e.to_string())?;
 
