@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>久世登入器 — 開啟登入</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 24px;
+      background: #f2f2f7;
+      color: #1c1c1e;
+      text-align: center;
+    }
+    .icon {
+      width: 64px; height: 64px;
+      border-radius: 16px;
+      background: #fff;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    h1 { font-size: 18px; font-weight: 600; }
+    p { font-size: 14px; color: #636366; line-height: 1.5; }
+    a.btn {
+      display: inline-block;
+      margin-top: 4px;
+      padding: 14px 28px;
+      background: #007aff;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      border-radius: 12px;
+    }
+    .err { color: #ff3b30; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="icon">
+    <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#007aff" stroke-width="1.6">
+      <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+      <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+      <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+      <rect x="14" y="14" width="3" height="3" rx="0.5"/>
+      <rect x="18" y="18" width="3" height="3" rx="0.5"/>
+    </svg>
+  </div>
+  <h1>正在開啟登入…</h1>
+  <p id="hint">即將自動開啟 APP，若沒反應請點下方按鈕</p>
+  <a id="open" class="btn" href="#" style="display:none">手動開啟登入</a>
+
+  <script>
+    // The deeplink is base64-encoded in the URL fragment (#) so the login code
+    // survives transport intact — no decodeURIComponent, no double-decode, and
+    // the GitHub server never receives it (fragments are not sent).
+    var dl = "";
+    try {
+      var raw = location.hash.slice(1);
+      // UTF-8 safe base64 decode
+      dl = decodeURIComponent(escape(atob(raw)));
+    } catch (_) {}
+
+    if (dl && dl.indexOf("://") > 0) {
+      var btn = document.getElementById("open");
+      btn.href = dl;            // anchor keeps the URL untouched as a fallback
+      btn.style.display = "inline-block";
+      // Auto-trigger the app
+      location.href = dl;
+    } else {
+      document.getElementById("hint").innerHTML =
+        '<span class="err">連結無效或已過期，請回到久世登入器重新取得。</span>';
+    }
+  </script>
+</body>
+</html>

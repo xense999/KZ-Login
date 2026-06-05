@@ -30,8 +30,6 @@ hex = "0.4"
 base64 = "0.22"
 regex = "1"
 thiserror = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }
-rqrr = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -27,22 +27,24 @@ async function startQr() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   status.value = "loading"; qrImage.value = ""; deeplink.value = ""; errorMsg.value = "";
   try {
-    const result = await invoke<{ bitmap_base64: string; deeplink?: string; qr_url?: string }>("qr_start");
+    const result = await invoke<{ bitmap_base64: string; deeplink?: string }>("qr_start");
     qrImage.value = result.bitmap_base64;
-    // Prefer the QR-decoded content (what a scanner reads, which actually
-    // completes login) over the API DeepLink field.
-    deeplink.value = result.qr_url || result.deeplink || "";
+    deeplink.value = result.deeplink ?? "";
     status.value = "waiting";
     schedulePoll();
   } catch (e) { status.value = "error"; errorMsg.value = String(e); }
 }
 
+const REDIRECT_BASE = "https://xense999.github.io/KZ-Login/redirect.html";
+
 async function copyDeeplink() {
   if (!deeplink.value) return;
-  // deeplink.value is the QR-decoded URL — an official gamania https redirect
-  // (play.games.gamania.com/deeplink?url=beanfunapp://...) that is clickable
-  // in Discord and forwards to the app, exactly like scanning the QR.
-  const shareUrl = deeplink.value;
+  // Wrap the gameplapp:// deeplink in an https redirect page so it becomes a
+  // clickable link in Discord. The deeplink is base64-encoded in the URL
+  // fragment so the login code survives transport intact (no double-decode)
+  // and never reaches the GitHub server.
+  const b64 = btoa(unescape(encodeURIComponent(deeplink.value)));
+  const shareUrl = `${REDIRECT_BASE}#${b64}`;
   await writeText(shareUrl);
 
   const webhook = localStorage.getItem("kusei:discord_webhook");
