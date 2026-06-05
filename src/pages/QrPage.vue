@@ -41,7 +41,11 @@ async function copyDeeplink() {
       await fetch(webhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: `🔗 Beanfun 登入連結\n${deeplink.value}` }),
+        body: JSON.stringify({
+          username: "久世登入器",
+          avatar_url: "https://raw.githubusercontent.com/xense999/KZ-Login/master/public/avatar.png",
+          content: `[登入連結](${deeplink.value})`,
+        }),
       });
       linkCopied.value = true;
       setTimeout(() => { linkCopied.value = false; }, 2000);
