@@ -356,30 +356,29 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
-    let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
-    let init_script = format!(
-        r#"(function(){{
-            var _t='{}';
-            var n=parseInt(sessionStorage.getItem('_bf_n')||'0')+1;
-            sessionStorage.setItem('_bf_n',n);
-            if(n>=2){{
-                sessionStorage.removeItem('_bf_n');
-                location.replace(_t);
-            }}
-        }})();"#,
-        escaped
-    );
-
     let parsed_url: tauri::utils::config::WebviewUrl = tauri::WebviewUrl::External(
         url.parse::<reqwest::Url>().map_err(|e| e.to_string())?.into()
     );
+
+    let load_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let load_count2 = load_count.clone();
+    let redirect_url = url.replace('\'', "\\'");
 
     tauri::WebviewWindowBuilder::new(&app, &label, parsed_url)
         .title(&title)
         .inner_size(870.0, 512.0)
         .resizable(true)
         .center()
-        .initialization_script(&init_script)
+        .on_page_load(move |win, payload| {
+            use tauri::webview::PageLoadEvent;
+            if payload.event() == PageLoadEvent::Finished {
+                let n = load_count2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n == 2 {
+                    load_count2.store(0, std::sync::atomic::Ordering::SeqCst);
+                    let _ = win.eval(&format!("location.replace('{}')", redirect_url));
+                }
+            }
+        })
         .build()
         .map_err(|e| e.to_string())?;
 
