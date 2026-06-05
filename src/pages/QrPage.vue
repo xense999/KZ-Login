@@ -75,9 +75,6 @@ async function poll() {
           <div class="pulse-dot" style="animation-delay:.5s"></div>
         </div>
         <span class="status-txt">等待掃描</span>
-        <button v-if="deeplink" class="btn-link" @click="copyDeeplink">
-          {{ linkCopied ? "已複製 ✓" : "連結版本" }}
-        </button>
       </template>
 
       <template v-else-if="status === 'expired'">
@@ -97,6 +94,9 @@ async function poll() {
     </div>
 
     <div class="actions">
+      <button v-if="status === 'waiting' && deeplink" class="btn-ghost" @click="copyDeeplink">
+        {{ linkCopied ? "已複製 ✓" : "連結版本" }}
+      </button>
       <button class="btn-ghost" @click="$emit('cancel')">取消</button>
       <button v-if="status === 'expired' || status === 'error'" class="btn-solid" @click="startQr">重新取得</button>
     </div>
@@ -145,18 +145,6 @@ async function poll() {
 @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.2;transform:scale(.6);} }
 
 .status-txt { font-size: 13px; color: var(--text2); }
-
-.btn-link {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 16px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text3);
-  transition: background 0.12s, color 0.12s;
-}
-.btn-link:hover { background: var(--glass-hover); color: var(--text2); }
 
 .spinner-lg {
   width: 32px; height: 32px;
