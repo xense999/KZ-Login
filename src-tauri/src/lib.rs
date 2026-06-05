@@ -356,6 +356,20 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
+    let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+    let init_script = format!(
+        r#"(function(){{
+            var _t='{}';
+            var n=parseInt(sessionStorage.getItem('_bf_n')||'0')+1;
+            sessionStorage.setItem('_bf_n',n);
+            if(n>=2){{
+                sessionStorage.removeItem('_bf_n');
+                location.replace(_t);
+            }}
+        }})();"#,
+        escaped
+    );
+
     let parsed_url: tauri::utils::config::WebviewUrl = tauri::WebviewUrl::External(
         url.parse::<reqwest::Url>().map_err(|e| e.to_string())?.into()
     );
@@ -365,6 +379,7 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         .inner_size(870.0, 512.0)
         .resizable(true)
         .center()
+        .initialization_script(&init_script)
         .build()
         .map_err(|e| e.to_string())?;
 
