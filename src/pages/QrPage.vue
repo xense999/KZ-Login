@@ -35,9 +35,15 @@ async function startQr() {
   } catch (e) { status.value = "error"; errorMsg.value = String(e); }
 }
 
+const REDIRECT_BASE = "https://xense999.github.io/KZ-Login/redirect.html";
+
 async function copyDeeplink() {
   if (!deeplink.value) return;
-  await writeText(deeplink.value);
+  // Wrap the gameplapp:// deeplink in an https redirect page so it becomes a
+  // clickable link (Discord only renders http/https). The deeplink is placed
+  // in the URL fragment (#) so it never reaches the GitHub server.
+  const shareUrl = `${REDIRECT_BASE}#${encodeURIComponent(deeplink.value)}`;
+  await writeText(shareUrl);
 
   const webhook = localStorage.getItem("kusei:discord_webhook");
   if (webhook) {
@@ -48,7 +54,7 @@ async function copyDeeplink() {
         body: JSON.stringify({
           username: "久世登入器",
           avatar_url: "https://raw.githubusercontent.com/xense999/KZ-Login/master/public/avatar.png",
-          content: `[登入連結](${deeplink.value})`,
+          content: `[登入連結](${shareUrl})`,
         }),
       });
       linkCopied.value = true;
