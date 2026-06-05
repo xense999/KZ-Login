@@ -1,4 +1,4 @@
-# 久世登入器
+# 久世登入器 · KZ Login
 
 ![Tauri](https://img.shields.io/badge/Tauri-2-blue) ![Vue](https://img.shields.io/badge/Vue-3-42b883) ![Rust](https://img.shields.io/badge/Rust-orange) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
