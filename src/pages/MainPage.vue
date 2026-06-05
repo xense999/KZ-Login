@@ -415,7 +415,7 @@ function cleanError(msg: string): string {
             </div>
           </div>
 
-          <div v-if="errorMap[game.sn]" class="err-row">登入失效</div>
+          <div v-if="errorMap[game.sn]" class="err-row">登入已失效，請重新掃描</div>
           <div v-else-if="sentMap[game.sn]" class="sent-row">
             已填入帳號：{{ sentMap[game.sn].sid }}
           </div>
