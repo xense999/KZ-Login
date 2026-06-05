@@ -14,9 +14,13 @@ const qrImage = ref("");
 const deeplink = ref("");
 const errorMsg = ref("");
 const linkCopied = ref(false);
+const hasWebhook = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-onMounted(() => startQr());
+onMounted(() => {
+  hasWebhook.value = !!localStorage.getItem("kusei:discord_webhook");
+  startQr();
+});
 onUnmounted(() => { if (pollTimer) clearTimeout(pollTimer); });
 
 async function startQr() {
@@ -114,7 +118,7 @@ async function poll() {
 
     <div class="actions">
       <button v-if="status === 'waiting' && deeplink" class="btn-ghost" @click="copyDeeplink">
-        {{ linkCopied ? (localStorage.getItem('kusei:discord_webhook') ? "已傳送 ✓" : "已複製 ✓") : "連結版本" }}
+        {{ linkCopied ? (hasWebhook ? "已傳送 ✓" : "已複製 ✓") : "連結版本" }}
       </button>
       <button class="btn-ghost" @click="$emit('cancel')">取消</button>
       <button v-if="status === 'expired' || status === 'error'" class="btn-solid" @click="startQr">重新取得</button>
