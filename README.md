@@ -1,4 +1,4 @@
-# 久世登入器 · KZ Login
+# 久世登入器
 
 ![Tauri](https://img.shields.io/badge/Tauri-2-blue) ![Vue](https://img.shields.io/badge/Vue-3-42b883) ![Rust](https://img.shields.io/badge/Rust-orange) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 
@@ -47,7 +47,10 @@
 
 **擷圖**
 
-<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/ea952079-5315-4ab2-b8d6-6a5af01353b3" />　　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/8eef0927-f69f-4339-8fbe-8576067693d1" />　　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/ad617ca3-5c1b-4356-9fa5-cf6744f28ee0" />
+<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/ea952079-5315-4ab2-b8d6-6a5af01353b3" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/e69d7154-0d35-4d67-b26b-fbab63ce1095" />
+　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/fec73982-2945-4a8f-957d-e14db5d9fd5c" />
+　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/b8d9f5ac-7fc1-4422-aa23-5ec7d4e09989" />
+
 
 
 
