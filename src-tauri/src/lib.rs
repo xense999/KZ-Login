@@ -30,6 +30,7 @@ fn map_err(e: impl std::fmt::Display) -> String {
 struct QrStartResult {
     bitmap_base64: String,
     deeplink: Option<String>,
+    qr_url: Option<String>,
 }
 
 #[tauri::command]
@@ -41,6 +42,7 @@ async fn qr_start(state: tauri::State<'_, AppState>) -> Result<QrStartResult, St
     let result = QrStartResult {
         bitmap_base64: init.bitmap_base64.clone(),
         deeplink: init.deeplink.clone(),
+        qr_url: init.qr_url.clone(),
     };
 
     *state.pending_qr.lock().await = Some(QrSession { client, cookie_store, init });

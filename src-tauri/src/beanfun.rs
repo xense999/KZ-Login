@@ -40,6 +40,7 @@ pub struct QrInit {
     pub skey: String,
     pub bitmap_base64: String,
     pub deeplink: Option<String>,
+    pub qr_url: Option<String>,
     pub verification_token: String,
 }
 
@@ -170,12 +171,28 @@ pub async fn init_qr_login(client: &Client, skey: &str) -> Result<QrInit, Beanfu
     let qr_image = data.qr_image.filter(|s| !s.is_empty())
         .ok_or_else(|| BeanfunError::Parse("QRImage empty".into()))?;
 
+    let qr_url = decode_qr(&qr_image);
+
     Ok(QrInit {
         skey: skey.to_owned(),
         bitmap_base64: format!("data:image/png;base64,{}", qr_image),
         deeplink: data.deep_link.filter(|s| !s.is_empty()),
+        qr_url,
         verification_token,
     })
+}
+
+/// Decode the text content embedded in the QR PNG — this is what a scanner
+/// reads, which differs from the API's DeepLink field and is the one that
+/// actually completes login.
+fn decode_qr(b64_png: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64_png).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?.to_luma8();
+    let mut prepared = rqrr::PreparedImage::prepare(img);
+    let grids = prepared.detect_grids();
+    let (_meta, content) = grids.first()?.decode().ok()?;
+    if content.is_empty() { None } else { Some(content) }
 }
 
 pub async fn poll_qr(client: &Client, init: &QrInit) -> Result<QrPollOutcome, BeanfunError> {
