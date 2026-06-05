@@ -58,22 +58,6 @@ function clear() {
 
       <div class="card">
         <div class="row col">
-          <span class="row-title">Discord Webhook</span>
-        </div>
-        <div class="row-sep"></div>
-        <div class="path-row">
-          <input
-            v-model="webhookUrl"
-            class="path-input"
-            placeholder="https://discord.com/api/webhooks/..."
-            spellcheck="false"
-            title="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
-          />
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="row col">
           <span class="row-title">遊戲路徑</span>
         </div>
         <div class="row-sep"></div>
@@ -85,6 +69,22 @@ function clear() {
             spellcheck="false"
           />
           <button class="btn-browse" @click="browse">瀏覽</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row col">
+          <span class="row-title">通知設定</span>
+        </div>
+        <div class="row-sep"></div>
+        <div class="path-row">
+          <input
+            v-model="webhookUrl"
+            class="path-input"
+            placeholder="https://discord.com/api/webhooks/..."
+            spellcheck="false"
+            title="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
+          />
         </div>
       </div>
     </div>
