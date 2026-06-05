@@ -12,21 +12,27 @@ const store = useAccountsStore();
 onMounted(() => {
   const id = crypto.randomUUID();
 
+  const nameMem: Record<string, string> = JSON.parse(
+    localStorage.getItem("kusei:name_memory") ?? "{}"
+  );
+
   store.addAccount({
     id,
     alias: "Beanfun 帳號",
     email: "",
     token: props.token,
-    gameAccounts: [...props.games].map((g) => ({ ...g, localName: null })),
+    gameAccounts: [...props.games].map((g) => ({
+      ...g,
+      localName: nameMem[g.sid] ?? null,
+    })),
   });
 
-  // Restore alias if we've previously renamed an account with the same sub-accounts
   const key = props.games.map(g => g.sname).sort().join("|");
-  const mem: Record<string, string> = JSON.parse(
+  const aliasMem: Record<string, string> = JSON.parse(
     localStorage.getItem("kusei:alias_memory") ?? "{}"
   );
-  if (mem[key]) {
-    store.updateAlias(id, mem[key]);
+  if (aliasMem[key]) {
+    store.updateAlias(id, aliasMem[key]);
   }
 
   emit("saved");

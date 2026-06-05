@@ -181,8 +181,23 @@ function startRename(accountId: string, sn: string, current: string) {
 }
 
 function commitRename(accountId: string, sn: string) {
-  store.updateGameName(accountId, sn, renameValue.value.trim());
+  const trimmed = renameValue.value.trim();
+  store.updateGameName(accountId, sn, trimmed);
   renaming.value = null;
+
+  const acc = store.accounts.find(a => a.id === accountId);
+  const game = acc?.gameAccounts.find(g => g.sn === sn);
+  if (game) {
+    const mem: Record<string, string> = JSON.parse(
+      localStorage.getItem("kusei:name_memory") ?? "{}"
+    );
+    if (trimmed) {
+      mem[game.sid] = trimmed;
+    } else {
+      delete mem[game.sid];
+    }
+    localStorage.setItem("kusei:name_memory", JSON.stringify(mem));
+  }
 }
 
 async function copyAccountId(sid: string, sn: string) {
