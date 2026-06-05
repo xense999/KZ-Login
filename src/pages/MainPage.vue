@@ -243,12 +243,6 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
   }
 }
 
-async function openTopup(acc: BeanfunAccount) {
-  if (!acc.token) return;
-  const label = `topup-${acc.id.replace(/[^a-zA-Z0-9]/g, "")}`;
-  const url = `https://tw.beanfun.com/TW/auth.aspx?channel=gash&page_and_query=default.aspx%3Fservice_code%3D999999%26service_region%3DT0&web_token=${acc.token}`;
-  await invoke('open_topup', { label, url, title: `儲值 — ${acc.alias}` });
-}
 
 function cleanError(msg: string): string {
   if (msg.includes("SESSION_EXPIRED")) return "SESSION_EXPIRED";
@@ -314,10 +308,7 @@ function cleanError(msg: string): string {
           </template>
         </div>
         <div class="acc-right">
-          <button v-if="acc.token" class="btn-topup" @click.stop="openTopup(acc)" title="儲值">
-            儲值
-          </button>
-          <div v-if="acc.token" class="dot on" title="已連線"></div>
+<div v-if="acc.token" class="dot on" title="已連線"></div>
           <template v-else>
             <div class="dot off" title="已斷線，請重新登入"></div>
             <button class="qr-rescan" @click.stop="$emit('reauth', acc.id)" title="重新登入">
@@ -546,22 +537,6 @@ function cleanError(msg: string): string {
 .dot.on { background: var(--green); box-shadow: 0 0 6px rgba(50,215,75,0.45); }
 .dot.off { background: var(--red); box-shadow: 0 0 6px rgba(255,69,58,0.5); animation: blink 1.4s ease-in-out infinite; }
 @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-
-.btn-topup {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text3);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.btn-topup:hover {
-  background: var(--glass-hover);
-  color: var(--text2);
-  border-color: var(--pill-hover-border);
-}
 
 .qr-rescan {
   background: none; border: none; padding: 2px;

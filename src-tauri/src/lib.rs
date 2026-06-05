@@ -347,47 +347,6 @@ async fn auto_login(
     Ok(AutoLoginResult { sid: result.sid, otp: result.otp })
 }
 
-// ─── Top-up Window ────────────────────────────────────────────────────────────
-
-#[tauri::command]
-fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(&label) {
-        let _ = win.close();
-        std::thread::sleep(std::time::Duration::from_millis(150));
-    }
-
-    let parsed_url: tauri::utils::config::WebviewUrl = tauri::WebviewUrl::External(
-        url.parse::<reqwest::Url>().map_err(|e| e.to_string())?.into()
-    );
-
-    let load_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let load_count2 = load_count.clone();
-    let redirect_url = url.replace('\'', "\\'");
-
-    tauri::WebviewWindowBuilder::new(&app, &label, parsed_url)
-        .title(&title)
-        .inner_size(870.0, 512.0)
-        .resizable(true)
-        .center()
-        .on_page_load(move |win, payload| {
-            use tauri::webview::PageLoadEvent;
-            if payload.event() == PageLoadEvent::Finished {
-                let n = load_count2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                let url_str = payload.url().as_str();
-                let is_root = url_str.trim_end_matches('/') == "https://tw.beanfun.com";
-                // Redirect on: reload after first load (n >= 2) OR root URL after first load
-                if n >= 2 || (n > 1 && is_root) {
-                    load_count2.store(0, std::sync::atomic::Ordering::SeqCst);
-                    let _ = win.eval(&format!("location.replace('{}')", redirect_url));
-                }
-            }
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
 // ─── Launch Game ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -487,7 +446,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, get_otp,
-            auto_login, ping_session, diagnose_windows, launch_game, open_topup
+            auto_login, ping_session, diagnose_windows, launch_game
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
