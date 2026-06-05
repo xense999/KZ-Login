@@ -27,9 +27,9 @@ async function startQr() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   status.value = "loading"; qrImage.value = ""; deeplink.value = ""; errorMsg.value = "";
   try {
-    const result = await invoke<{ bitmap_base64: string; deeplink?: string }>("qr_start");
+    const result = await invoke<{ bitmap_base64: string; deeplink?: string; qr_url?: string }>("qr_start");
     qrImage.value = result.bitmap_base64;
-    deeplink.value = result.deeplink ?? "";
+    deeplink.value = result.qr_url || result.deeplink || "";
     status.value = "waiting";
     schedulePoll();
   } catch (e) { status.value = "error"; errorMsg.value = String(e); }
