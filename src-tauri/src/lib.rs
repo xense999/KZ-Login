@@ -356,26 +356,6 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
-    let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
-    let init_script = format!(
-        r#"(function(){{
-            var _t='{}';
-            function _r(){{
-                try{{
-                    var h=location.href.replace(/\/$/,'');
-                    if(h==='https://tw.beanfun.com'){{
-                        if(!sessionStorage.getItem('_bf_redirected')){{
-                            sessionStorage.setItem('_bf_redirected','1');
-                            location.replace(_t);
-                        }}
-                    }}
-                }}catch(_){{}}
-            }}
-            window.addEventListener('load',_r);
-        }})();"#,
-        escaped
-    );
-
     let parsed_url: tauri::utils::config::WebviewUrl = tauri::WebviewUrl::External(
         url.parse::<reqwest::Url>().map_err(|e| e.to_string())?.into()
     );
@@ -385,7 +365,6 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
         .inner_size(870.0, 512.0)
         .resizable(true)
         .center()
-        .initialization_script(&init_script)
         .build()
         .map_err(|e| e.to_string())?;
 
