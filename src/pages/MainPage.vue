@@ -56,7 +56,7 @@ function commitRenameAlias(accountId: string) {
   // Save alias memory keyed by sorted sub-account names
   const acc = store.accounts.find(a => a.id === accountId);
   if (acc && alias !== "Beanfun 帳號") {
-    const key = acc.gameAccounts.map(g => g.sname).sort().join("|");
+    const key = acc.gameAccounts.map(g => g.sid).sort().join("|");
     const mem: Record<string, string> = JSON.parse(
       localStorage.getItem("kusei:alias_memory") ?? "{}"
     );

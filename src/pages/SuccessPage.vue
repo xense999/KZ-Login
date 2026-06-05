@@ -27,7 +27,7 @@ onMounted(() => {
     })),
   });
 
-  const key = props.games.map(g => g.sname).sort().join("|");
+  const key = props.games.map(g => g.sid).sort().join("|");
   const aliasMem: Record<string, string> = JSON.parse(
     localStorage.getItem("kusei:alias_memory") ?? "{}"
   );
