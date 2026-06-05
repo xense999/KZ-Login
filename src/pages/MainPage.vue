@@ -261,6 +261,7 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
 
 function cleanError(msg: string): string {
   if (msg.includes("SESSION_EXPIRED")) return "SESSION_EXPIRED";
+  if (msg.includes("OTP envelope rejected") || msg.includes("jQuery")) return "SESSION_EXPIRED";
   if (msg.length > 100 || msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("long polling")) {
     if (msg.includes("尚未登入") || msg.includes("SESSION_EXPIRED") || msg.includes("long polling"))
       return "SESSION_EXPIRED";
