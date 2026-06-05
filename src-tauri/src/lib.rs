@@ -373,7 +373,10 @@ fn open_topup(app: tauri::AppHandle, label: String, url: String, title: String) 
             use tauri::webview::PageLoadEvent;
             if payload.event() == PageLoadEvent::Finished {
                 let n = load_count2.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                if n == 2 {
+                let url_str = payload.url().as_str();
+                let is_root = url_str.trim_end_matches('/') == "https://tw.beanfun.com";
+                // Redirect on: reload after first load (n >= 2) OR root URL after first load
+                if n >= 2 || (n > 1 && is_root) {
                     load_count2.store(0, std::sync::atomic::Ordering::SeqCst);
                     let _ = win.eval(&format!("location.replace('{}')", redirect_url));
                 }
