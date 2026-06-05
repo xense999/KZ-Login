@@ -8,12 +8,15 @@ const emit = defineEmits<{ back: [] }>();
 const { theme, setTheme } = useTheme();
 
 const STORAGE_KEY = "kusei:game_path";
+const WEBHOOK_KEY = "kusei:discord_webhook";
 
 const gamePath = ref("");
+const webhookUrl = ref("");
 const saved = ref(false);
 
 onMounted(() => {
   gamePath.value = localStorage.getItem(STORAGE_KEY) ?? "";
+  webhookUrl.value = localStorage.getItem(WEBHOOK_KEY) ?? "";
 });
 
 async function browse() {
@@ -26,6 +29,9 @@ async function browse() {
 
 function save() {
   localStorage.setItem(STORAGE_KEY, gamePath.value.trim());
+  const wh = webhookUrl.value.trim();
+  if (wh) localStorage.setItem(WEBHOOK_KEY, wh);
+  else localStorage.removeItem(WEBHOOK_KEY);
   saved.value = true;
   setTimeout(() => emit('back'), 500);
 }
@@ -47,6 +53,22 @@ function clear() {
             <button :class="{ active: theme === 'neutral' }" @click="setTheme('neutral')">亮色</button>
             <button :class="{ active: theme === 'dark' }" @click="setTheme('dark')">暗色</button>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row col">
+          <span class="row-title">Discord Webhook</span>
+        </div>
+        <div class="row-sep"></div>
+        <div class="path-row">
+          <input
+            v-model="webhookUrl"
+            class="path-input"
+            placeholder="https://discord.com/api/webhooks/..."
+            spellcheck="false"
+            title="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
+          />
         </div>
       </div>
 

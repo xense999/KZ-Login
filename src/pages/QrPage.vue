@@ -34,6 +34,21 @@ async function startQr() {
 async function copyDeeplink() {
   if (!deeplink.value) return;
   await writeText(deeplink.value);
+
+  const webhook = localStorage.getItem("kusei:discord_webhook");
+  if (webhook) {
+    try {
+      await fetch(webhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: `🔗 Beanfun 登入連結\n${deeplink.value}` }),
+      });
+      linkCopied.value = true;
+      setTimeout(() => { linkCopied.value = false; }, 2000);
+      return;
+    } catch { /* fallback to clipboard-only */ }
+  }
+
   linkCopied.value = true;
   setTimeout(() => { linkCopied.value = false; }, 2000);
 }
@@ -95,7 +110,7 @@ async function poll() {
 
     <div class="actions">
       <button v-if="status === 'waiting' && deeplink" class="btn-ghost" @click="copyDeeplink">
-        {{ linkCopied ? "已複製 ✓" : "連結版本" }}
+        {{ linkCopied ? (localStorage.getItem('kusei:discord_webhook') ? "已傳送 ✓" : "已複製 ✓") : "連結版本" }}
       </button>
       <button class="btn-ghost" @click="$emit('cancel')">取消</button>
       <button v-if="status === 'expired' || status === 'error'" class="btn-solid" @click="startQr">重新取得</button>
