@@ -1,12 +1,12 @@
 [package]
-name = "kusei-login"
+name = "kz-login"
 version = "0.1.0"
-description = "久世登入器"
+description = "KZ Login"
 authors = []
 edition = "2021"
 
 [lib]
-name = "kusei_login_lib"
+name = "kz_login_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
