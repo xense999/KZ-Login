@@ -1,6 +1,6 @@
 {
-  "productName": "久世登入器",
-  "version": "0.1.23",
+  "productName": "KZ Login",
+  "version": "0.1.24",
   "identifier": "com.kusei.login",
   "build": {
     "frontendDist": "../dist",
