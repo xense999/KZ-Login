@@ -51,25 +51,6 @@
 　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/fec73982-2945-4a8f-957d-e14db5d9fd5c" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/b8d9f5ac-7fc1-4422-aa23-5ec7d4e09989" />
 
 
-
-
-
-## 開發環境建置
-
-### 前置需求
-
-- Node.js 18+
-- Rust（[rustup](https://rustup.rs)）
-- Tauri CLI 2
-
-### 指令
-
-```bash
-npm install
-npm run tauri dev      # 開發模式
-npm run tauri build    # 打包安裝檔
-```
-
 ## 免責聲明
 
 本軟體**不是**遊戲橘子數位科技股份有限公司所開發的官方客戶端程式。若您的帳號以第三方方式登入，請自行評估風險，並確認下載來源的安全性。
