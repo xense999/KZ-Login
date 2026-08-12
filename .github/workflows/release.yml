@@ -25,13 +25,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and release
+      # 只 build，不建 release —— 上傳前要先改掉中文檔名
+      - name: Build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # productName 是中文，而 GitHub 上傳 asset 會砍掉非 ASCII 字元
+      - name: Rename installer to ASCII
+        id: installer
+        shell: pwsh
+        run: |
+          $found = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*_x64-setup.exe")
+          if ($found.Count -ne 1) { throw "expected exactly 1 installer, found $($found.Count)" }
+          $newName = "KuZe-Login_$($found[0].Name -replace '^.+?_')"
+          Rename-Item $found[0].FullName $newName
+          "path=$($found[0].DirectoryName)\$newName" >> $env:GITHUB_OUTPUT
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 久世登入器 ${{ github.ref_name }}
-          releaseBody: 請從下方 Assets 下載安裝檔（.msi 或 .exe）。
-          releaseDraft: false
+          name: 久世登入器 ${{ github.ref_name }}
+          body: 請從下方 Assets 下載安裝檔（.msi 或 .exe）。
+          draft: false
           prerelease: false
+          files: ${{ steps.installer.outputs.path }}
