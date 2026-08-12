@@ -1,6 +1,6 @@
 {
   "productName": "久世登入器",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "identifier": "com.kusei.login",
   "build": {
     "frontendDist": "../dist",
