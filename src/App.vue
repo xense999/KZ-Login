@@ -101,9 +101,8 @@ function onAccountSaved() {
 .app-window {
   display: flex;
   flex-direction: column;
-  width: 420px;
-  height: 640px;
-  flex-shrink: 0;
+  width: 100%;
+  height: 100%;
   background: var(--bg);
   border-radius: 14px;
   overflow: hidden;

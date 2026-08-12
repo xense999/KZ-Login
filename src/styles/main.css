@@ -86,10 +86,9 @@
 }
 
 html, body, #app {
+  width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
 }
 
 body {
@@ -100,6 +99,10 @@ body {
   user-select: none;
   -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
+  /* keep layout identical under the Windows accessibility text-size setting,
+     which scales fonts without scaling their containers */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 button {
