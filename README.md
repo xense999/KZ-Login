@@ -6,13 +6,14 @@
 
 ## 功能
 
-- 同時管理多個 Beanfun 帳號（新增 / 改名 / 排序 / 刪除）
-- 支持 QR Code 掃碼登入（透過 Gama Play APP）
-- 連結版本登入（相機無法掃描時，改以可點擊連結在手機開啟登入）
-- Discord Webhook 通知（一鍵將登入連結推送到指定 Discord 頻道）
-- 帳號改名記憶（母帳號與子帳號的自訂名稱跨登入自動還原）
-- 快速啟動遊戲
-- 自動填入帳密
+- 同時管理多個 Beanfun 帳號（`新增 / 改名 / 排序 / 刪除`）
+- 支持 QR Code 掃碼登入（`透過 Gama Play APP`）
+- 連結版本登入（`相機失效時，以登入連結在手機開啟`）
+- Discord 通知（`登入連結推送到指定頻道`）
+- 帳號改名記憶（`母帳號與子帳號的自訂名稱跨登入自動還原`）
+- 智能登入遊戲
+- 分享登入 / 代理登入 `複製登入金鑰給他人，對方一鍵代為啟動登入）`
+- 自動檢查遊戲管理員（GGM）更新，可直接下載安裝
 
 ## 系統需求
 
@@ -26,20 +27,16 @@
 
 :small_orange_diamond:**手動模式**
 
-1. 掃 QR Code 新增 Beanfun 帳號
-2. 點擊帳號 ID 複製帳號
-3. 點擊密碼按鈕複製 OTP
-4. 在遊戲登入框手動貼上
+1. 掃 QR Code 新增帳號
+2. 點擊帳號 & 密碼按鈕複製
+3. 在遊戲登入框手動貼上
 
 :small_orange_diamond:**自動模式**
+1. 點擊帳號旁的「快速登入」按鈕
+2. 遊戲已開啟：自動填入帳密並送出登入
+3. 遊戲未開啟：自動透過遊戲管理員（GGM）啟動遊戲
 
-1. 確認楓之谷登入視窗已開啟
-2. 點擊「自動登入」按鈕
-3. 應用程式自動填入帳號與 OTP 密碼並送出登入
-
-:small_orange_diamond:**連結版本登入**
-
-> 當相機無法正常掃描 QR Code 時使用：
+:small_orange_diamond:**連結版本登入** `當相機無法正常掃描 QR Code 時使用`
 
 1. 在掃描畫面點擊「連結版本」
 2. 登入連結會複製到剪貼簿；若已在設定頁填入 Discord Webhook，會同時推送一個**可點擊的連結**到指定頻道
@@ -47,8 +44,8 @@
 
 **擷圖**
 
-<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/ea952079-5315-4ab2-b8d6-6a5af01353b3" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/c362a06a-9184-4675-9254-815536654a92" />
-　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/fec73982-2945-4a8f-957d-e14db5d9fd5c" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/b8d9f5ac-7fc1-4422-aa23-5ec7d4e09989" />
+<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/62fcf359-ad25-4272-9672-bc1f8295cd21" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/5a9f30e8-45b3-42e1-bf4b-9746216d7eaf" />
+　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/fec73982-2945-4a8f-957d-e14db5d9fd5c" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/e592dc39-7b94-4728-9079-96a387c6665b" />
 
 
 ## 免責聲明
