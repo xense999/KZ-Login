@@ -88,39 +88,10 @@ async fn qr_check(state: tauri::State<'_, AppState>) -> Result<QrCheckResult, St
     }
 }
 
-// ─── OTP ──────────────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct OtpResponse {
-    sid: String,
-    otp: String,
-}
-
-#[tauri::command]
-async fn get_otp(
-    state: tauri::State<'_, AppState>,
-    token: String,
-    account_sn: String,
-    account_sid: String,
-    account_sname: String,
-) -> Result<OtpResponse, String> {
-    let cookie_store = {
-        let stores = state.session_stores.lock().await;
-        stores.get(&token).cloned()
-            .ok_or_else(|| "SESSION_EXPIRED".to_string())?
-    };
-
-    let result = beanfun::get_otp(&cookie_store, &token, &account_sn, &account_sid, &account_sname)
-        .await
-        .map_err(map_err)?;
-    Ok(OtpResponse { sid: result.sid, otp: result.otp })
-}
-
 // ─── Windows helpers ─────────────────────────────────────────────────────────
 
 #[cfg(windows)]
 mod win {
-    use std::ptr::null;
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, MAPVK_VK_TO_VSC,
@@ -131,13 +102,31 @@ mod win {
         VK_BACK, VK_END, VK_RETURN, VK_TAB,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, EnumWindows, FindWindowW,
-        GetClassNameW, GetClientRect, GetSystemMetrics, GetWindowRect, GetWindowTextW,
+        EnumWindows,
+        GetClientRect, GetSystemMetrics, GetWindowRect, GetWindowTextW,
         IsWindowVisible, PostMessageW,
         SetForegroundWindow, ShowWindow, SW_RESTORE,
         SM_CXSCREEN, SM_CYSCREEN,
+        SystemParametersInfoW, SPI_GETWORKAREA,
         WM_KEYDOWN, WM_KEYUP,
     };
+
+    /// Primary monitor **work area** (screen minus taskbar) as screen-coordinate
+    /// `(left, top, right, bottom)`. Uses `SPI_GETWORKAREA` rather than the raw
+    /// screen size so a bottom-right placed window isn't clipped by the taskbar.
+    pub fn primary_work_area() -> Option<(i32, i32, i32, i32)> {
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                &mut r as *mut RECT as *mut core::ffi::c_void,
+                0,
+            )
+        };
+        if ok == 0 { return None; }
+        Some((r.left, r.top, r.right, r.bottom))
+    }
 
     unsafe fn post_key(hwnd: HWND, vk: u32) {
         let scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
@@ -156,7 +145,6 @@ mod win {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: nx, dy: ny, mouseData: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
         };
-        // Move first, then hover, then click
         SendInput(1, [mi(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE)].as_ptr(), std::mem::size_of::<INPUT>() as i32);
         std::thread::sleep(std::time::Duration::from_millis(60));
         let clicks = [mi(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE), mi(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE)];
@@ -179,31 +167,18 @@ mod win {
         SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
     }
 
-    unsafe extern "system" fn edit_collector(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if IsWindowVisible(hwnd) == 0 { return 1; }
-        let mut buf = [0u16; 64];
-        let len = GetClassNameW(hwnd, buf.as_mut_ptr(), 64);
-        if len > 0 {
-            let cls = String::from_utf16_lossy(&buf[..len as usize]);
-            let is_edit = cls.eq_ignore_ascii_case("Edit")
-                || cls.eq_ignore_ascii_case("RichEdit20W")
-                || cls.eq_ignore_ascii_case("RICHEDIT60W")
-                || cls.eq_ignore_ascii_case("RichEdit");
-            if is_edit {
-                let v = &mut *(lparam as *mut Vec<HWND>);
-                v.push(hwnd);
-            }
-        }
-        1
-    }
+    /// Exact window title of the game client. Only a window whose title matches
+    /// this precisely counts as "the game" — deliberately strict so an unrelated
+    /// window (a browser tab, a chat) is never mistaken for it.
+    const GAME_WINDOW_TITLE: &str = "MapleStory";
 
     unsafe extern "system" fn game_title_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if IsWindowVisible(hwnd) == 0 { return 1; }
         let mut buf = [0u16; 256];
         let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256);
         if len > 0 {
-            let title = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
-            if title.contains("maplestory") || title.contains("楓之谷") || title.contains("maple story") {
+            let title = String::from_utf16_lossy(&buf[..len as usize]);
+            if title.trim() == GAME_WINDOW_TITLE {
                 *(lparam as *mut HWND) = hwnd;
                 return 0;
             }
@@ -211,45 +186,51 @@ mod win {
         1
     }
 
-    #[allow(dead_code)]
-    struct WinInfo { hwnd: HWND, title: String, edit_count: usize }
-
-    unsafe extern "system" fn scan_all_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if IsWindowVisible(hwnd) == 0 { return 1; }
-        let mut tbuf = [0u16; 256];
-        let tlen = GetWindowTextW(hwnd, tbuf.as_mut_ptr(), 256);
-        let title = if tlen > 0 {
-            String::from_utf16_lossy(&tbuf[..tlen as usize])
-        } else { String::new() };
-        let mut edits: Vec<HWND> = Vec::new();
-        EnumChildWindows(hwnd, Some(edit_collector), &mut edits as *mut Vec<HWND> as LPARAM);
-        let wins = &mut *(lparam as *mut Vec<WinInfo>);
-        wins.push(WinInfo { hwnd, title, edit_count: edits.len() });
-        1
+    /// Locate the running game window by its exact title. Null when not open.
+    unsafe fn find_game_window() -> HWND {
+        let mut hwnd: HWND = std::ptr::null_mut();
+        EnumWindows(Some(game_title_cb), &mut hwnd as *mut HWND as LPARAM);
+        hwnd
     }
 
-    pub fn scan_windows() -> Vec<(String, usize)> {
-        let mut wins: Vec<WinInfo> = Vec::new();
-        unsafe { EnumWindows(Some(scan_all_cb), &mut wins as *mut Vec<WinInfo> as LPARAM) };
-        wins.into_iter()
-            .filter(|w| w.edit_count > 0 || !w.title.is_empty())
-            .map(|w| (w.title, w.edit_count))
-            .collect()
+    /// True when a MapleStory client window is currently open.
+    pub fn is_game_running() -> bool {
+        unsafe { !find_game_window().is_null() }
     }
 
-    pub fn fill_login_form(account_id: &str, otp: &str) -> Result<(), String> {
-        // Find by class name (DirectX game — no Win32 child edits)
-        let class_main: Vec<u16> = "MapleStoryClass\0".encode_utf16().collect();
-        let class_tw:   Vec<u16> = "MapleStoryClassTW\0".encode_utf16().collect();
+    /// Hand a target (file path or protocol URI such as `gamaniagames://…`) to
+    /// its registered handler via ShellExecute. Used to launch the game through
+    /// the local Gamania Games Manager. (Explorer can't resolve custom schemes,
+    /// so it must be ShellExecute, not `explorer.exe <uri>`.)
+    ///
+    /// Note: under `tauri dev` the launched game shares our job object and dies
+    /// when the app restarts on a rebuild — a dev-only artifact; a packaged build
+    /// has no such job, so the game keeps running independently.
+    pub fn shell_open(target: &str) -> Result<(), String> {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-        let mut hwnd = unsafe {
-            let h = FindWindowW(class_main.as_ptr(), null());
-            if h.is_null() { FindWindowW(class_tw.as_ptr(), null()) } else { h }
+        let target_wide: Vec<u16> = target.encode_utf16().chain(Some(0u16)).collect();
+        let verb: Vec<u16> = "open".encode_utf16().chain(Some(0u16)).collect();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                target_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
         };
-        // Fallback: search by window title
-        if hwnd.is_null() {
-            unsafe { EnumWindows(Some(game_title_cb), &mut hwnd as *mut HWND as LPARAM) };
+        if (result as usize) <= 32 {
+            return Err(format!("無法啟動：錯誤碼 {}", result as usize));
         }
+        Ok(())
+    }
+
+    /// Type the account id + OTP into the running MapleStory login form.
+    pub fn fill_login_form(account_id: &str, otp: &str) -> Result<(), String> {
+        let hwnd = unsafe { find_game_window() };
         if hwnd.is_null() {
             return Err("找不到遊戲視窗，請先開啟楓之谷".to_string());
         }
@@ -257,46 +238,37 @@ mod win {
         unsafe { ShowWindow(hwnd, SW_RESTORE); SetForegroundWindow(hwnd); }
         std::thread::sleep(std::time::Duration::from_millis(400));
 
-        // Compute screen coordinates from window rect + client rect
-        let mut win_rect  = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        let mut cli_rect  = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut win_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut cli_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
         unsafe {
             GetWindowRect(hwnd, &mut win_rect);
             GetClientRect(hwnd, &mut cli_rect);
         }
         let win_w = win_rect.right - win_rect.left;
         let win_h = win_rect.bottom - win_rect.top;
-        // NC offsets (title bar + borders)
         let nc_x = (win_w - cli_rect.right) / 2;
         let nc_y = win_h - cli_rect.bottom - nc_x;
-        let cli_sx = win_rect.left + nc_x;          // client left in screen coords
-        let cli_sy = win_rect.top  + nc_y;           // client top in screen coords
-        let mid_x  = cli_sx + cli_rect.right / 2;
+        let cli_sx = win_rect.left + nc_x;
+        let cli_sy = win_rect.top + nc_y;
 
-        // SendInput mouse click on account field (50%, 40%) — bypasses UIPI
+        // Click the account field (~50%, 40%) via SendInput to bypass UIPI.
+        let mid_x = cli_sx + cli_rect.right / 2;
         let acc_y = cli_sy + cli_rect.bottom * 40 / 100;
         unsafe { send_mouse_click(mid_x, acc_y) };
         std::thread::sleep(std::time::Duration::from_millis(350));
 
-        // Clear + fill account field
         unsafe {
             post_key(hwnd, VK_END as u32);
             for _ in 0..64 { post_key(hwnd, VK_BACK as u32); }
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
-        unsafe {
-            for ch in account_id.encode_utf16() { send_char_u16(ch); }
-        }
+        unsafe { for ch in account_id.encode_utf16() { send_char_u16(ch); } }
         std::thread::sleep(std::time::Duration::from_millis(150));
 
-        // Tab to password field (no second mouse click — only the account field is located)
         unsafe { send_vk(VK_TAB as u16); }
         std::thread::sleep(std::time::Duration::from_millis(150));
 
-        // Fill OTP
-        unsafe {
-            for ch in otp.encode_utf16() { send_char_u16(ch); }
-        }
+        unsafe { for ch in otp.encode_utf16() { send_char_u16(ch); } }
         std::thread::sleep(std::time::Duration::from_millis(150));
 
         unsafe { send_vk(VK_RETURN as u16); }
@@ -304,113 +276,293 @@ mod win {
     }
 }
 
-// ─── Auto Login ───────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct AutoLoginResult {
-    sid: String,
-    otp: String,
-}
+// ─── Smart arrow: launch if closed, fill login if already open ─────────────────
 
+/// The per-account arrow action. If MapleStory is already running, fetch the OTP
+/// and type account+OTP into its login form; otherwise launch the game via GGM.
+/// Returns `"filled"` or `"launched"` so the UI can report what happened.
 #[tauri::command]
-async fn auto_login(
+async fn smart_launch(
     state: tauri::State<'_, AppState>,
     token: String,
     account_sn: String,
     account_sid: String,
     account_sname: String,
-) -> Result<AutoLoginResult, String> {
-    // 1. Fetch OTP (async)
+) -> Result<String, String> {
     let cookie_store = {
         let stores = state.session_stores.lock().await;
         stores.get(&token).cloned()
             .ok_or_else(|| "SESSION_EXPIRED".to_string())?
     };
-    let result = beanfun::get_otp(
-        &cookie_store, &token, &account_sn, &account_sid, &account_sname,
-    )
-    .await
-    .map_err(map_err)?;
 
-    // 2. All Win32 + input simulation in a blocking thread so the async runtime
-    //    cannot regrab focus during sleep.
-    let sid = result.sid.clone();
-    let otp = result.otp.clone();
-    tokio::task::spawn_blocking(move || {
+    #[cfg(windows)]
+    let running = win::is_game_running();
+    #[cfg(not(windows))]
+    let running = false;
+
+    if running {
+        let result = beanfun::get_otp(&cookie_store, &token, &account_sn, &account_sid, &account_sname)
+            .await
+            .map_err(map_err)?;
         #[cfg(windows)]
-        win::fill_login_form(&sid, &otp)?;
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    Ok(AutoLoginResult { sid: result.sid, otp: result.otp })
+        {
+            let sid = result.sid.clone();
+            let otp = result.otp.clone();
+            tokio::task::spawn_blocking(move || win::fill_login_form(&sid, &otp))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        Ok("filled".to_string())
+    } else {
+        let uri = beanfun::build_launch_uri(&cookie_store, &token, &account_sn)
+            .await
+            .map_err(map_err)?;
+        #[cfg(windows)]
+        {
+            tokio::task::spawn_blocking(move || win::shell_open(&uri))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = uri;
+        }
+        Ok("launched".to_string())
+    }
 }
 
-// ─── Launch Game ──────────────────────────────────────────────────────────────
+// ─── Launch via GGM (one-click) ────────────────────────────────────────────────
 
+/// Fetch the game_start_step2 launch blob for this account and hand it to the
+/// local Gamania Games Manager via the `gamaniagames://` protocol. Replaces the
+/// old "type the OTP into the game" flow, which beanfun retired on 2026-08-17.
 #[tauri::command]
-fn launch_game(path: String) -> Result<(), String> {
+async fn launch_via_ggm(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    account_sn: String,
+) -> Result<(), String> {
+    let cookie_store = {
+        let stores = state.session_stores.lock().await;
+        stores.get(&token).cloned()
+            .ok_or_else(|| "SESSION_EXPIRED".to_string())?
+    };
+
+    let uri = beanfun::build_launch_uri(&cookie_store, &token, &account_sn)
+        .await
+        .map_err(map_err)?;
+
     #[cfg(windows)]
     {
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        tokio::task::spawn_blocking(move || win::shell_open(&uri))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = uri;
+    }
+    Ok(())
+}
 
-        let exe_path = std::path::Path::new(&path);
-        let dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
+// ─── OTP (revived with GGM integrity params) ───────────────────────────────────
+
+#[derive(Serialize)]
+struct OtpResponse {
+    sid: String,
+    otp: String,
+}
+
+/// Fetch the game login OTP for an account. Revived on 2026-08-18 after the
+/// endpoint's `Query String Error` turned out to be a missing CV/Hash/arch
+/// integrity trio, not a dead endpoint. Returns the short numeric OTP the game
+/// login box expects (alongside the ServiceAccount).
+#[tauri::command]
+async fn get_otp(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    account_sn: String,
+    account_sid: String,
+    account_sname: String,
+) -> Result<OtpResponse, String> {
+    let cookie_store = {
+        let stores = state.session_stores.lock().await;
+        stores.get(&token).cloned()
+            .ok_or_else(|| "SESSION_EXPIRED".to_string())?
+    };
+    let result = beanfun::get_otp(&cookie_store, &token, &account_sn, &account_sid, &account_sname)
+        .await
+        .map_err(map_err)?;
+    Ok(OtpResponse { sid: result.sid, otp: result.otp })
+}
+
+// ─── Share Launch URI (sender side) ────────────────────────────────────────────
+
+/// Build the `gamaniagames://` launch URI for an account and return it (without
+/// launching). The owner copies this and shares it (e.g. via Discord); the
+/// recipient opens it with 代理登入. Same blob GGM consumes locally — no OTP.
+#[tauri::command]
+async fn get_launch_uri(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    account_sn: String,
+) -> Result<String, String> {
+    let cookie_store = {
+        let stores = state.session_stores.lock().await;
+        stores.get(&token).cloned()
+            .ok_or_else(|| "SESSION_EXPIRED".to_string())?
+    };
+    beanfun::build_launch_uri(&cookie_store, &token, &account_sn)
+        .await
+        .map_err(map_err)
+}
+
+// ─── Proxy Launch (open a shared gamaniagames:// URI) ──────────────────────────
+
+/// Consume a `gamaniagames://` login someone shared (owner posts it → recipient
+/// copies it → clicks 代理登入). Smart, like the per-account arrow: if the game
+/// is already open, decrypt the shared blob for its OTP and type it into the
+/// login form; otherwise launch the game via GGM. The scheme is validated so this
+/// can never be coerced into opening arbitrary clipboard content.
+#[tauri::command]
+async fn proxy_launch(uri: String) -> Result<String, String> {
+    let uri = uri.trim().to_string();
+    if !uri.starts_with("gamaniagames://") {
+        return Err("剪貼簿內容不是有效的登入金鑰".to_string());
+    }
+
+    #[cfg(windows)]
+    let running = win::is_game_running();
+    #[cfg(not(windows))]
+    let running = false;
+
+    if running {
+        let (sid, otp) = beanfun::otp_from_uri(&uri).await.map_err(map_err)?;
+        #[cfg(windows)]
+        {
+            tokio::task::spawn_blocking(move || win::fill_login_form(&sid, &otp))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        Ok("filled".to_string())
+    } else {
+        #[cfg(windows)]
+        {
+            let u = uri.clone();
+            tokio::task::spawn_blocking(move || win::shell_open(&u))
+                .await
+                .map_err(|e| e.to_string())??;
+        }
+        Ok("launched".to_string())
+    }
+}
+
+// ─── Open External URL ─────────────────────────────────────────────────────────
+
+/// Open an http(s) URL in the user's default browser. Scheme-restricted so it
+/// can only ever open a web page, never a local file or arbitrary protocol.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("僅允許 http(s) 連結".to_string());
+    }
+    #[cfg(windows)]
+    {
+        win::shell_open(url)?;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = url;
+    }
+    Ok(())
+}
+
+// ─── GGM update check ──────────────────────────────────────────────────────────
+
+/// Check whether the locally installed GGM is behind the server's latest build.
+/// Called at startup — an out-of-date GGM makes the OTP integrity check fail.
+#[tauri::command]
+async fn check_ggm_update() -> Result<beanfun::GgmUpdate, String> {
+    beanfun::check_ggm_update().await.map_err(map_err)
+}
+
+/// Download the GGM installer and run it (the installer's own UI then guides the
+/// user). Our process is elevated, so the installer launches with admin rights.
+#[tauri::command]
+async fn update_ggm(url: String) -> Result<(), String> {
+    let installer = beanfun::download_ggm_installer(&url).await.map_err(map_err)?;
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(move || win::shell_open(&installer))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = installer;
+    }
+    Ok(())
+}
+
+// ─── Game path override (registry) ─────────────────────────────────────────────
+
+/// Read the MapleStory install directory GGM resolves from
+/// `HKLM\SOFTWARE\GAMANIA\MapleStory\Path`. Empty if unset.
+#[tauri::command]
+fn get_game_path() -> String {
+    #[cfg(windows)]
+    {
+        use winreg::RegKey;
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\GAMANIA\MapleStory")
+            .ok()
+            .and_then(|k| k.get_value::<String, _>("Path").ok())
+            .unwrap_or_default()
+    }
+    #[cfg(not(windows))]
+    {
+        String::new()
+    }
+}
+
+/// Point GGM at a manually-chosen MapleStory location by writing
+/// `HKLM\SOFTWARE\GAMANIA\MapleStory\Path`. HKLM requires admin — the app is
+/// elevated. Accepts either the folder or `MapleStory.exe` (its folder is used).
+#[tauri::command]
+fn set_game_path(path: String) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("路徑為空".to_string());
+    }
+    #[cfg(windows)]
+    {
+        use winreg::RegKey;
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+
+        let p = std::path::Path::new(path);
+        let dir = if p.extension().map_or(false, |e| e.eq_ignore_ascii_case("exe")) {
+            p.parent().map(|x| x.to_path_buf()).unwrap_or_else(|| p.to_path_buf())
+        } else {
+            p.to_path_buf()
+        };
         let dir_str = dir.to_string_lossy().to_string();
 
-        let path_wide: Vec<u16> = path.encode_utf16().chain(Some(0u16)).collect();
-        let dir_wide: Vec<u16> = dir_str.encode_utf16().chain(Some(0u16)).collect();
-        let verb: Vec<u16> = "open".encode_utf16().chain(Some(0u16)).collect();
-
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                path_wide.as_ptr(),
-                std::ptr::null(),
-                dir_wide.as_ptr(),
-                SW_SHOWNORMAL,
-            )
-        };
-
-        if (result as usize) <= 32 {
-            return Err(format!("無法啟動遊戲：錯誤碼 {:?}（可能需要管理員權限）", result));
-        }
-        return Ok(());
-    }
-
-    #[cfg(not(windows))]
-    {
-        let exe_path = std::path::Path::new(&path);
-        let dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
-        std::process::Command::new(&path)
-            .current_dir(dir)
-            .spawn()
-            .map_err(|e| format!("無法啟動遊戲：{e}"))?;
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let (key, _) = hklm
+            .create_subkey(r"SOFTWARE\GAMANIA\MapleStory")
+            .map_err(|e| format!("寫入登錄檔失敗（需要管理員權限）：{e}"))?;
+        key.set_value("Path", &dir_str)
+            .map_err(|e| format!("寫入 Path 失敗：{e}"))?;
         Ok(())
     }
-}
-
-// ─── Diagnose Windows ─────────────────────────────────────────────────────────
-
-#[tauri::command]
-fn diagnose_windows() -> String {
-    #[cfg(windows)]
-    {
-        let wins = win::scan_windows();
-        let lines: Vec<String> = wins.iter()
-            .map(|(title, count)| format!("[{}個輸入框] \"{}\"", count, title))
-            .collect();
-        if lines.is_empty() {
-            "找不到任何視窗".to_string()
-        } else {
-            lines.join("\n")
-        }
-    }
     #[cfg(not(windows))]
-    "非 Windows 系統".to_string()
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 // ─── Session Ping ─────────────────────────────────────────────────────────────
@@ -446,11 +598,22 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, get_otp,
-            auto_login, ping_session, diagnose_windows, launch_game
+            smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
+            check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
             app.get_webview_window("main").unwrap().open_devtools();
+            // 開場固定在主螢幕工作區右下角：每次啟動都回這個位置、不記憶拖動後的座標。
+            // 用工作區（扣掉工作列）而非螢幕尺寸，否則會被工作列蓋掉一截；用 outer_size
+            // （含外框）不是設定檔尺寸，DPI 縮放時才不會少算。
+            if let Some(w) = app.get_webview_window("main") {
+                if let (Some((_, _, right, bottom)), Ok(sz)) = (win::primary_work_area(), w.outer_size()) {
+                    let x = right - sz.width as i32;
+                    let y = bottom - sz.height as i32;
+                    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -16,12 +16,24 @@ onMounted(() => {
     localStorage.getItem("kusei:name_memory") ?? "{}"
   );
 
+  // Restore the sub-account order the user arranged last time (by sid).
+  const games = [...props.games];
+  const orderMem: Record<string, string[]> = JSON.parse(
+    localStorage.getItem("kusei:suborder_memory") ?? "{}"
+  );
+  const orderKey = games.map((g) => g.sid).slice().sort().join("|");
+  const savedOrder = orderMem[orderKey];
+  if (savedOrder) {
+    const rank = new Map(savedOrder.map((sid, i) => [sid, i]));
+    games.sort((a, b) => (rank.get(a.sid) ?? Infinity) - (rank.get(b.sid) ?? Infinity));
+  }
+
   store.addAccount({
     id,
     alias: "Beanfun 帳號",
     email: "",
     token: props.token,
-    gameAccounts: [...props.games].map((g) => ({
+    gameAccounts: games.map((g) => ({
       ...g,
       localName: nameMem[g.sid] ?? null,
     })),

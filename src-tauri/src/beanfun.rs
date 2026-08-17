@@ -29,12 +29,6 @@ pub struct GameAccount {
     pub sname: String, // display name — shown in UI
 }
 
-#[derive(Debug, Serialize)]
-pub struct OtpResult {
-    pub sid: String,
-    pub otp: String,
-}
-
 #[derive(Debug, Clone)]
 pub struct QrInit {
     pub skey: String,
@@ -52,13 +46,8 @@ pub enum QrPollOutcome {
 
 const LOGIN_BASE: &str = "https://login.beanfun.com/";
 const PORTAL_BASE: &str = "https://tw.beanfun.com/";
-const NEWLOGIN_BASE: &str = "https://tw.newlogin.beanfun.com/";
 const SERVICE_CODE: &str = "610074";
 const SERVICE_REGION: &str = "T9";
-
-/// 64-char uppercase hex literal required by step 5 of the OTP flow.
-/// Verbatim copy from the WPF source — do not modify.
-const PPPPP: &str = "1F552AEAFF976018F942B13690C990F60ED01510DDF89165F1658CCE7BC21DBA";
 
 // ─── Client Builders ─────────────────────────────────────────────────────────
 
@@ -94,16 +83,6 @@ fn dt_compact() -> String {
         now.second(),
         now.nanosecond() / 1_000_000
     )
-}
-
-/// WPF GetCurrentTime(0): yyyyMMddHHmmss.fff — cache buster for get_result.ashx
-fn dt_iso() -> String {
-    Local::now().format("%Y%m%d%H%M%S%.3f").to_string()
-}
-
-/// .NET Environment.TickCount equivalent: bottom 32 bits of ms
-fn tick_count() -> i32 {
-    Local::now().timestamp_millis() as i32
 }
 
 // ─── QR Login ─────────────────────────────────────────────────────────────────
@@ -313,158 +292,6 @@ fn parse_game_accounts(html: &str) -> Result<Vec<GameAccount>, BeanfunError> {
 
 // ─── OTP (5-step flow) ────────────────────────────────────────────────────────
 
-pub async fn get_otp(
-    cookie_store: &Arc<CookieStoreMutex>,
-    token: &str,
-    account_sn: &str,
-    account_sid: &str,
-    account_sname: &str,
-) -> Result<OtpResult, BeanfunError> {
-    let client = build_client_from_store(cookie_store)?;
-
-    // Step 1: game_start_step2.aspx → long_polling_key, unk_data, screatetime
-    let step1_body = client
-        .get(&format!("{}beanfun_block/game_zone/game_start_step2.aspx", PORTAL_BASE))
-        .query(&[
-            ("service_code", SERVICE_CODE),
-            ("service_region", SERVICE_REGION),
-            ("sotp", account_sn),
-            ("dt", dt_compact().as_str()),
-        ])
-        .send().await?.text().await?;
-
-    let long_polling_key = parse_long_polling_key(&step1_body)?;
-    let unk_data = parse_unk_data(&step1_body);
-    let screatetime = parse_screatetime(&step1_body)?;
-
-    // Step 2: get_cookies.ashx → m_strSecretCode
-    let step2_body = client
-        .get(&format!("{}generic_handlers/get_cookies.ashx", NEWLOGIN_BASE))
-        .send().await?.text().await?;
-    let secret_code = parse_secret_code(&step2_body)?;
-
-    // Step 3: record_service_start.ashx (response discarded)
-    let mut form3: Vec<(&str, &str)> = vec![
-        ("service_code", SERVICE_CODE),
-        ("service_region", SERVICE_REGION),
-        ("service_account_id", account_sid),
-        ("sotp", account_sn),
-        ("service_account_display_name", account_sname),
-        ("service_account_create_time", screatetime.as_str()),
-    ];
-    let unk_owned;
-    if let Some((k, v)) = &unk_data {
-        unk_owned = (k.clone(), v.clone());
-        form3.push((unk_owned.0.as_str(), unk_owned.1.as_str()));
-    }
-    let _ = client
-        .post(&format!("{}beanfun_block/generic_handlers/record_service_start.ashx", PORTAL_BASE))
-        .form(&form3)
-        .send().await;
-
-    // Step 4: get_result.ashx long poll (response discarded)
-    let _ = client
-        .get(&format!("{}generic_handlers/get_result.ashx", PORTAL_BASE))
-        .query(&[
-            ("meth", "GetResultByLongPolling"),
-            ("key", long_polling_key.as_str()),
-            ("_", dt_iso().as_str()),
-        ])
-        .send().await;
-
-    // Step 5: get_webstart_otp.ashx → "1;{key8}{cipher_hex}"
-    let create_time_encoded = screatetime.replace(' ', "%20");
-    let otp_url = format!(
-        "{}beanfun_block/generic_handlers/get_webstart_otp.ashx\
-         ?SN={}&WebToken={}&SecretCode={}&ppppp={}&ServiceCode={}\
-         &ServiceRegion={}&ServiceAccount={}&CreateTime={}&d={}",
-        PORTAL_BASE,
-        long_polling_key, token, secret_code, PPPPP,
-        SERVICE_CODE, SERVICE_REGION, account_sid,
-        create_time_encoded, tick_count()
-    );
-    let envelope = client.get(&otp_url).send().await?.text().await?;
-
-    // Step 6: decrypt 1;{key8}{cipher_hex}
-    let otp = decrypt_envelope(&envelope)?;
-
-    Ok(OtpResult { sid: account_sid.to_owned(), otp })
-}
-
-fn parse_long_polling_key(html: &str) -> Result<String, BeanfunError> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r#"GetResultByLongPolling&key=(.*?)""#).unwrap());
-    re.captures(html).and_then(|c| c.get(1)).map(|m| m.as_str().to_owned())
-        .ok_or_else(|| BeanfunError::Parse(format!("No long polling key. Preview: {}", &html[..html.len().min(300)])))
-}
-
-/// TW-only: extract (key, value) from `MyAccountData.ServiceAccountCreateTime + "k=v";`
-fn parse_unk_data(html: &str) -> Option<(String, String)> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r#"MyAccountData.ServiceAccountCreateTime \+ "(.*)=(.*)""#).unwrap()
-    });
-    re.captures(html).map(|c| {
-        (percent_decode(c.get(1).map_or("", |m| m.as_str())),
-         percent_decode(c.get(2).map_or("", |m| m.as_str())))
-    })
-}
-
-fn parse_screatetime(html: &str) -> Result<String, BeanfunError> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r#"ServiceAccountCreateTime: "([^"]+)""#).unwrap());
-    re.captures(html).and_then(|c| c.get(1)).map(|m| m.as_str().to_owned())
-        .ok_or_else(|| BeanfunError::Parse("No ServiceAccountCreateTime".into()))
-}
-
-fn parse_secret_code(html: &str) -> Result<String, BeanfunError> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"var m_strSecretCode = '(.*?)';").unwrap());
-    re.captures(html).and_then(|c| c.get(1)).map(|m| m.as_str().to_owned())
-        .ok_or_else(|| BeanfunError::Parse("No m_strSecretCode".into()))
-}
-
-fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {
-    let parts: Vec<&str> = envelope.split(';').collect();
-    if parts.len() < 2 || parts[0] != "1" {
-        return Err(BeanfunError::Parse(format!(
-            "OTP envelope rejected: {}",
-            &envelope[..envelope.len().min(100)]
-        )));
-    }
-    let payload = parts[1];
-    if payload.len() < 8 {
-        return Err(BeanfunError::Parse("OTP payload too short".into()));
-    }
-    let (key_str, cipher_hex) = payload.split_at(8);
-
-    // Key: 8 ASCII bytes (code points > 0x7F → '?', matching WPF's Encoding.ASCII)
-    let key_bytes: Vec<u8> = key_str.chars()
-        .map(|c| if (c as u32) <= 0x7F { c as u8 } else { b'?' })
-        .collect();
-
-    let ciphertext = hex::decode(cipher_hex)
-        .map_err(|e| BeanfunError::Parse(format!("Invalid hex: {e}")))?;
-
-    if ciphertext.len() % 8 != 0 {
-        return Err(BeanfunError::Parse("Ciphertext not multiple of 8 bytes".into()));
-    }
-
-    // DES/ECB/NoPadding — block-by-block, no padding removal
-    let cipher = Des::new(GenericArray::from_slice(&key_bytes));
-    let mut buf = ciphertext.clone();
-    for chunk in buf.chunks_exact_mut(8) {
-        let block = GenericArray::from_mut_slice(chunk);
-        cipher.decrypt_block(block);
-    }
-
-    // Decode as ASCII (bytes > 0x7F → '?'), then trim NUL bytes (WPF: otp.Trim('\0'))
-    let raw: String = buf.iter()
-        .map(|&b| if b <= 0x7F { b as char } else { '?' })
-        .collect();
-    Ok(raw.trim_matches('\0').to_string())
-}
-
 fn html_decode(s: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
@@ -508,36 +335,6 @@ fn html_decode(s: &str) -> String {
     result
 }
 
-/// Simple percent-decode (%XX only, `+` treated as literal)
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = hex_nibble(bytes[i + 1]);
-            let lo = hex_nibble(bytes[i + 2]);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h << 4 | l) as char);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i] as char);
-        i += 1;
-    }
-    out
-}
-
-fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
 // ─── Shared HTML form input parser ───────────────────────────────────────────
 
 fn extract_hidden_inputs(html: &str) -> Vec<(String, String)> {
@@ -560,6 +357,357 @@ fn extract_hidden_inputs(html: &str) -> Vec<(String, String)> {
             Some((name, value))
         })
         .collect()
+}
+
+// ─── Game Launch (GGM handoff) ─────────────────────────────────────────────────
+
+/// Fetch `game_start_step2.aspx` and build the `gamaniagames://` URI that the
+/// local Gamania Games Manager (`GGMWebStart.exe`) consumes to launch the game.
+///
+/// As of the 2026-08-17 beanfun revision the launch ticket is no longer served
+/// by `get_webstart_otp.ashx` (which now returns `Query String Error`); it is
+/// embedded — encrypted — inside the `m_objData.data` blob on this page, and GGM
+/// decrypts and consumes it at launch. We only need to hand the blob back to GGM.
+pub async fn build_launch_uri(
+    cookie_store: &Arc<CookieStoreMutex>,
+    token: &str,
+    account_sn: &str,
+) -> Result<String, BeanfunError> {
+    let client = build_client_from_store(cookie_store)?;
+
+    // Prime the game_zone session the way the website navigates before step 2.
+    let inner = format!("game_start.aspx?service_code_and_region={}_{}", SERVICE_CODE, SERVICE_REGION);
+    let _ = client
+        .get(&format!("{}beanfun_block/auth.aspx", PORTAL_BASE))
+        .query(&[("channel", "game_zone"), ("page_and_query", inner.as_str()), ("web_token", token)])
+        .send().await;
+
+    let body = client
+        .get(&format!("{}beanfun_block/game_zone/game_start_step2.aspx", PORTAL_BASE))
+        .query(&[
+            ("service_code", SERVICE_CODE),
+            ("service_region", SERVICE_REGION),
+            ("sotp", account_sn),
+            ("dt", dt_compact().as_str()),
+        ])
+        .send().await?.text().await?;
+
+    let (region, sn, data) = parse_m_objdata(&body)?;
+    Ok(format!("gamaniagames://Region={region}&&&&SN={sn}&&&&Cmd=06004&&&&Data={data}"))
+}
+
+/// Extract `region` / `sn` / `data` from the inline
+/// `var m_objData = { "region": "...", "sn": "...", "data": "..." };` literal.
+fn parse_m_objdata(html: &str) -> Result<(String, String, String), BeanfunError> {
+    let grab = |key: &str| -> Option<String> {
+        Regex::new(&format!(r#""{}"\s*:\s*"([^"]*)""#, key))
+            .ok()?
+            .captures(html)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    match (grab("region"), grab("sn"), grab("data")) {
+        (Some(region), Some(sn), Some(data)) => Ok((region, sn, data)),
+        _ => {
+            if html.contains("尚未登入") {
+                Err(BeanfunError::Parse("SESSION_EXPIRED".into()))
+            } else {
+                Err(BeanfunError::Parse("m_objData not found in game_start_step2".into()))
+            }
+        }
+    }
+}
+
+// ─── OTP (revived with CV/Hash/arch integrity params) ──────────────────
+
+#[derive(Debug, Serialize)]
+pub struct OtpResult {
+    pub sid: String,
+    pub otp: String,
+}
+
+/// Nibble-substitution alphabets used by GGM's blob decryption (DecryptParam).
+/// Only 0..3 are ever used (index = first-hex-digit % 4) but all 8 are kept.
+const OTP_ALPHABETS: [&str; 8] = [
+    "bac987d65e432f10", "3bc4d5e6f2a79108", "cdbeaf9012456378", "4e6fb81a3c5d7092",
+    "bdef1246789ac530", "5f82cb4093e71d6a", "df1468ace0357b92", "b50c61a4f93e82d7",
+];
+
+/// Port of GGM's blob decryption (`DecryptParam`): the first hex digit `v`
+/// selects alphabet `v % 4`; each remaining char is mapped to its index in that
+/// alphabet (a nibble), forming a hex string; an 8-char DES key is spliced out
+/// at offset `v + 1`; the remainder is DES-ECB/NoPadding-decrypted with that key.
+fn decrypt_blob(data: &str) -> Result<String, BeanfunError> {
+    let first = data.chars().next()
+        .ok_or_else(|| BeanfunError::Parse("blob 為空".into()))?;
+    let v = first.to_digit(16)
+        .ok_or_else(|| BeanfunError::Parse("blob 首字非十六進位".into()))? as usize;
+    let alpha = OTP_ALPHABETS[v % 4];
+
+    let mut decoded = String::with_capacity(data.len());
+    for c in data[1..].chars() {
+        let j = alpha.find(c)
+            .ok_or_else(|| BeanfunError::Parse(format!("blob 字元 '{c}' 不在 alphabet[{}]", v % 4)))?;
+        decoded.push(std::char::from_digit(j as u32, 16).unwrap());
+    }
+
+    let off = v + 1;
+    if decoded.len() < off + 8 {
+        return Err(BeanfunError::Parse("blob 解碼結果過短".into()));
+    }
+    let key = decoded[off..off + 8].to_string();
+    let cipher_hex = format!("{}{}", &decoded[..off], &decoded[off + 8..]);
+    let cipher = hex::decode(&cipher_hex)
+        .map_err(|e| BeanfunError::Parse(format!("blob 密文非 hex：{e}")))?;
+    if cipher.len() % 8 != 0 {
+        return Err(BeanfunError::Parse("blob 密文非 8 bytes 倍數".into()));
+    }
+
+    let des = Des::new(GenericArray::from_slice(key.as_bytes()));
+    let mut buf = cipher;
+    for chunk in buf.chunks_exact_mut(8) {
+        des.decrypt_block(GenericArray::from_mut_slice(chunk));
+    }
+    let plain: String = buf.iter()
+        .map(|&b| if b <= 0x7F { b as char } else { '?' })
+        .collect();
+    Ok(plain.trim_matches('\0').to_string())
+}
+
+/// Pull one `Key=Value` field out of a `&&&&`-joined blob plaintext.
+fn blob_field(plain: &str, key: &str) -> Option<String> {
+    plain.split(';').next().unwrap_or("")
+        .split("&&&&")
+        .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+        .map(|s| s.to_string())
+}
+
+/// Fetch the game login OTP via the 2026-08-17 **v2** flow: decrypt the
+/// `m_objData.data` launch blob to recover the LaunchTicket, then POST it — with
+/// the GGM client-integrity trio — to `get_webstart_otp_v2.ashx` and decrypt the
+/// returned OTP. Replaces the retired v1 GET (`get_webstart_otp.ashx`).
+pub async fn get_otp(
+    cookie_store: &Arc<CookieStoreMutex>,
+    token: &str,
+    account_sn: &str,
+    account_sid: &str,
+    _account_sname: &str,
+) -> Result<OtpResult, BeanfunError> {
+    let client = build_client_from_store(cookie_store)?;
+
+    // 1. game_start_step2 → m_objData (sn + encrypted launch blob).
+    let inner = format!("game_start.aspx?service_code_and_region={}_{}", SERVICE_CODE, SERVICE_REGION);
+    let _ = client
+        .get(&format!("{}beanfun_block/auth.aspx", PORTAL_BASE))
+        .query(&[("channel", "game_zone"), ("page_and_query", inner.as_str()), ("web_token", token)])
+        .send().await;
+    let body = client
+        .get(&format!("{}beanfun_block/game_zone/game_start_step2.aspx", PORTAL_BASE))
+        .query(&[
+            ("service_code", SERVICE_CODE),
+            ("service_region", SERVICE_REGION),
+            ("sotp", account_sn),
+            ("dt", dt_compact().as_str()),
+        ])
+        .send().await?.text().await?;
+    let (_region, sn, data) = parse_m_objdata(&body)?;
+
+    // 2. Decrypt the blob and exchange the LaunchTicket for the OTP (v2).
+    let (_service_account, otp) = otp_v2_from_blob(&client, &sn, &data).await?;
+
+    Ok(OtpResult { sid: account_sid.to_owned(), otp })
+}
+
+/// Shared v2 OTP exchange: decrypt a launch blob to recover the LaunchTicket and
+/// ServiceAccount, POST them with the GGM integrity trio to
+/// `get_webstart_otp_v2.ashx`, and decrypt the returned OTP. Stateless — the
+/// LaunchTicket self-authenticates — so it works with or without a login session.
+async fn otp_v2_from_blob(
+    client: &Client,
+    sn: &str,
+    data: &str,
+) -> Result<(String, String), BeanfunError> {
+    let plain = decrypt_blob(data)?;
+    let launch_ticket = blob_field(&plain, "LaunchTicket")
+        .ok_or_else(|| BeanfunError::Parse("blob 內找不到 LaunchTicket".into()))?;
+    let service_account = blob_field(&plain, "ServiceAccount").unwrap_or_default();
+
+    let (cv, hash, arch) = ggm_integrity()?;
+    let v2_url = format!("{}beanfun_block/generic_handlers/get_webstart_otp_v2.ashx", PORTAL_BASE);
+    let req_body = serde_json::json!({
+        "SN": sn, "LaunchTicket": launch_ticket, "CV": cv, "Hash": hash, "arch": arch,
+    });
+    let resp_text = client.post(&v2_url).json(&req_body).send().await?.text().await?;
+
+    let resp: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        BeanfunError::Parse(format!("v2 回應非 JSON：{e} — {}", &resp_text[..resp_text.len().min(200)]))
+    })?;
+    let enc = resp.get("data").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        .ok_or_else(|| BeanfunError::Parse(format!("v2 回應無 data 欄位：{resp_text}")))?;
+
+    // The v2 `data` is `{key8}{cipher_hex}` (no alphabet step) — DES-ECB/NoPadding
+    // with the 8-char prefix as the key, i.e. the classic envelope minus "1;".
+    let otp = decrypt_envelope(&format!("1;{enc}"))?;
+    Ok((service_account, otp))
+}
+
+/// Recover `(service_account, otp)` straight from a shared
+/// `gamaniagames://…&&&&SN=…&&&&Data=…` launch URI — no login session needed.
+/// Used by 代理登入 to fill a running game with a login someone shared.
+pub async fn otp_from_uri(uri: &str) -> Result<(String, String), BeanfunError> {
+    let field = |key: &str| -> Option<String> {
+        uri.split("&&&&")
+            .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+            .map(|s| s.to_string())
+    };
+    let sn = field("SN").ok_or_else(|| BeanfunError::Parse("連結缺少 SN".into()))?;
+    let data = field("Data").ok_or_else(|| BeanfunError::Parse("連結缺少 Data".into()))?;
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+        .build()?;
+    otp_v2_from_blob(&client, &sn, &data).await
+}
+
+/// Compute the GGM client-integrity trio the OTP endpoint now requires:
+/// `(CV, Hash, arch)` = (GGM version, lowercase-hex SHA256 of GGMWebStart.dll,
+/// x64/x86). Read live from the local GGM install so a GGM update is followed
+/// automatically. Fails clearly if GGM is not installed.
+fn ggm_integrity() -> Result<(String, String, String), BeanfunError> {
+    use sha2::{Digest, Sha256};
+    use winreg::RegKey;
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let ggm = hklm
+        .open_subkey(r"SOFTWARE\GamaniaGamesManager")
+        .map_err(|_| BeanfunError::Parse("找不到遊戲管理員（GGM），請先安裝".into()))?;
+    let install_path: String = ggm
+        .get_value("InstallPath")
+        .map_err(|_| BeanfunError::Parse("讀不到 GGM 安裝路徑".into()))?;
+    let cv: String = ggm
+        .get_value("Version")
+        .map_err(|_| BeanfunError::Parse("讀不到 GGM 版本".into()))?;
+
+    let dll = std::path::Path::new(&install_path).join("GGMWebStart.dll");
+    let bytes = std::fs::read(&dll)
+        .map_err(|e| BeanfunError::Parse(format!("讀不到 GGMWebStart.dll：{e}")))?;
+    let hash = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+
+    let arch = if cfg!(target_pointer_width = "64") { "x64" } else { "x86" };
+    Ok((cv, hash, arch.to_string()))
+}
+
+// ─── GGM update check ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct GgmUpdate {
+    /// Locally installed GGM version, or empty if GGM is not installed.
+    pub current: String,
+    /// Latest version the server offers.
+    pub server: String,
+    pub has_update: bool,
+    /// Installer download URL (GGMSetup_X.exe).
+    pub url: String,
+}
+
+/// Locally installed GGM version from the registry, `None` if not installed.
+fn ggm_version() -> Option<String> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\GamaniaGamesManager")
+        .ok()?
+        .get_value("Version")
+        .ok()
+}
+
+/// Compare dotted version strings numerically; true when `a` is newer than `b`.
+fn version_newer(a: &str, b: &str) -> bool {
+    let parse = |s: &str| s.split('.').map(|p| p.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    let (va, vb) = (parse(a), parse(b));
+    for i in 0..va.len().max(vb.len()) {
+        let (x, y) = (va.get(i).copied().unwrap_or(0), vb.get(i).copied().unwrap_or(0));
+        if x != y { return x > y; }
+    }
+    false
+}
+
+/// Ask beanfun's `CheckVersion.ashx` for the latest GGM version and compare with
+/// the locally installed one. Used at startup so an out-of-date GGM (which would
+/// make the OTP integrity check fail) can be updated before it bites.
+pub async fn check_ggm_update() -> Result<GgmUpdate, BeanfunError> {
+    let client = Client::new();
+    let resp = client
+        .get(&format!("{}generic_handlers/CheckVersion.ashx", PORTAL_BASE))
+        .send().await?.text().await?;
+    let v: serde_json::Value = serde_json::from_str(&resp)
+        .map_err(|e| BeanfunError::Parse(format!("CheckVersion 非 JSON：{e}")))?;
+    let server = v.get("version").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+
+    let current = ggm_version().unwrap_or_default();
+    // Update when GGM is missing entirely, or the server offers a newer build.
+    let has_update = !server.is_empty() && (current.is_empty() || version_newer(&server, &current));
+
+    Ok(GgmUpdate { current, server, has_update, url })
+}
+
+/// Download the GGM installer to a temp file and return its path (caller runs it).
+pub async fn download_ggm_installer(url: &str) -> Result<String, BeanfunError> {
+    if !url.starts_with("https://") {
+        return Err(BeanfunError::Parse("更新連結無效".into()));
+    }
+    let bytes = Client::new().get(url).send().await?.bytes().await?;
+    let name = url.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("GGMSetup.exe");
+    let path = std::env::temp_dir().join(name);
+    std::fs::write(&path, &bytes)
+        .map_err(|e| BeanfunError::Parse(format!("寫入安裝檔失敗：{e}")))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {
+    let parts: Vec<&str> = envelope.split(';').collect();
+    if parts.len() < 2 || parts[0] != "1" {
+        return Err(BeanfunError::Parse(format!(
+            "OTP envelope rejected: {}",
+            &envelope[..envelope.len().min(100)]
+        )));
+    }
+    let payload = parts[1];
+    if payload.len() < 8 {
+        return Err(BeanfunError::Parse("OTP payload too short".into()));
+    }
+    let (key_str, cipher_hex) = payload.split_at(8);
+
+    // Key: 8 ASCII bytes (code points > 0x7F → '?', matching WPF's Encoding.ASCII)
+    let key_bytes: Vec<u8> = key_str.chars()
+        .map(|c| if (c as u32) <= 0x7F { c as u8 } else { b'?' })
+        .collect();
+
+    let ciphertext = hex::decode(cipher_hex)
+        .map_err(|e| BeanfunError::Parse(format!("Invalid hex: {e}")))?;
+
+    if ciphertext.len() % 8 != 0 {
+        return Err(BeanfunError::Parse("Ciphertext not multiple of 8 bytes".into()));
+    }
+
+    // DES/ECB/NoPadding — block-by-block, no padding removal
+    let cipher = Des::new(GenericArray::from_slice(&key_bytes));
+    let mut buf = ciphertext.clone();
+    for chunk in buf.chunks_exact_mut(8) {
+        let block = GenericArray::from_mut_slice(chunk);
+        cipher.decrypt_block(block);
+    }
+
+    // Decode as ASCII (bytes > 0x7F → '?'), then trim NUL bytes (WPF: otp.Trim('\0'))
+    let raw: String = buf.iter()
+        .map(|&b| if b <= 0x7F { b as char } else { '?' })
+        .collect();
+    Ok(raw.trim_matches('\0').to_string())
 }
 
 // ─── Session Keep-Alive ───────────────────────────────────────────────────────

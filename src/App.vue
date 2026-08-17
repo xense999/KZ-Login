@@ -6,6 +6,8 @@ import MainPage from "./pages/MainPage.vue";
 import QrPage from "./pages/QrPage.vue";
 import SuccessPage from "./pages/SuccessPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
+import ToastPop from "./components/ToastPop.vue";
+import { toast } from "./composables/useToast";
 import { useAccountsStore } from "./stores/accounts";
 
 type Page = "main" | "qr" | "success" | "settings";
@@ -38,8 +40,38 @@ async function checkSessions() {
   }
 }
 
+const updateAsk = ref(false);
+const updateInfo = ref<{ current: string; server: string; url: string } | null>(null);
+
+async function checkGgmUpdate() {
+  try {
+    const u = await invoke<{ current: string; server: string; has_update: boolean; url: string }>(
+      "check_ggm_update",
+    );
+    if (!u.has_update || !u.url) return;
+    updateInfo.value = { current: u.current, server: u.server, url: u.url };
+    updateAsk.value = true;
+  } catch (e) {
+    // best-effort; never block startup on the update check
+    console.error(e);
+  }
+}
+
+async function confirmUpdate() {
+  const info = updateInfo.value;
+  updateAsk.value = false;
+  if (!info) return;
+  try {
+    await invoke("update_ggm", { url: info.url });
+    toast("已開始下載並開啟安裝程式，請依畫面指示完成更新", { ms: 4000 });
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  }
+}
+
 onMounted(() => {
   checkSessions();
+  checkGgmUpdate();
   keepAliveTimer = setInterval(checkSessions, 3 * 60 * 1000);
 });
 
@@ -94,6 +126,22 @@ function onAccountSaved() {
       <SuccessPage v-else-if="page === 'success'" :token="pendingToken!" :games="pendingGames" @saved="onAccountSaved" />
       <SettingsPage v-else-if="page === 'settings'" @back="page = 'main'" />
     </div>
+
+    <div v-if="updateAsk" class="modal-overlay" @click.self="updateAsk = false">
+      <div class="modal-card">
+        <div class="modal-title">遊戲管理員更新</div>
+        <div class="modal-body">
+          偵測到遊戲管理員（GGM）有新版本 {{ updateInfo?.server }}（{{ updateInfo?.current ? "目前 " + updateInfo?.current : "尚未安裝" }}）。<br />
+          登入功能需要最新版才能正常運作，是否現在下載並更新？
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn" @click="updateAsk = false">稍後</button>
+          <button class="modal-btn primary" @click="confirmUpdate">立即更新</button>
+        </div>
+      </div>
+    </div>
+
+    <ToastPop />
   </div>
 </template>
 
@@ -104,6 +152,7 @@ function onAccountSaved() {
   width: 100%;
   height: 100%;
   background: var(--bg);
+  border: 1px solid var(--edge);
   border-radius: 14px;
   overflow: hidden;
   box-shadow: none;
@@ -167,4 +216,61 @@ function onAccountSaved() {
   display: flex;
   flex-direction: column;
 }
+
+/* ── 應用內對話框（取代原生 dialog）── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.modal-card {
+  width: 100%;
+  max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.modal-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text2);
+  margin-bottom: 18px;
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+}
+.modal-btn {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface2);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  transition: background 0.12s, color 0.12s;
+}
+.modal-btn:hover { background: var(--surface3); color: var(--text); }
+.modal-btn.primary {
+  background: var(--primary-bg);
+  border-color: var(--primary-border);
+  color: var(--primary-color);
+}
+.modal-btn.primary:hover { background: var(--primary-bg-hover); }
 </style>

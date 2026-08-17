@@ -1,6 +1,5 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 
 export interface GameAccount {
   sn: string;
@@ -17,15 +16,8 @@ export interface BeanfunAccount {
   gameAccounts: GameAccount[];
 }
 
-export interface OtpResult {
-  sid: string;
-  otp: string;
-  fetchedAt: number;
-}
-
 export const useAccountsStore = defineStore("accounts", () => {
   const accounts = ref<BeanfunAccount[]>([]);
-  const otpMap = ref<Record<string, OtpResult>>({});
 
   function addAccount(account: BeanfunAccount) {
     accounts.value.push(account);
@@ -93,24 +85,5 @@ export const useAccountsStore = defineStore("accounts", () => {
     acc.gameAccounts = [...preserved, ...added];
   }
 
-  async function fetchOtp(accountId: string, gameSn: string): Promise<OtpResult> {
-    const acc = accounts.value.find((a) => a.id === accountId);
-    if (!acc?.token) throw new Error("SESSION_EXPIRED");
-
-    const game = acc.gameAccounts.find((g) => g.sn === gameSn);
-    if (!game) throw new Error("GAME_NOT_FOUND");
-
-    const result = await invoke<{ sid: string; otp: string }>("get_otp", {
-      token: acc.token,
-      accountSn: game.sn,
-      accountSid: game.sid,
-      accountSname: game.sname,
-    });
-
-    const entry: OtpResult = { ...result, fetchedAt: Date.now() };
-    otpMap.value[gameSn] = entry;
-    return entry;
-  }
-
-  return { accounts, otpMap, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken, fetchOtp };
+  return { accounts, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
 });

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { ref, computed } from "vue";
+import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "../composables/useToast";
 import { useAccountsStore, type BeanfunAccount } from "../stores/accounts";
 
 const HUES = [210, 150, 270, 35, 0, 190];
@@ -67,17 +68,25 @@ function commitRenameAlias(accountId: string) {
   renamingAlias.value = null;
 }
 
-const gamePath = ref("");
-onMounted(() => {
-  gamePath.value = localStorage.getItem("kusei:game_path") ?? "";
-});
+const proxyLaunching = ref(false);
 
-async function launchGame() {
-  if (!gamePath.value) return;
+// Proxy-login: read a gamaniagames:// launch URI someone shared (via Discord →
+// clipboard) and hand it to the local GGM. The receiver needs only this app +
+// GGM — no beanfun session. We validate the scheme so the button can never be
+// coerced into opening arbitrary clipboard content.
+async function proxyLaunch() {
+  proxyLaunching.value = true;
   try {
-    await invoke("launch_game", { path: gamePath.value });
+    const clip = ((await readText()) ?? "").trim();
+    if (!clip.startsWith("gamaniagames://")) {
+      toast("剪貼簿沒有有效的登入金鑰，請先複製對方傳來的資料", { kind: "error" });
+      return;
+    }
+    await invoke<string>("proxy_launch", { uri: clip });
   } catch (e) {
-    alert(String(e));
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  } finally {
+    proxyLaunching.value = false;
   }
 }
 
@@ -148,10 +157,26 @@ function onPointerUp(e: PointerEvent, accountId: string) {
   if (dragging.value?.accountId === accountId && dragTarget.value !== null
       && dragTarget.value !== dragging.value.fromIdx) {
     store.moveGameAccount(accountId, dragging.value.fromIdx, dragTarget.value);
+    persistGameOrder(accountId);
   }
   (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
   dragging.value = null;
   dragTarget.value = null;
+}
+
+// Persist the sub-account (game account) order by sid so the arrangement is
+// restored next launch. Keyed by the account's game-set (sorted sids) — the same
+// keying the alias memory uses — since beanfun accounts get a fresh random id
+// each time they are re-added.
+function persistGameOrder(accountId: string) {
+  const acc = store.accounts.find(a => a.id === accountId);
+  if (!acc) return;
+  const key = acc.gameAccounts.map(g => g.sid).slice().sort().join("|");
+  const mem: Record<string, string[]> = JSON.parse(
+    localStorage.getItem("kusei:suborder_memory") ?? "{}"
+  );
+  mem[key] = acc.gameAccounts.map(g => g.sid);
+  localStorage.setItem("kusei:suborder_memory", JSON.stringify(mem));
 }
 
 function cancelDrag() {
@@ -161,9 +186,11 @@ function cancelDrag() {
 
 const renaming = ref<{ accountId: string; sn: string } | null>(null);
 const renameValue = ref("");
-const copiedAccount = ref<Set<string>>(new Set());
-const copiedOtp = ref<Set<string>>(new Set());
+const copiedOtp = ref<Set<string>>(new Set());   // 分享登入 (copy launch URI)
 const loadingOtp = ref<Set<string>>(new Set());
+const copiedAccount = ref<Set<string>>(new Set()); // 帳號 (copy account id)
+const copiedPwd = ref<Set<string>>(new Set());     // 密碼 (copy OTP)
+const loadingPwd = ref<Set<string>>(new Set());
 const errorMap = ref<Record<string, string>>({});
 
 function toggleAccount(id: string) {
@@ -200,19 +227,16 @@ function commitRename(accountId: string, sn: string) {
   }
 }
 
-async function copyAccountId(sid: string, sn: string) {
-  await writeText(sid);
-  copiedAccount.value.add(sn);
-  setTimeout(() => copiedAccount.value.delete(sn), 1800);
-}
-
-async function copyOtp(account: BeanfunAccount, sn: string) {
+async function shareLaunch(account: BeanfunAccount, sn: string) {
   if (!account.token) { errorMap.value[sn] = "SESSION_EXPIRED"; return; }
   loadingOtp.value.add(sn);
   errorMap.value[sn] = "";
   try {
-    const result = await store.fetchOtp(account.id, sn);
-    await writeText(result.otp);
+    const uri = await invoke<string>('get_launch_uri', {
+      token: account.token,
+      accountSn: sn,
+    });
+    await writeText(uri);
     copiedOtp.value.add(sn);
     setTimeout(() => copiedOtp.value.delete(sn), 1800);
   } catch (e: unknown) {
@@ -233,8 +257,43 @@ function displayName(game: { sname: string; localName: string | null }) {
   return game.localName || game.sname;
 }
 
+async function copyAccountId(sid: string, sn: string) {
+  await writeText(sid);
+  copiedAccount.value.add(sn);
+  setTimeout(() => copiedAccount.value.delete(sn), 1800);
+}
+
+async function copyOtp(account: BeanfunAccount, game: { sn: string; sid: string; sname: string }) {
+  if (!account.token) { errorMap.value[game.sn] = "SESSION_EXPIRED"; return; }
+  loadingPwd.value.add(game.sn);
+  errorMap.value[game.sn] = "";
+  try {
+    const r = await invoke<{ sid: string; otp: string }>("get_otp", {
+      token: account.token,
+      accountSn: game.sn,
+      accountSid: game.sid,
+      accountSname: game.sname,
+    });
+    await writeText(r.otp);
+    copiedPwd.value.add(game.sn);
+    setTimeout(() => copiedPwd.value.delete(game.sn), 1800);
+  } catch (e: unknown) {
+    const msg = cleanError(e instanceof Error ? e.message : String(e));
+    if (msg === "SESSION_EXPIRED") {
+      store.invalidateToken(account.id);
+      errorMap.value[game.sn] = "SESSION_EXPIRED";
+    } else {
+      errorMap.value[game.sn] = msg;
+    }
+  } finally {
+    loadingPwd.value.delete(game.sn);
+  }
+}
+
 const autoLogging = ref<Set<string>>(new Set());
-const sentMap = ref<Record<string, { sid: string }>>({});
+// value is the smart_launch outcome: "filled" (typed into a running game) or
+// "launched" (started via GGM).
+const sentMap = ref<Record<string, string>>({});
 
 async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: string; sname: string }) {
   if (!account.token) return;
@@ -242,17 +301,23 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
   errorMap.value[game.sn] = "";
   delete sentMap.value[game.sn];
   try {
-    const result = await invoke<{ sid: string; otp: string }>('auto_login', {
+    const outcome = await invoke<string>('smart_launch', {
       token: account.token,
       accountSn: game.sn,
       accountSid: game.sid,
       accountSname: game.sname,
     });
-    sentMap.value[game.sn] = { sid: result.sid };
+    sentMap.value[game.sn] = outcome;
     setTimeout(() => delete sentMap.value[game.sn], 4000);
   } catch (e: unknown) {
     const raw = e instanceof Error ? e.message : String(e);
-    errorMap.value[game.sn] = cleanError(raw);
+    const msg = cleanError(raw);
+    if (msg === "SESSION_EXPIRED") {
+      store.invalidateToken(account.id);
+      errorMap.value[game.sn] = "SESSION_EXPIRED";
+    } else {
+      errorMap.value[game.sn] = msg;
+    }
   } finally {
     autoLogging.value.delete(game.sn);
   }
@@ -395,17 +460,29 @@ function cleanError(msg: string): string {
                 @click.stop="copyAccountId(game.sid, game.sn)">
                 {{ copiedAccount.has(game.sn) ? "✓" : "帳號" }}
               </button>
-              <button class="btn-pill primary" :class="{ done: copiedOtp.has(game.sn) }"
+              <button class="btn-pill" :class="{ done: copiedPwd.has(game.sn) }"
+                :disabled="!acc.token || loadingPwd.has(game.sn)"
+                title="取得並複製密碼 (OTP)"
+                @click.stop="copyOtp(acc, game)">
+                <span v-if="loadingPwd.has(game.sn)" class="spin"></span>
+                <template v-else>{{ copiedPwd.has(game.sn) ? "✓" : "密碼" }}</template>
+              </button>
+              <button class="btn-pill auto-btn" :class="{ done: copiedOtp.has(game.sn) }"
                 :disabled="!acc.token || loadingOtp.has(game.sn)"
-                title="複製密碼 (OTP)"
-                @click.stop="copyOtp(acc, game.sn)">
+                title="複製此帳號的分享登入金鑰"
+                @click.stop="shareLaunch(acc, game.sn)">
                 <span v-if="loadingOtp.has(game.sn)" class="spin"></span>
-                <template v-else>{{ copiedOtp.has(game.sn) ? "✓" : "密碼" }}</template>
+                <template v-else-if="copiedOtp.has(game.sn)">✓</template>
+                <svg v-else viewBox="0 0 16 16" fill="none" width="13" height="13">
+                  <path d="M10.5 2.5H13.5V5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M13.5 2.5L8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                  <path d="M12 9.5v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
               </button>
               <button class="btn-pill auto-btn"
-                :disabled="!acc.token || autoLogging.has(game.sn) || loadingOtp.has(game.sn)"
+                :disabled="!acc.token || autoLogging.has(game.sn) || loadingPwd.has(game.sn)"
                 @click.stop="autoLogin(acc, game)"
-                title="自動登入遊戲">
+                title="快速登入">
                 <span v-if="autoLogging.has(game.sn)" class="spin"></span>
                 <svg v-else viewBox="0 0 14 14" fill="none" width="12" height="12">
                   <path d="M6 2.5L11.5 7 6 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -417,7 +494,7 @@ function cleanError(msg: string): string {
 
           <div v-if="errorMap[game.sn]" class="err-row">登入已失效，請重新掃描</div>
           <div v-else-if="sentMap[game.sn]" class="sent-row">
-            已填入帳號：{{ sentMap[game.sn].sid }}
+            {{ sentMap[game.sn] === 'filled' ? '已填入此帳號的帳密' : '已啟動遊戲，請稍候' }}
           </div>
         </div>
       </div>
@@ -444,11 +521,15 @@ function cleanError(msg: string): string {
       </svg>
       新增帳號
     </button>
-    <button class="btn-launch" :disabled="!gamePath" @click="launchGame">
-      <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
-        <path d="M4 3l10 5-10 5V3z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="currentColor" fill-opacity="0.18"/>
+    <button class="btn-launch" :disabled="proxyLaunching" @click="proxyLaunch"
+      title="讀取剪貼簿裡對方分享的登入連結並啟動遊戲">
+      <span v-if="proxyLaunching" class="spin"></span>
+      <svg v-else viewBox="0 0 16 16" fill="none" width="14" height="14">
+        <path d="M10.5 2.5H13.5V5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M13.5 2.5L8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <path d="M12 9.5v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      啟動遊戲
+      代理登入
     </button>
   </div>
 

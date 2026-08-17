@@ -12,6 +12,9 @@
     "store:default",
     "clipboard-manager:default",
     "clipboard-manager:allow-write-text",
-    "dialog:allow-open"
+    "clipboard-manager:allow-read-text",
+    "dialog:allow-open",
+    "dialog:allow-message",
+    "dialog:allow-ask"
   ]
 }

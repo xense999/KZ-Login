@@ -4,85 +4,87 @@
   box-sizing: border-box;
 }
 
-/* ── 亮色主題（預設）── iOS 26 Liquid Glass */
+/* ── 亮色主題（預設）── 藍灰 */
 :root {
-  --bg:       #f2f2f7;
+  --bg:       #f2f4f9;
   --surface:  #ffffff;
-  --surface2: #f2f2f7;
-  --surface3: #e5e5ea;
-  --border:   rgba(0, 0, 0, 0.08);
-  --border2:  rgba(0, 0, 0, 0.05);
-  --text:     rgba(0, 0, 0, 0.88);
-  --text2:    rgba(0, 0, 0, 0.65);
-  --text3:    rgba(0, 0, 0, 0.42);
-  --hover-tint:   rgba(0, 0, 0, 0.04);
-  --input-bg:     rgba(0, 0, 0, 0.04);
-  --input-border: rgba(0, 0, 0, 0.10);
-  --ctx-menu-bg:  rgba(248, 248, 250, 0.94);
+  --surface2: #f2f4f9;
+  --surface3: #e7ebf2;
+  --border:   rgba(20, 40, 80, 0.14);
+  --border2:  rgba(20, 40, 80, 0.11);
+  --text:     rgba(10, 20, 40, 0.90);
+  --text2:    rgba(10, 20, 40, 0.70);
+  --text3:    rgba(10, 20, 40, 0.54);
+  --edge:     rgba(20, 40, 80, 0.22);
+  --hover-tint:   rgba(20, 40, 80, 0.05);
+  --input-bg:     rgba(20, 40, 80, 0.04);
+  --input-border: rgba(20, 40, 80, 0.12);
+  --ctx-menu-bg:  rgba(248, 249, 252, 0.95);
   --ctx-shadow:   0 8px 24px rgba(0,0,0,0.14), 0 2px 6px rgba(0,0,0,0.08);
   --card-shadow:  0 1px 3px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.05);
   --card-filter:  none;
   --card-border:  none;
-  --scrollbar:    rgba(0, 0, 0, 0.14);
-  --titlebar-bg:  rgba(242, 242, 247, 0.85);
+  --scrollbar:    rgba(20, 40, 80, 0.16);
+  --titlebar-bg:  rgba(244, 246, 250, 0.85);
   --titlebar-blur: blur(20px) saturate(160%);
-  --primary-color:    #007aff;
-  --primary-bg:       rgba(0, 122, 255, 0.10);
-  --primary-bg-hover: rgba(0, 122, 255, 0.16);
-  --primary-border:   rgba(0, 122, 255, 0.25);
-  --interactive-active-bg: rgba(0, 122, 255, 0.08);
-  --green: #28c840;
-  --warn:  #ff9500;
-  --red:   #ff3b30;
-  --blue:  #007aff;
-  --amber: #ff9500;
+  --primary-color:    #334155;
+  --primary-bg:       rgba(51, 65, 85, 0.10);
+  --primary-bg-hover: rgba(51, 65, 85, 0.16);
+  --primary-border:   rgba(51, 65, 85, 0.28);
+  --interactive-active-bg: rgba(51, 65, 85, 0.08);
+  --green: #22a355;
+  --warn:  #d97706;
+  --red:   #dc2626;
+  --blue:  #334155;
+  --amber: #d97706;
   /* compat aliases */
-  --glass:       rgba(0, 0, 0, 0.04);
-  --glass-hover: rgba(0, 0, 0, 0.06);
-  --ctx-hover:       rgba(0, 0, 0, 0.05);
-  --ctx-sep-color:   rgba(0, 0, 0, 0.07);
-  --spin-track:      rgba(0, 0, 0, 0.12);
-  --pill-hover-border: rgba(0, 0, 0, 0.14);
+  --glass:       rgba(20, 40, 80, 0.04);
+  --glass-hover: rgba(20, 40, 80, 0.06);
+  --ctx-hover:       rgba(20, 40, 80, 0.05);
+  --ctx-sep-color:   rgba(20, 40, 80, 0.07);
+  --spin-track:      rgba(20, 40, 80, 0.14);
+  --pill-hover-border: rgba(20, 40, 80, 0.16);
 }
 
-/* ── 暗色主題 ── iOS 26 Dark */
+/* ── 暗色主題 ── slate 深藍 */
 :root[data-theme="dark"] {
-  --bg:       #000000;
-  --surface:  #1c1c1e;
-  --surface2: #2c2c2e;
-  --surface3: #3a3a3c;
-  --border:   rgba(84, 84, 88, 0.65);
-  --border2:  rgba(84, 84, 88, 0.35);
-  --text:     #ffffff;
-  --text2:    rgba(235, 235, 245, 0.60);
-  --text3:    rgba(235, 235, 245, 0.30);
-  --hover-tint:   rgba(255, 255, 255, 0.05);
-  --input-bg:     rgba(255, 255, 255, 0.07);
-  --input-border: rgba(84, 84, 88, 0.65);
-  --ctx-menu-bg:  #1c1c1e;
+  --bg:       #131924;
+  --surface:  #1a222f;
+  --surface2: #131924;
+  --surface3: #28313e;
+  --border:   rgba(170, 195, 235, 0.18);
+  --border2:  rgba(170, 195, 235, 0.11);
+  --text:     rgba(232, 238, 250, 0.95);
+  --text2:    rgba(232, 238, 250, 0.80);
+  --text3:    rgba(232, 238, 250, 0.58);
+  --edge:     rgba(170, 195, 235, 0.28);
+  --hover-tint:   rgba(160, 190, 230, 0.06);
+  --input-bg:     rgba(160, 190, 230, 0.07);
+  --input-border: rgba(170, 195, 235, 0.18);
+  --ctx-menu-bg:  #1a222f;
   --ctx-shadow:   0 8px 32px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.4);
-  --card-shadow:  none;
+  --card-shadow:  0 2px 10px rgba(0,0,0,0.55), 0 0 0 1px rgba(170,195,235,0.08);
   --card-filter:  none;
   --card-border:  none;
-  --scrollbar:    rgba(255, 255, 255, 0.14);
-  --titlebar-bg:  rgba(28, 28, 30, 0.90);
+  --scrollbar:    rgba(170, 195, 235, 0.18);
+  --titlebar-bg:  rgba(11, 18, 31, 0.88);
   --titlebar-blur: blur(20px) saturate(160%);
-  --primary-color:    #0a84ff;
-  --primary-bg:       rgba(10, 132, 255, 0.15);
-  --primary-bg-hover: rgba(10, 132, 255, 0.22);
-  --primary-border:   rgba(10, 132, 255, 0.35);
-  --interactive-active-bg: rgba(10, 132, 255, 0.12);
+  --primary-color:    #3dd6c3;
+  --primary-bg:       rgba(61, 214, 195, 0.12);
+  --primary-bg-hover: rgba(61, 214, 195, 0.18);
+  --primary-border:   rgba(61, 214, 195, 0.35);
+  --interactive-active-bg: rgba(61, 214, 195, 0.12);
   --green: #30d158;
   --warn:  #ff9f0a;
   --red:   #ff453a;
-  --blue:  #0a84ff;
+  --blue:  #3dd6c3;
   --amber: #ff9f0a;
-  --glass:       rgba(255, 255, 255, 0.05);
-  --glass-hover: rgba(255, 255, 255, 0.08);
-  --ctx-hover:       rgba(255, 255, 255, 0.08);
-  --ctx-sep-color:   rgba(255, 255, 255, 0.07);
-  --spin-track:      rgba(255, 255, 255, 0.20);
-  --pill-hover-border: rgba(255, 255, 255, 0.16);
+  --glass:       rgba(160, 190, 230, 0.06);
+  --glass-hover: rgba(160, 190, 230, 0.10);
+  --ctx-hover:       rgba(160, 190, 230, 0.08);
+  --ctx-sep-color:   rgba(170, 195, 235, 0.09);
+  --spin-track:      rgba(170, 195, 235, 0.20);
+  --pill-hover-border: rgba(170, 195, 235, 0.20);
 }
 
 html, body, #app {
