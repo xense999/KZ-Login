@@ -119,6 +119,36 @@ input {
   font-family: inherit;
 }
 
+/* ── 自訂標題列 ── 兩個視窗（主視窗與帳號瀏覽器）共用；高度與內距各自設定，
+   因為瀏覽器的標題列坐在一圈邊框裡面。 */
+.titlebar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  cursor: default;
+  background: var(--titlebar-bg);
+  backdrop-filter: var(--titlebar-blur);
+  -webkit-backdrop-filter: var(--titlebar-blur);
+  border-bottom: 1px solid var(--border2);
+}
+
+.wbtn {
+  width: 26px;
+  height: 22px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 12px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.wbtn:hover { background: var(--glass-hover); color: var(--text2); }
+.wbtn.close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
+
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {

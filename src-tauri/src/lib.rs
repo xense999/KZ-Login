@@ -1,4 +1,5 @@
 mod beanfun;
+mod browser;
 
 use beanfun::{GameAccount, QrInit, QrPollOutcome};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -492,7 +493,7 @@ async fn check_ggm_update() -> Result<beanfun::GgmUpdate, String> {
 /// user). Our process is elevated, so the installer launches with admin rights.
 #[tauri::command]
 async fn update_ggm(url: String) -> Result<(), String> {
-    let installer = beanfun::download_ggm_installer(&url).await.map_err(map_err)?;
+    let installer = beanfun::download_installer(&url, "GGMSetup.exe").await.map_err(map_err)?;
     #[cfg(windows)]
     {
         tokio::task::spawn_blocking(move || win::shell_open(&installer))
@@ -565,6 +566,75 @@ fn set_game_path(path: String) -> Result<(), String> {
     }
 }
 
+// ─── Account browser ───────────────────────────────────────────────────────────
+
+/// Open the built-in browser carrying this account's login session. `async` on
+/// purpose: creating windows from a synchronous command deadlocks on WebView2.
+/// Errors the UI acts on: `SESSION_EXPIRED`, `BROWSER_STILL_OPEN`.
+#[tauri::command]
+async fn open_account_browser(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    token: String,
+    account_id: String,
+    alias: String,
+) -> Result<(), String> {
+    let cookie_store = {
+        let stores = state.session_stores.lock().await;
+        stores.get(&token).cloned()
+            .ok_or_else(|| "SESSION_EXPIRED".to_string())?
+    };
+    browser::open(&app, &account_id, &alias, &cookie_store)
+}
+
+/// The browser shell's navigation bar: back / forward / reload / go to a typed URL.
+#[tauri::command]
+async fn browser_navigate(
+    app: tauri::AppHandle,
+    action: String,
+    url: Option<String>,
+) -> Result<(), String> {
+    browser::navigate(&app, &action, url.as_deref())
+}
+
+/// The browser shell's tab strip: new / activate / close.
+#[tauri::command]
+async fn browser_tab(
+    app: tauri::AppHandle,
+    action: String,
+    id: Option<u64>,
+) -> Result<(), String> {
+    browser::tab_command(&app, &action, id)
+}
+
+// ─── App self-update ──────────────────────────────────────────────────────────
+
+/// Check GitHub for a newer app release. Current version comes from Tauri's
+/// package info (i.e. `tauri.conf.json`), the authoritative version.
+#[tauri::command]
+async fn check_app_update(app: tauri::AppHandle) -> Result<beanfun::AppUpdate, String> {
+    let current = app.package_info().version.to_string();
+    beanfun::check_app_update(&current).await.map_err(map_err)
+}
+
+/// Download the app installer and launch it. Our process is elevated, so the
+/// installer runs with admin rights; the NSIS installer closes the running app.
+#[tauri::command]
+async fn update_app(url: String) -> Result<(), String> {
+    let installer = beanfun::download_installer(&url, "KuZe-Login-setup.exe").await.map_err(map_err)?;
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(move || win::shell_open(&installer))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = installer;
+    }
+    Ok(())
+}
+
 // ─── Session Ping ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -599,7 +669,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
-            check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session
+            check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session,
+            open_account_browser, browser_navigate, browser_tab,
+            check_app_update, update_app
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

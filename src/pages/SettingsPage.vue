@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "../composables/useToast";
 import { useTheme } from "../composables/useTheme";
+
+const AUTHOR_DISCORD = "xense999";
+const GITHUB_URL = "https://github.com/xense999";
 
 const emit = defineEmits<{ back: [] }>();
 
@@ -15,10 +20,81 @@ const webhookUrl = ref("");
 const gamePath = ref("");
 const saved = ref(false);
 
+const showAbout = ref(false);
+const appVersion = ref("");
+const discordCopied = ref(false);
+
 onMounted(async () => {
   webhookUrl.value = localStorage.getItem(WEBHOOK_KEY) ?? "";
   try { gamePath.value = await invoke<string>("get_game_path"); } catch { /* ignore */ }
+  try { appVersion.value = await getVersion(); } catch { /* ignore */ }
 });
+
+// Discord 沒有「用帳號加好友」的深層連結（深連結要數字 user ID，不是帳號），
+// 所以點一下就複製帳號並就地顯示「已複製」，使用者到 Discord 搜尋帳號即可加。
+async function contactDiscord() {
+  try {
+    await writeText(AUTHOR_DISCORD);
+    discordCopied.value = true;
+    setTimeout(() => { discordCopied.value = false; }, 2000);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  }
+}
+
+async function openGithub() {
+  try { await invoke("open_url", { url: GITHUB_URL }); } catch { /* ignore */ }
+}
+
+type UpdateInfo = { current: string; latest: string; has_update: boolean; url: string; notes: string };
+type UpdateState = "idle" | "checking" | "latest" | "available" | "downloading";
+
+const updateState = ref<UpdateState>("idle");
+const latestVersion = ref("");
+const updateUrl = ref("");
+
+const updateBtnText = computed(() => {
+  switch (updateState.value) {
+    case "checking": return "檢查中…";
+    case "latest": return "已是最新版";
+    case "available": return `更新到 v${latestVersion.value}`;
+    case "downloading": return "下載中…";
+    default: return "檢查更新";
+  }
+});
+
+// 一顆按鈕兩段：先「檢查更新」；查到新版後變成「更新到 vX」，再點一次才下載安裝。
+async function onUpdateClick() {
+  if (updateState.value === "available") return runUpdate();
+  if (updateState.value === "checking" || updateState.value === "downloading") return;
+
+  updateState.value = "checking";
+  try {
+    const u = await invoke<UpdateInfo>("check_app_update");
+    if (u.has_update && u.url) {
+      latestVersion.value = u.latest;
+      updateUrl.value = u.url;
+      updateState.value = "available";
+    } else {
+      updateState.value = "latest";
+      setTimeout(() => { if (updateState.value === "latest") updateState.value = "idle"; }, 2500);
+    }
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+    updateState.value = "idle";
+  }
+}
+
+async function runUpdate() {
+  updateState.value = "downloading";
+  try {
+    await invoke("update_app", { url: updateUrl.value });
+    toast("已開始下載並開啟安裝程式，請依畫面指示完成更新", { ms: 4000 });
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+    updateState.value = "available";
+  }
+}
 
 async function browse() {
   const sel = await open({
@@ -112,6 +188,61 @@ async function supportAuthor() {
           <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
         </svg>
       </button>
+      <button class="btn-info" @click="showAbout = true" title="關於">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+          <circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M12 11v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          <circle cx="12" cy="7.75" r="1.05" fill="currentColor"/>
+        </svg>
+      </button>
+    </div>
+
+    <div v-if="showAbout" class="about-overlay" @click.self="showAbout = false">
+      <div class="about-window">
+        <div class="about-titlebar">
+          <span class="about-title">關於</span>
+          <button class="about-close" @click="showAbout = false" title="關閉">&#x2715;</button>
+        </div>
+        <div class="about-body">
+          <div class="about-card">
+            <span class="about-card-label">程式版本</span>
+            <div class="version-row">
+              <span class="about-card-value">{{ appVersion ? `v${appVersion}` : "—" }}</span>
+              <button
+                class="btn-update"
+                :class="{ ready: updateState === 'available' }"
+                :disabled="updateState === 'checking' || updateState === 'downloading'"
+                @click="onUpdateClick"
+              >
+                {{ updateBtnText }}
+              </button>
+            </div>
+          </div>
+          <div class="about-card">
+            <span class="about-card-label">聯繫作者</span>
+            <button class="contact-row" @click="contactDiscord">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M20.3 4.9A19.8 19.8 0 0 0 15.4 3.4l-.24.5a18.3 18.3 0 0 1 4.34 1.35 16.4 16.4 0 0 0-5-1.58 18 18 0 0 0-3 0 16.4 16.4 0 0 0-5 1.58 18.3 18.3 0 0 1 4.34-1.35l-.24-.5A19.8 19.8 0 0 0 3.7 4.9C1.2 8.6.5 12.2.85 15.8a19.9 19.9 0 0 0 6.06 3.06l.73-1.13a13 13 0 0 1-2.05-.98l.5-.37a14.2 14.2 0 0 0 12.02 0l.5.37a13 13 0 0 1-2.05.98l.73 1.13a19.9 19.9 0 0 0 6.06-3.06c.42-4.17-.71-7.74-2.71-10.9ZM9.1 13.9c-.97 0-1.77-.9-1.77-2s.78-2 1.77-2 1.79.9 1.77 2c0 1.1-.79 2-1.77 2Zm5.8 0c-.97 0-1.77-.9-1.77-2s.78-2 1.77-2 1.79.9 1.77 2c0 1.1-.78 2-1.77 2Z"/>
+              </svg>
+              <span class="contact-text">
+                <span class="contact-name">Discord</span>
+                <span class="contact-sub" :class="{ copied: discordCopied }">
+                  {{ discordCopied ? "已複製 ✓" : `${AUTHOR_DISCORD} · 點擊複製帳號` }}
+                </span>
+              </span>
+            </button>
+            <button class="contact-row" @click="openGithub">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.22-3.37-1.22-.46-1.18-1.11-1.5-1.11-1.5-.9-.63.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.57 2.34 1.12 2.91.85.09-.66.35-1.12.63-1.37-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05a9.34 9.34 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/>
+              </svg>
+              <span class="contact-text">
+                <span class="contact-name">GitHub</span>
+                <span class="contact-sub">xense999</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -237,6 +368,153 @@ async function supportAuthor() {
   color: #ff3b30;
 }
 .btn-heart:active { transform: scale(0.94); }
+
+.btn-info {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text3);
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+.btn-info:hover { background: var(--glass-hover); color: var(--text); }
+.btn-info:active { transform: scale(0.94); }
+
+/* ── 關於（視窗內視窗） ── */
+.about-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.about-window {
+  width: 300px;
+  max-width: calc(100% - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.about-titlebar {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--border2);
+}
+.about-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+}
+.about-close {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text3);
+  border-radius: 6px;
+  font-size: 12px;
+  transition: background 0.12s, color 0.12s;
+}
+.about-close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
+
+.about-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.about-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.about-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text3);
+}
+.about-card-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.btn-update {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.btn-update:hover:not(:disabled) { background: var(--glass-hover); color: var(--text); }
+.btn-update:disabled { opacity: 0.55; }
+.btn-update.ready {
+  color: #fff;
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.contact-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--text2);
+  text-align: left;
+  transition: background 0.12s;
+}
+.contact-row:hover { background: var(--glass-hover); }
+.contact-row svg { flex-shrink: 0; color: var(--text2); }
+.contact-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.contact-name { font-size: 13px; font-weight: 500; color: var(--text); }
+.contact-sub {
+  font-size: 11px;
+  color: var(--text3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contact-sub.copied { color: var(--primary-color); }
 
 /* ── 分段控制器 ── */
 .seg {

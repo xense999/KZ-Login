@@ -656,17 +656,65 @@ pub async fn check_ggm_update() -> Result<GgmUpdate, BeanfunError> {
     Ok(GgmUpdate { current, server, has_update, url })
 }
 
-/// Download the GGM installer to a temp file and return its path (caller runs it).
-pub async fn download_ggm_installer(url: &str) -> Result<String, BeanfunError> {
+/// Download an installer to a temp file and return its path (caller runs it).
+/// The file is named after the URL's last path segment, `fallback_name` if none.
+pub async fn download_installer(url: &str, fallback_name: &str) -> Result<String, BeanfunError> {
     if !url.starts_with("https://") {
         return Err(BeanfunError::Parse("更新連結無效".into()));
     }
     let bytes = Client::new().get(url).send().await?.bytes().await?;
-    let name = url.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("GGMSetup.exe");
+    let name = url.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(fallback_name);
     let path = std::env::temp_dir().join(name);
     std::fs::write(&path, &bytes)
         .map_err(|e| BeanfunError::Parse(format!("寫入安裝檔失敗：{e}")))?;
     Ok(path.to_string_lossy().to_string())
+}
+
+// ─── App self-update（GitHub Releases） ────────────────────────────────────────
+
+/// GitHub repo hosting the app's releases. Its latest release's `.exe` asset is
+/// the installer we download to self-update.
+const GITHUB_REPO: &str = "xense999/KZ-Login";
+
+#[derive(Debug, Serialize)]
+pub struct AppUpdate {
+    /// Currently running app version.
+    pub current: String,
+    /// Latest version on GitHub (tag with any leading `v` stripped).
+    pub latest: String,
+    pub has_update: bool,
+    /// Installer download URL (the release's `.exe` asset).
+    pub url: String,
+    /// Release notes body, shown to the user before updating.
+    pub notes: String,
+}
+
+/// Ask GitHub for the latest release and compare its tag with the running
+/// version. `current` is the running app version (from Tauri's package info).
+pub async fn check_app_update(current: &str) -> Result<AppUpdate, BeanfunError> {
+    let api = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    let resp = Client::new()
+        .get(&api)
+        .header(header::USER_AGENT, "KZ-Login-Updater")
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .send().await?
+        .text().await?;
+    let v: serde_json::Value = serde_json::from_str(&resp)
+        .map_err(|e| BeanfunError::Parse(format!("GitHub 回應非 JSON：{e}")))?;
+
+    let latest = v.get("tag_name").and_then(|x| x.as_str()).unwrap_or("")
+        .trim_start_matches('v').to_string();
+    // The release ships one Windows installer — take the first `.exe` asset.
+    let url = v.get("assets").and_then(|a| a.as_array()).and_then(|arr| {
+        arr.iter().find_map(|x| {
+            let u = x.get("browser_download_url")?.as_str()?;
+            u.ends_with(".exe").then(|| u.to_string())
+        })
+    }).unwrap_or_default();
+    let notes = v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let has_update = !latest.is_empty() && version_newer(&latest, current);
+
+    Ok(AppUpdate { current: current.to_string(), latest, has_update, url, notes })
 }
 
 fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {

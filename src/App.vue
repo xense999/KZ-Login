@@ -107,10 +107,10 @@ function onAccountSaved() {
   <div class="app-window">
     <div class="titlebar" data-tauri-drag-region>
       <button class="wbtn settings-btn" @click="page = page === 'settings' ? 'main' : 'settings'" :class="{ active: page === 'settings' }">
-        <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
-          <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.4"/>
-          <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"
-            stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <svg viewBox="0 0 24 24" fill="none" width="15" height="15">
+          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+            stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
       <span class="title" data-tauri-drag-region>{{ pageTitles[page] }}</span>
@@ -158,17 +158,10 @@ function onAccountSaved() {
   box-shadow: none;
 }
 
+/* .titlebar 與 .wbtn 的共通樣式在 styles/main.css（與帳號瀏覽器的殼層共用） */
 .titlebar {
   height: 42px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
   padding: 0 14px;
-  cursor: default;
-  background: var(--titlebar-bg);
-  backdrop-filter: var(--titlebar-blur);
-  -webkit-backdrop-filter: var(--titlebar-blur);
-  border-bottom: 1px solid var(--border2);
 }
 
 .title {
@@ -193,22 +186,6 @@ function onAccountSaved() {
   display: flex;
   gap: 2px;
 }
-
-.wbtn {
-  width: 26px;
-  height: 22px;
-  background: none;
-  border: none;
-  color: var(--text3);
-  font-size: 12px;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-}
-.wbtn:hover { background: var(--glass-hover); color: var(--text2); }
-.wbtn.close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
 .page-container {
   flex: 1;

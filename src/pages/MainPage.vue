@@ -68,6 +68,37 @@ function commitRenameAlias(accountId: string) {
   renamingAlias.value = null;
 }
 
+// 帳號瀏覽器：點頭像開一個帶著這個帳號登入態的內建瀏覽器視窗。全 app 同時只有
+// 一組（WebView2 共用 cookie 儲存區，兩個帳號同開會互相踩掉登入態）。
+const openingBrowser = ref<Set<string>>(new Set());
+
+async function openBrowser(account: BeanfunAccount) {
+  if (!account.token) return;
+  openingBrowser.value.add(account.id);
+  try {
+    await invoke("open_account_browser", {
+      token: account.token,
+      accountId: account.id,
+      alias: account.alias,
+    });
+  } catch (e: unknown) {
+    const raw = e instanceof Error ? e.message : String(e);
+    if (raw.includes("BROWSER_STILL_OPEN")) {
+      toast("已有其他帳號的瀏覽器開著，請先關閉它再開這個帳號", { kind: "error" });
+      return;
+    }
+    const msg = cleanError(raw);
+    if (msg === "SESSION_EXPIRED") {
+      store.invalidateToken(account.id);
+      toast("登入已失效，請重新掃描 QR Code", { kind: "error" });
+    } else {
+      toast(msg, { kind: "error" });
+    }
+  } finally {
+    openingBrowser.value.delete(account.id);
+  }
+}
+
 const proxyLaunching = ref(false);
 
 // Proxy-login: read a gamaniagames:// launch URI someone shared (via Discord →
@@ -367,9 +398,24 @@ function cleanError(msg: string): string {
         @click="onAccRowClick(acc.id)"
         @contextmenu.prevent="openContextMenu($event, acc.id)"
       >
-        <div class="av" :style="{ background: `hsl(${hue(acc.id)},40%,18%)`, color: `hsl(${hue(acc.id)},70%,70%)` }">
+        <!-- 頭像就是開啟帳號瀏覽器的按鈕；hover 才浮出地球圖示，平時保持頭像原貌 -->
+        <button class="av" :disabled="!acc.token || openingBrowser.has(acc.id)"
+          :title="acc.token ? '開啟帳號瀏覽器' : '已斷線，請重新登入'"
+          :style="{ background: `hsl(${hue(acc.id)},40%,18%)`, color: `hsl(${hue(acc.id)},70%,70%)` }"
+          @click.stop="openBrowser(acc)">
           <img src="/avatar.png" class="av-icon" />
-        </div>
+          <span v-if="openingBrowser.has(acc.id)" class="av-overlay busy">
+            <span class="spin"></span>
+          </span>
+          <span v-else-if="acc.token" class="av-overlay">
+            <svg viewBox="0 0 16 16" fill="none" width="16" height="16">
+              <circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M1.75 8h12.5" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M8 1.75c1.7 1.7 2.6 3.85 2.6 6.25S9.7 12.55 8 14.25C6.3 12.55 5.4 10.4 5.4 8S6.3 3.45 8 1.75z"
+                stroke="currentColor" stroke-width="1.4"/>
+            </svg>
+          </span>
+        </button>
         <div class="acc-info">
           <template v-if="renamingAlias === acc.id">
             <input :id="`alias-input-${acc.id}`" v-model="aliasValue" class="alias-input"
@@ -606,14 +652,28 @@ function cleanError(msg: string): string {
 .alias-rename-btn:hover { background: var(--glass-hover); color: var(--text2); opacity: 1; }
 
 .av {
+  position: relative;
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 600;
   overflow: hidden;
+  border: none; padding: 0;
 }
 .av-icon {
   width: 100%; height: 100%; object-fit: cover;
 }
+
+/* 蓋在頭像上的地球圖示：只在 hover 浮出，讓頭像平時維持原本的樣子 */
+.av-overlay {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0; transition: opacity 0.15s;
+}
+.av:hover:not(:disabled) .av-overlay { opacity: 1; }
+.av-overlay.busy { opacity: 1; }
+.av:disabled { cursor: default; }
 
 .acc-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
 .acc-name {
@@ -641,6 +701,15 @@ function cleanError(msg: string): string {
   transition: background 0.12s, color 0.12s;
 }
 .qr-rescan:hover { background: rgba(255,159,10,0.12); }
+
+.acc-browser-btn {
+  background: none; border: none; padding: 3px;
+  color: var(--text3); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.acc-browser-btn:hover:not(:disabled) { background: var(--glass-hover); color: var(--text2); }
+.acc-browser-btn:disabled { opacity: 0.3; cursor: default; }
 
 .chev { color: var(--text3); transition: transform 0.2s ease; }
 .chev.open { transform: rotate(180deg); }

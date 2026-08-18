@@ -1853,6 +1853,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "cipher",
+ "cookie_store 0.21.1",
  "des",
  "ecb",
  "hex",
@@ -1869,6 +1870,8 @@ dependencies = [
  "tauri-plugin-store",
  "thiserror 1.0.69",
  "tokio",
+ "webview2-com",
+ "windows-core 0.61.2",
  "windows-sys 0.59.0",
  "winreg 0.52.0",
 ]

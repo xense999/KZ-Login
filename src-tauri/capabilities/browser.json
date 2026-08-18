@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser",
+  "description": "帳號瀏覽器的工具列視窗：只要視窗控制，不碰剪貼簿、對話框與 store。分頁視窗（browser-tab-*）刻意不在任何 capability 裡＝零 IPC",
+  "windows": ["browser"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging"
+  ]
+}
