@@ -82,7 +82,17 @@ async fn qr_check(state: tauri::State<'_, AppState>) -> Result<QrCheckResult, St
                 .map_err(map_err)?;
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
             state.session_stores.lock().await
-                .insert(token.clone(), cookie_store);
+                .insert(token.clone(), cookie_store.clone());
+            #[cfg(debug_assertions)]
+            {
+                let store_dbg = cookie_store.clone();
+                tokio::spawn(async move {
+                    let url = "https://maplestory-event.beanfun.com/E20260606/Login/Beanfun";
+                    if let Err(e) = beanfun::diagnose_event_login(&store_dbg, url).await {
+                        eprintln!("[diag] 活動頁診斷失敗：{e}");
+                    }
+                });
+            }
             *state.pending_qr.lock().await = None;
             Ok(QrCheckResult::Approved { token, games })
         }

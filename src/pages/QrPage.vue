@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { toast } from "../composables/useToast";
 
 const emit = defineEmits<{
   cancel: [];
@@ -14,11 +15,9 @@ const qrImage = ref("");
 const deeplink = ref("");
 const errorMsg = ref("");
 const linkCopied = ref(false);
-const hasWebhook = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 onMounted(() => {
-  hasWebhook.value = !!localStorage.getItem("kusei:discord_webhook");
   startQr();
 });
 onUnmounted(() => { if (pollTimer) clearTimeout(pollTimer); });
@@ -47,6 +46,7 @@ async function copyDeeplink() {
   const shareUrl = `${REDIRECT_BASE}#${b64}`;
   await writeText(shareUrl);
 
+  let sentToDiscord = false;
   const webhook = localStorage.getItem("kusei:discord_webhook");
   if (webhook) {
     try {
@@ -59,14 +59,18 @@ async function copyDeeplink() {
           content: `[登入連結](${shareUrl})`,
         }),
       });
-      linkCopied.value = true;
-      setTimeout(() => { linkCopied.value = false; }, 2000);
-      return;
+      sentToDiscord = true;
     } catch { /* fallback to clipboard-only */ }
   }
 
   linkCopied.value = true;
   setTimeout(() => { linkCopied.value = false; }, 2000);
+  toast(
+    sentToDiscord
+      ? "已複製登入連結，並傳送到你的 Discord 頻道。可貼到手機或其他裝置的瀏覽器開啟，即可用此帳號登入。"
+      : "已複製登入連結。可貼到手機或其他裝置的瀏覽器開啟，即可用此帳號登入。",
+    { ms: 4500 }
+  );
 }
 
 function schedulePoll() { pollTimer = setTimeout(poll, 2000); }
@@ -126,7 +130,7 @@ async function poll() {
 
     <div class="actions">
       <button v-if="status === 'waiting' && deeplink" class="btn-ghost" @click="copyDeeplink">
-        {{ linkCopied ? (hasWebhook ? "已傳送 ✓" : "已複製 ✓") : "連結版本" }}
+        {{ linkCopied ? "已複製 ✓" : "連結版本" }}
       </button>
       <button class="btn-ghost" @click="$emit('cancel')">取消</button>
       <button v-if="status === 'expired' || status === 'error'" class="btn-solid" @click="startQr">重新取得</button>
