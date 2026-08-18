@@ -42,11 +42,24 @@ jobs:
           Rename-Item $found[0].FullName $newName
           "path=$($found[0].DirectoryName)\$newName" >> $env:GITHUB_OUTPUT
 
+      # 更新說明放 release-notes/<tag>.md（跟著 tag 一起進 repo）。忘了寫就退回
+      # 一句下載指示——寧可 release 內容陽春，也不要卡住整個發版。
+      - name: Resolve release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $path = "release-notes/${{ github.ref_name }}.md"
+          if (-not (Test-Path $path)) {
+            Write-Host "::warning::$path 不存在，改用預設內文"
+            $path = "release-notes/_default.md"
+          }
+          "path=$path" >> $env:GITHUB_OUTPUT
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           name: 久世登入器 ${{ github.ref_name }}
-          body: 請從下方 Assets 下載安裝檔（.msi 或 .exe）。
+          body_path: ${{ steps.notes.outputs.path }}
           draft: false
           prerelease: false
           files: ${{ steps.installer.outputs.path }}
