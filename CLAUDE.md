@@ -8,6 +8,7 @@ Tauri 2 + Vue 3 的 beanfun 登入工具：QR 登入、OTP 取號、一鍵啟動
 - `docs/規範/<模組名>.md` — 各模組契約（公開介面／單一來源／不變量／禁止）。引用契約一律指向總表條目，不直連模組檔。
 - [docs/ggm-data-decrypt.md](docs/ggm-data-decrypt.md) — GGM launch blob 的解密演算法研究紀錄（目前流程刻意不解密，見總表例外區）。
 - [docs/瀏覽器重寫目標.md](docs/瀏覽器重寫目標.md) — 帳號內建瀏覽器第一版移除後的目標整理、死因診斷與重寫路線候選。
+- [docs/瀏覽器登入態診斷.md](docs/瀏覽器登入態診斷.md) — 活動頁／網頁版遊戲啟動的 SSO 登入根因與修法（已解決）。
 
 ## Agent skills
 

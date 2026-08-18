@@ -36,6 +36,7 @@
 - **cookie 必須在分頁導向目標之前注入完成**：分頁一律以 `about:blank` 建立，注入完才 `navigate`。每次手動開分頁都重注一次（注入便宜、TTL 短）。
 - 注入的 cookie **一定要給到期時間**（`INJECTED_COOKIE_TTL_SECS`）——session cookie 只活在建立它的 webview，其他分頁與彈窗看不到。
 - **注入不按網域過濾**，jar 有幾顆注幾顆（彈窗走 gamania 關聯網域，被過濾掉的正是那些）。單向注入，不回寫。
+- 旗標一律照抄 jar，**唯一例外是 `bfWebToken` 要拿掉 HttpOnly**（`is_js_readable_cookie`）：SSO 檢查點 `tw.newlogin.beanfun.com/checkin_step2.aspx` 的 `DealWebToken()` 是用 `document.cookie` 讀這顆的，讀不到就 `GotoLoginPage()` 把使用者打回掃碼登入頁。詳見 docs/瀏覽器登入態診斷.md。要再加例外必須先有「哪段網頁 JS 讀它」的證據。
 - 分頁視窗（`browser-tab-*`）**不得出現在任何 capability 檔**＝零 IPC——它載外部網站。
 - 工具列視窗一動（Moved/Resized/ScaleFactorChanged）就 `relayout_tabs` 把**所有**分頁貼回框裡（隱藏中的也排，切換時才不閃舊位置）。
 - 網頁要求的新視窗：**帶尺寸特徵（`features.size()` 有值）→ `Allow` 原生彈窗**（金流靠 `window.opener` 回報付款結果）；**沒帶尺寸 → `Create` 開成分頁**（走 `SetNewWindow`，opener 一樣保留）。分頁開不成要退回 `Allow`，不可吞掉連結。

@@ -137,10 +137,28 @@ fn select_for_injection(jar: &[JarCookie]) -> Vec<WebviewCookie> {
                 },
                 path: c.path.clone(),
                 secure: c.secure,
-                http_only: c.http_only,
+                http_only: c.http_only && !is_js_readable_cookie(&c.name),
             }
         })
         .collect()
+}
+
+/// 這顆 cookie 必須讓網頁的 JS 用 `document.cookie` 讀得到，注入時不能帶 HttpOnly。
+///
+/// `tw.newlogin.beanfun.com/checkin_step2.aspx`（活動頁與網頁版遊戲啟動的 SSO 檢查
+/// 點）裡的 `DealWebToken()` 是這樣認登入的：
+///
+/// ```js
+/// var strWebToken = readCookie("bfWebToken");   // = document.cookie
+/// if (strWebToken == null || strWebToken.length < 30) { GotoLoginPage(); }
+/// ```
+///
+/// 我們的 jar 收到的 `bfWebToken` 帶著 HttpOnly，照抄注進去 JS 就讀不到，SSO 一律
+/// 被 `GotoLoginPage()` 打回 `login.beanfun.com` 的掃碼登入頁。真瀏覽器登入後這顆
+/// 讀得到（否則官方自己的活動頁 SSO 也會壞），所以拿掉 HttpOnly 才是還原真實登入
+/// 態，不是放寬。HttpOnly 只管 JS 能不能讀，送不送出這顆 cookie 與它無關。
+fn is_js_readable_cookie(name: &str) -> bool {
+    name.eq_ignore_ascii_case("bfWebToken")
 }
 
 /// 把 cookie store 的內容讀成中間形式。網域既非 HostOnly 也非 Suffix 的（jar 裡
@@ -530,11 +548,18 @@ pub fn open<R: Runtime>(
     if !cookies.iter().any(|c| is_beanfun_domain(&c.domain)) {
         return Err("SESSION_EXPIRED".to_string());
     }
-    // 只印網域與名字，不印值——那些是 session 憑證。彈窗沒登入時就靠這行看出
-    // 該網域的 cookie 到底有沒有被帶進來。
+    // 只印網域、名字與旗標，不印值——那些是 session 憑證。彈窗沒登入時就靠這行看出
+    // 該網域的 cookie 到底有沒有被帶進來。旗標要印，因為走 SSO 的 `checkin_step2`
+    // 是用 `document.cookie` 讀 `bfWebToken` 的：只要它是 host-only 或 HttpOnly，
+    // `tw.newlogin.beanfun.com` 就讀不到，整條 SSO 會被打回登入頁。
     let inventory: Vec<String> = cookies
         .iter()
-        .map(|c| format!("{}{}", c.domain, c.name))
+        .map(|c| {
+            let mut flags = String::new();
+            if c.http_only { flags.push_str("|HttpOnly"); }
+            if c.secure { flags.push_str("|Secure"); }
+            format!("{}{}{}", c.domain, c.name, flags)
+        })
         .collect();
     eprintln!("[browser] 準備注入 {} 顆 cookie：{}", cookies.len(), inventory.join(", "));
 
@@ -1124,6 +1149,20 @@ mod tests {
     }
 
     #[test]
+    fn bf_web_token_is_injected_without_http_only_so_the_sso_page_can_read_it() {
+        // checkin_step2.aspx 的 DealWebToken() 用 document.cookie 讀 bfWebToken，
+        // 讀不到就把使用者打回掃碼登入頁——照抄 HttpOnly 等於關掉活動頁登入。
+        let http_only = |name: &str| JarCookie {
+            http_only: true,
+            ..jar_cookie(name, ".beanfun.com", DomainKind::Suffix)
+        };
+        let out = select_for_injection(&[http_only("bfWebToken"), http_only("bfUID")]);
+        assert!(!out[0].http_only, "bfWebToken 必須讓網頁 JS 讀得到");
+        // 其餘的照抄，忠實度只在有證據的那一顆讓步。
+        assert!(out[1].http_only);
+    }
+
+    #[test]
     fn a_session_still_counts_as_logged_in_by_its_beanfun_cookies() {
         // 「還帶不帶登入態」仍然只看 beanfun 網域——只剩別家的 cookie 不算登入
         let only_others = vec![jar_cookie("sso", "gamania.com", DomainKind::Suffix)];
@@ -1154,8 +1193,9 @@ mod tests {
 
     #[test]
     fn carries_value_path_and_flags_through() {
+        // 樣本刻意不用 bfWebToken——那顆是 HttpOnly 的例外，見 is_js_readable_cookie。
         let jar = vec![JarCookie {
-            name: "bfWebToken".into(),
+            name: "bfSecretCode".into(),
             value: "abc123".into(),
             domain: ".beanfun.com".into(),
             kind: DomainKind::Suffix,
