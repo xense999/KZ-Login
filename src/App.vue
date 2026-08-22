@@ -72,7 +72,7 @@ async function confirmUpdate() {
 onMounted(() => {
   checkSessions();
   checkGgmUpdate();
-  keepAliveTimer = setInterval(checkSessions, 3 * 60 * 1000);
+  keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
 });
 
 onUnmounted(() => {
