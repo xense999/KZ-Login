@@ -208,17 +208,24 @@ mod win {
     /// when the app restarts on a rebuild — a dev-only artifact; a packaged build
     /// has no such job, so the game keeps running independently.
     pub fn shell_open(target: &str) -> Result<(), String> {
+        shell_open_with_args(target, None)
+    }
+
+    /// [`shell_open`] with command-line arguments handed to the target.
+    pub fn shell_open_with_args(target: &str, args: Option<&str>) -> Result<(), String> {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
         let target_wide: Vec<u16> = target.encode_utf16().chain(Some(0u16)).collect();
         let verb: Vec<u16> = "open".encode_utf16().chain(Some(0u16)).collect();
+        let args_wide: Option<Vec<u16>> =
+            args.map(|a| a.encode_utf16().chain(Some(0u16)).collect());
         let result = unsafe {
             ShellExecuteW(
                 std::ptr::null_mut(),
                 verb.as_ptr(),
                 target_wide.as_ptr(),
-                std::ptr::null(),
+                args_wide.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
                 std::ptr::null(),
                 SW_SHOWNORMAL,
             )
@@ -619,12 +626,17 @@ async fn check_app_update(app: tauri::AppHandle) -> Result<beanfun::AppUpdate, S
 
 /// Download the app installer and launch it. Our process is elevated, so the
 /// installer runs with admin rights; the NSIS installer closes the running app.
+///
+/// `/UPDATE` makes the installer overwrite in place instead of running the old
+/// uninstaller first. That matters because the uninstaller unpins our shortcuts
+/// from the taskbar (Tauri's NSIS template calls `UnpinShortcut` whenever it is
+/// not in update mode), and Windows gives us no way to pin them back.
 #[tauri::command]
 async fn update_app(url: String) -> Result<(), String> {
     let installer = beanfun::download_installer(&url, "KuZe-Login-setup.exe").await.map_err(map_err)?;
     #[cfg(windows)]
     {
-        tokio::task::spawn_blocking(move || win::shell_open(&installer))
+        tokio::task::spawn_blocking(move || win::shell_open_with_args(&installer, Some("/UPDATE")))
             .await
             .map_err(|e| e.to_string())??;
     }
