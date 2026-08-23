@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getVersion } from "@tauri-apps/api/app";
@@ -46,19 +47,22 @@ async function openGithub() {
   try { await invoke("open_url", { url: GITHUB_URL }); } catch { /* ignore */ }
 }
 
-type UpdateInfo = { current: string; latest: string; has_update: boolean; url: string; notes: string };
+type UpdateInfo = { current: string; latest: string; has_update: boolean; url: string; exe_url: string; notes: string };
 type UpdateState = "idle" | "checking" | "latest" | "available" | "downloading";
 
 const updateState = ref<UpdateState>("idle");
 const latestVersion = ref("");
 const updateUrl = ref("");
+const updateExeUrl = ref("");
+const updateProgress = ref(0);
 
 const updateBtnText = computed(() => {
   switch (updateState.value) {
     case "checking": return "檢查中…";
     case "latest": return "已是最新版";
     case "available": return `更新到 v${latestVersion.value}`;
-    case "downloading": return "下載中…";
+    case "downloading":
+      return updateProgress.value > 0 ? `更新中 ${updateProgress.value}%` : "更新中…";
     default: return "檢查更新";
   }
 });
@@ -71,9 +75,10 @@ async function onUpdateClick() {
   updateState.value = "checking";
   try {
     const u = await invoke<UpdateInfo>("check_app_update");
-    if (u.has_update && u.url) {
+    if (u.has_update && (u.exe_url || u.url)) {
       latestVersion.value = u.latest;
       updateUrl.value = u.url;
+      updateExeUrl.value = u.exe_url;
       updateState.value = "available";
     } else {
       updateState.value = "latest";
@@ -85,14 +90,34 @@ async function onUpdateClick() {
   }
 }
 
+// 有裸執行檔就地換掉再自動重開；舊版沒附裸檔的才退回跑安裝程式。
 async function runUpdate() {
   updateState.value = "downloading";
+  updateProgress.value = 0;
+
+  if (!updateExeUrl.value) {
+    try {
+      await invoke("update_app", { url: updateUrl.value });
+      toast("已開始下載並開啟安裝程式，請依畫面指示完成更新", { ms: 4000 });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+      updateState.value = "available";
+    }
+    return;
+  }
+
+  const stop = await listen<[number, number]>("update-progress", (e) => {
+    const [done, total] = e.payload;
+    if (total > 0) updateProgress.value = Math.round((done / total) * 100);
+  });
   try {
-    await invoke("update_app", { url: updateUrl.value });
-    toast("已開始下載並開啟安裝程式，請依畫面指示完成更新", { ms: 4000 });
+    await invoke("update_app_inplace", { url: updateExeUrl.value });
+    toast("更新完成，正在重新啟動…", { ms: 4000 });
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), { kind: "error" });
     updateState.value = "available";
+  } finally {
+    stop();
   }
 }
 
@@ -210,7 +235,11 @@ async function supportAuthor() {
               <span class="about-card-value">{{ appVersion ? `v${appVersion}` : "—" }}</span>
               <button
                 class="btn-update"
-                :class="{ ready: updateState === 'available' }"
+                :class="{
+                  ready: updateState === 'available',
+                  progress: updateState === 'downloading' && updateProgress > 0,
+                }"
+                :style="{ '--pct': updateProgress + '%' }"
                 :disabled="updateState === 'checking' || updateState === 'downloading'"
                 @click="onUpdateClick"
               >
@@ -487,6 +516,18 @@ async function supportAuthor() {
   color: #fff;
   background: var(--primary-color);
   border-color: var(--primary-color);
+}
+/* 下載進度直接填在按鈕上，省一條額外的進度條 */
+.btn-update.progress {
+  color: var(--text);
+  border-color: var(--primary-color);
+  background: linear-gradient(
+    to right,
+    var(--primary-color) var(--pct),
+    var(--surface) var(--pct)
+  );
+  opacity: 1;
+  transition: none;
 }
 
 .contact-row {

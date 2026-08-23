@@ -63,3 +63,14 @@ jobs:
           draft: false
           prerelease: false
           files: ${{ steps.installer.outputs.path }}
+
+      # 裸執行檔給「程式內更新」就地置換用（安裝目錄裡只有這顆 exe）。
+      #
+      # 必須在 Release 之後單獨上傳，不能併進上面的 files：v1.2.2 以前的版本挑
+      # 更新檔的規則是「第一個 .exe asset」，而 GitHub 是照 asset id（也就是上傳
+      # 順序）回傳的。安裝檔先上傳，舊版才會繼續抓到安裝檔而不是這顆裸 exe。
+      - name: Attach bare exe for in-place update
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/kz-login.exe

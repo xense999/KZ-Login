@@ -670,11 +670,47 @@ pub async fn download_installer(url: &str, fallback_name: &str) -> Result<String
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Stream `url` into `dest`, reporting (downloaded, total) bytes as it goes.
+/// `total` is 0 when the server sends no Content-Length.
+pub async fn download_to(
+    url: &str,
+    dest: &std::path::Path,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<(), BeanfunError> {
+    if !url.starts_with("https://") {
+        return Err(BeanfunError::Parse("更新連結無效".into()));
+    }
+    let mut resp = Client::new().get(url).send().await?.error_for_status()?;
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = std::fs::File::create(dest)
+        .map_err(|e| BeanfunError::Parse(format!("建立更新檔失敗：{e}")))?;
+    let mut done = 0u64;
+    on_progress(0, total);
+    while let Some(chunk) = resp.chunk().await? {
+        std::io::Write::write_all(&mut file, &chunk)
+            .map_err(|e| BeanfunError::Parse(format!("寫入更新檔失敗：{e}")))?;
+        done += chunk.len() as u64;
+        on_progress(done, total);
+    }
+    // A short body that still ended cleanly would otherwise pass for a complete
+    // download — and the caller is about to overwrite a running program with it.
+    if total > 0 && done != total {
+        return Err(BeanfunError::Parse(format!(
+            "更新檔下載不完整（{done}/{total} bytes）"
+        )));
+    }
+    Ok(())
+}
+
 // ─── App self-update（GitHub Releases） ────────────────────────────────────────
 
 /// GitHub repo hosting the app's releases. Its latest release's `.exe` asset is
 /// the installer we download to self-update.
 const GITHUB_REPO: &str = "xense999/KZ-Login";
+
+/// Release asset holding the bare executable, matching the installed binary's
+/// name so an in-place update is a straight file swap.
+pub const BARE_EXE_ASSET: &str = "kz-login.exe";
 
 #[derive(Debug, Serialize)]
 pub struct AppUpdate {
@@ -683,8 +719,12 @@ pub struct AppUpdate {
     /// Latest version on GitHub (tag with any leading `v` stripped).
     pub latest: String,
     pub has_update: bool,
-    /// Installer download URL (the release's `.exe` asset).
+    /// Installer download URL, used for a fresh install and as the fallback
+    /// when a release predates the bare-exe asset.
     pub url: String,
+    /// Bare executable download URL, used to swap the exe in place. Empty on
+    /// releases that ship only the installer.
+    pub exe_url: String,
     /// Release notes body, shown to the user before updating.
     pub notes: String,
 }
@@ -704,17 +744,26 @@ pub async fn check_app_update(current: &str) -> Result<AppUpdate, BeanfunError> 
 
     let latest = v.get("tag_name").and_then(|x| x.as_str()).unwrap_or("")
         .trim_start_matches('v').to_string();
-    // The release ships one Windows installer — take the first `.exe` asset.
-    let url = v.get("assets").and_then(|a| a.as_array()).and_then(|arr| {
-        arr.iter().find_map(|x| {
-            let u = x.get("browser_download_url")?.as_str()?;
-            u.ends_with(".exe").then(|| u.to_string())
-        })
-    }).unwrap_or_default();
+    // A release ships the NSIS installer plus, since v1.3.0, the bare exe.
+    // Releases before that have only the installer, hence the empty exe_url.
+    let assets = v.get("assets").and_then(|a| a.as_array());
+    let pick = |want: &dyn Fn(&str) -> bool| -> String {
+        assets
+            .and_then(|arr| {
+                arr.iter().find_map(|x| {
+                    let name = x.get("name")?.as_str()?;
+                    let u = x.get("browser_download_url")?.as_str()?;
+                    want(name).then(|| u.to_string())
+                })
+            })
+            .unwrap_or_default()
+    };
+    let url = pick(&|n| n.ends_with("-setup.exe"));
+    let exe_url = pick(&|n| n == BARE_EXE_ASSET);
     let notes = v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
     let has_update = !latest.is_empty() && version_newer(&latest, current);
 
-    Ok(AppUpdate { current: current.to_string(), latest, has_update, url, notes })
+    Ok(AppUpdate { current: current.to_string(), latest, has_update, url, exe_url, notes })
 }
 
 fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {

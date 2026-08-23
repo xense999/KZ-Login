@@ -647,6 +647,118 @@ async fn update_app(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete the binary left behind by the previous in-place update. Called on
+/// startup, by which point the process holding it has exited. A failure here is
+/// not worth reporting — the file is harmless and the next launch retries.
+#[cfg(windows)]
+fn sweep_old_exe() {
+    if let Ok(cur) = std::env::current_exe() {
+        let _ = std::fs::remove_file(cur.with_extension("old.exe"));
+    }
+}
+
+/// Point the uninstall entry's version at the binary that is actually running.
+///
+/// An in-place update never runs the installer, so nothing else refreshes this
+/// and Windows' installed-apps list would keep advertising whatever version the
+/// user last ran the installer for. Written on every startup so any existing
+/// drift heals; the key is only ever updated, never created, so an unpacked
+/// build touches nothing.
+#[cfg(windows)]
+fn sync_installed_version(product: &str, version: &str) {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ,
+    };
+
+    // Mirrors the NSIS UNINSTKEY, which is keyed on productName under HKCU
+    // because the bundle installs per-user.
+    let subkey: Vec<u16> =
+        format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{product}")
+            .encode_utf16().chain(Some(0u16)).collect();
+    let name: Vec<u16> = "DisplayVersion".encode_utf16().chain(Some(0u16)).collect();
+    let value: Vec<u16> = version.encode_utf16().chain(Some(0u16)).collect();
+
+    unsafe {
+        let mut key = std::ptr::null_mut();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_SET_VALUE, &mut key) != 0 {
+            return;
+        }
+        RegSetValueExW(
+            key,
+            name.as_ptr(),
+            0,
+            REG_SZ,
+            value.as_ptr() as *const u8,
+            (value.len() * 2) as u32,
+        );
+        RegCloseKey(key);
+    }
+}
+
+/// Replace the running executable with a freshly downloaded one and restart.
+///
+/// Preferred over [`update_app`] because it never runs the NSIS installer, and
+/// so never trips the uninstaller that strips our taskbar pins. The install
+/// directory holds nothing but this exe and `uninstall.exe`, which is what
+/// makes a bare file swap sufficient.
+///
+/// The download lands next to the running exe rather than in `%TEMP%` so the
+/// final move is a same-volume rename — atomic, and never a half-copied binary.
+#[cfg(windows)]
+#[tauri::command]
+async fn update_app_inplace(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let cur = std::env::current_exe().map_err(|e| format!("找不到程式路徑：{e}"))?;
+    let staged = cur.with_extension("new.exe");
+    let retired = cur.with_extension("old.exe");
+
+    // A retired binary from an earlier update may still be sitting here if the
+    // startup sweep could not remove it; the rename below would fail on it.
+    let _ = std::fs::remove_file(&retired);
+
+    // Emit only when the whole-percent figure moves: a 15 MB body arrives in
+    // thousands of chunks, and every event is a serialised IPC round trip.
+    let mut last_pct = u64::MAX;
+    beanfun::download_to(&url, &staged, |done, total| {
+        let pct = if total > 0 { done * 100 / total } else { 0 };
+        if pct != last_pct {
+            last_pct = pct;
+            let _ = app.emit("update-progress", (done, total));
+        }
+    })
+    .await
+    .map_err(|e| {
+        let _ = std::fs::remove_file(&staged);
+        map_err(e)
+    })?;
+
+    std::fs::rename(&cur, &retired).map_err(|e| {
+        let _ = std::fs::remove_file(&staged);
+        format!("無法置換程式檔：{e}")
+    })?;
+    if let Err(e) = std::fs::rename(&staged, &cur) {
+        // Put the running exe back, or the install is left with no binary at all.
+        let _ = std::fs::rename(&retired, &cur);
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("無法寫入新版程式：{e}"));
+    }
+
+    // Spawned rather than shell-opened: CreateProcess inherits our elevation and
+    // skips the SmartScreen prompt ShellExecute would raise on a fresh download.
+    std::process::Command::new(&cur)
+        .spawn()
+        .map_err(|e| format!("無法啟動新版本：{e}"))?;
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+async fn update_app_inplace(_app: tauri::AppHandle, _url: String) -> Result<(), String> {
+    Err("就地更新僅支援 Windows".into())
+}
+
 // ─── Session Ping ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -683,11 +795,17 @@ pub fn run() {
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session,
             open_account_browser, browser_navigate, browser_tab,
-            check_app_update, update_app
+            check_app_update, update_app, update_app_inplace
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
             app.get_webview_window("main").unwrap().open_devtools();
+            #[cfg(windows)]
+            {
+                sweep_old_exe();
+                let pkg = app.package_info();
+                sync_installed_version(&pkg.name, &pkg.version.to_string());
+            }
             // 開場固定在主螢幕工作區右下角：每次啟動都回這個位置、不記憶拖動後的座標。
             // 用工作區（扣掉工作列）而非螢幕尺寸，否則會被工作列蓋掉一截；用 outer_size
             // （含外框）不是設定檔尺寸，DPI 縮放時才不會少算。
