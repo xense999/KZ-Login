@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { Window } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import MainPage from "./pages/MainPage.vue";
 import QrPage from "./pages/QrPage.vue";
@@ -40,6 +41,34 @@ async function checkSessions() {
   }
 }
 
+const refreshing = ref(false);
+
+// Manual refresh: F5 / Ctrl+R are swallowed by the Rust side (a real reload
+// would wipe the in-memory account list) and arrive here as `refresh-sessions`.
+// Re-ping every session right away so the dead ones flip back to the rescan
+// state instead of failing later on 取得密碼.
+async function refreshSessions() {
+  if (refreshing.value) return;
+  const checked = store.accounts.filter((a) => a.token);
+  if (checked.length === 0) {
+    toast("目前沒有已登入的帳號");
+    return;
+  }
+  refreshing.value = true;
+  toast("重新檢查登入狀態…", { ms: 15000 });
+  try {
+    await checkSessions();
+    const dropped = checked.filter((a) => !a.token).length;
+    if (dropped === 0) {
+      toast(`${checked.length} 個帳號都還在線上`);
+    } else {
+      toast(`${dropped} 個帳號已登出，請點右側的掃碼圖示重新登入`, { kind: "error", ms: 5000 });
+    }
+  } finally {
+    refreshing.value = false;
+  }
+}
+
 const updateAsk = ref(false);
 const updateInfo = ref<{ current: string; server: string; url: string } | null>(null);
 
@@ -69,14 +98,18 @@ async function confirmUpdate() {
   }
 }
 
-onMounted(() => {
+let unlistenRefresh: UnlistenFn | null = null;
+
+onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
   keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
+  unlistenRefresh = await listen("refresh-sessions", () => { refreshSessions(); });
 });
 
 onUnmounted(() => {
   if (keepAliveTimer) clearInterval(keepAliveTimer);
+  unlistenRefresh?.();
 });
 
 function onReauth(accountId: string) {

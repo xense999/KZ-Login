@@ -779,6 +779,59 @@ async fn ping_session(
     }
 }
 
+// ─── Refresh key (F5 / Ctrl+R) ────────────────────────────────────────────────
+
+/// Intercept the refresh keys on the main window and turn them into a session
+/// re-check instead of a page reload.
+///
+/// WebView2's native F5 reloads the whole SPA, and the account list plus its
+/// tokens live only in the frontend store (deliberately not persisted), so a
+/// reload wipes every account and forces a rescan. Pressing refresh means "tell
+/// me whether I am still logged in", not "log me out": we swallow the reload and
+/// emit `refresh-sessions`, and the frontend re-pings each session, flipping the
+/// dead ones back to the rescan state.
+///
+/// Why at this layer: `AcceleratorKeyPressed` fires before the browser handles
+/// the key, and `SetHandled(true)` is the only guaranteed way to suppress the
+/// reload — a JS `preventDefault` is not. The emit is moved off the callback
+/// thread because re-entering WebView2 from inside its own callback is unsafe.
+#[cfg(windows)]
+fn hook_refresh_key<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, app: &tauri::AppHandle<R>) {
+    use tauri::Emitter;
+    use webview2_com::AcceleratorKeyPressedEventHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_F5};
+
+    let app = app.clone();
+    let _ = win.with_webview(move |platform| unsafe {
+        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_controller, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
+            let mut vk = 0u32;
+            let _ = args.KeyEventKind(&mut kind);
+            let _ = args.VirtualKey(&mut vk);
+            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
+                return Ok(());
+            }
+            let ctrl_down = (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
+            let is_refresh = vk == u32::from(VK_F5) || (ctrl_down && vk == u32::from(b'R'));
+            if !is_refresh {
+                return Ok(());
+            }
+            let _ = args.SetHandled(true);
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = app.emit("refresh-sessions", ());
+            });
+            Ok(())
+        }));
+        let mut token = 0i64;
+        if let Err(e) = platform.controller().add_AcceleratorKeyPressed(&handler, &mut token) {
+            eprintln!("[main] failed to hook the refresh key: {e}");
+        }
+    });
+}
+
 // ─── App Entry ────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -815,6 +868,8 @@ pub fn run() {
                     let y = bottom - sz.height as i32;
                     let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
                 }
+                #[cfg(windows)]
+                hook_refresh_key(&w, app.handle());
             }
             Ok(())
         })
