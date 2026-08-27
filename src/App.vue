@@ -31,14 +31,23 @@ function close() { Window.getCurrent().close(); }
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
-async function checkSessions() {
+type SessionState = "alive" | "expired" | "unknown";
+
+// Only "expired" clears a token. "unknown" means the ping itself failed (no
+// network, server down), which says nothing about the session — treating it as
+// a logout would force a QR rescan for accounts that are still perfectly alive.
+async function checkSessions(): Promise<{ expired: number; unknown: number }> {
+  let expired = 0;
+  let unknown = 0;
   for (const acc of store.accounts) {
     if (!acc.token) continue;
     try {
-      const alive = await invoke<boolean>('ping_session', { token: acc.token });
-      if (!alive) store.invalidateToken(acc.id);
-    } catch { /* 忽略，下次再試 */ }
+      const state = await invoke<SessionState>('ping_session', { token: acc.token });
+      if (state === "expired") { store.invalidateToken(acc.id); expired++; }
+      else if (state === "unknown") unknown++;
+    } catch { unknown++; }
   }
+  return { expired, unknown };
 }
 
 const refreshing = ref(false);
@@ -57,12 +66,13 @@ async function refreshSessions() {
   refreshing.value = true;
   toast("重新檢查登入狀態…", { ms: 15000 });
   try {
-    await checkSessions();
-    const dropped = checked.filter((a) => !a.token).length;
-    if (dropped === 0) {
-      toast(`${checked.length} 個帳號都還在線上`);
+    const { expired, unknown } = await checkSessions();
+    if (expired > 0) {
+      toast(`${expired} 個帳號已登出，請點右側的掃碼圖示重新登入`, { kind: "error", ms: 5000 });
+    } else if (unknown > 0) {
+      toast("連不上伺服器，這次無法確認登入狀態", { kind: "error" });
     } else {
-      toast(`${dropped} 個帳號已登出，請點右側的掃碼圖示重新登入`, { kind: "error", ms: 5000 });
+      toast(`${checked.length} 個帳號都還在線上`);
     }
   } finally {
     refreshing.value = false;
@@ -103,7 +113,9 @@ let unlistenRefresh: UnlistenFn | null = null;
 onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
-  keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
+  // Manual refresh wins: skip this tick rather than run a second ping loop over
+  // the same accounts and muddle the counts the manual run reports.
+  keepAliveTimer = setInterval(() => { if (!refreshing.value) checkSessions(); }, 8 * 60 * 1000);
   unlistenRefresh = await listen("refresh-sessions", () => { refreshSessions(); });
 });
 

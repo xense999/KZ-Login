@@ -893,62 +893,35 @@ fn tab_loaded<R: Runtime>(app: &AppHandle<R>, id: u64, url: &str) {
 }
 
 /// 在這顆 webview 攔分頁快捷鍵：Ctrl+W 關分頁（`tab` 給 `None`＝關作用中的）、
-/// Ctrl+T 開新分頁。
-///
-/// 為什麼在這層：分頁 webview 載外部網站、零 IPC，頁面裡塞 JS 也回不了 Rust；
-/// WebView2 的 `AcceleratorKeyPressed` 在瀏覽器自己處理按鍵**之前**發，是唯一
-/// 攔得到的地方。SetHandled(true) 擋掉瀏覽器的預設行為。動作丟到另一條執行緒
-/// 跑——在 WebView2 回呼裡直接建/銷毀視窗是重入，會出事（規範：回呼裡不阻塞）。
-#[cfg(windows)]
+/// Ctrl+T 開新分頁。攔截機制與「為什麼在這層」見 [`crate::keyhook`]。
+/// 動作丟到另一條執行緒跑——在 WebView2 回呼裡直接建/銷毀視窗是重入，會出事。
 fn hook_tab_shortcuts<R: Runtime>(win: &WebviewWindow<R>, app: &AppHandle<R>, tab: Option<u64>) {
-    use webview2_com::AcceleratorKeyPressedEventHandler;
-    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL};
-
     let app = app.clone();
-    let label = win.label().to_string();
-    let _ = win.with_webview(move |platform| unsafe {
-        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_controller, args| {
-            let Some(args) = args else { return Ok(()) };
-            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN;
-            let mut vk = 0u32;
-            let _ = args.KeyEventKind(&mut kind);
-            let _ = args.VirtualKey(&mut vk);
-            let ctrl_down = (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
-            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || !ctrl_down {
-                return Ok(());
+    crate::keyhook::hook_keys(win, move |key| {
+        if !key.ctrl {
+            return false;
+        }
+        let app = app.clone();
+        match key.vk {
+            w if w == u32::from(b'W') => {
+                std::thread::spawn(move || {
+                    let id = tab.or_else(|| STATE.lock().ok().map(|s| s.active));
+                    if let Some(id) = id {
+                        let _ = close_tab(&app, id);
+                    }
+                });
+                true
             }
-            match vk {
-                w if w == u32::from(b'W') => {
-                    let _ = args.SetHandled(true);
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        let id = tab.or_else(|| STATE.lock().ok().map(|s| s.active));
-                        if let Some(id) = id {
-                            let _ = close_tab(&app, id);
-                        }
-                    });
-                }
-                t if t == u32::from(b'T') => {
-                    let _ = args.SetHandled(true);
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        let _ = tab_command(&app, "new", None);
-                    });
-                }
-                _ => {}
+            t if t == u32::from(b'T') => {
+                std::thread::spawn(move || {
+                    let _ = tab_command(&app, "new", None);
+                });
+                true
             }
-            Ok(())
-        }));
-        let mut token = 0i64;
-        if let Err(e) = platform.controller().add_AcceleratorKeyPressed(&handler, &mut token) {
-            eprintln!("[browser] 掛分頁快捷鍵失敗（{label}）：{e}");
+            _ => false,
         }
     });
 }
-
-#[cfg(not(windows))]
-fn hook_tab_shortcuts<R: Runtime>(_win: &WebviewWindow<R>, _app: &AppHandle<R>, _tab: Option<u64>) {}
 
 fn blank_url() -> Url {
     "about:blank".parse().expect("about:blank is a valid URL")
