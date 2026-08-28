@@ -48,6 +48,15 @@ pub enum QrPollOutcome {
     Approved,
 }
 
+/// Truncate a server reply for an error message. `&s[..n]` slices by byte and
+/// panics unless byte `n` lands on a char boundary — these bodies are beanfun's
+/// Chinese error pages, where a 3-byte character makes that the common case, and
+/// the panic escapes an async `#[tauri::command]`: the IPC reply is never sent,
+/// so the caller's promise never settles and the row spins forever.
+fn clip(s: &str, chars: usize) -> String {
+    s.chars().take(chars).collect()
+}
+
 const LOGIN_BASE: &str = "https://login.beanfun.com/";
 const PORTAL_BASE: &str = "https://tw.beanfun.com/";
 const SERVICE_CODE: &str = "610074";
@@ -104,7 +113,7 @@ pub async fn get_session_key(client: &Client) -> Result<String, BeanfunError> {
     re.captures(&final_url)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_owned())
-        .ok_or_else(|| BeanfunError::Parse(format!("pSKey not found in redirect URL: {}", &final_url[..final_url.len().min(200)])))
+        .ok_or_else(|| BeanfunError::Parse(format!("pSKey not found in redirect URL: {}", clip(&final_url, 200))))
 }
 
 pub async fn init_qr_login(client: &Client, skey: &str) -> Result<QrInit, BeanfunError> {
@@ -183,7 +192,7 @@ pub async fn poll_qr(client: &Client, init: &QrInit) -> Result<QrPollOutcome, Be
     struct PollResp { #[serde(rename = "ResultMessage")] result_message: Option<String> }
 
     let parsed: PollResp = serde_json::from_str(&body)
-        .map_err(|_| BeanfunError::Parse(format!("QR poll JSON parse failed: {}", &body[..body.len().min(200)])))?;
+        .map_err(|_| BeanfunError::Parse(format!("QR poll JSON parse failed: {}", clip(&body, 200))))?;
 
     match parsed.result_message.as_deref() {
         Some("Failed") | Some("Wait Login") => Ok(QrPollOutcome::Waiting),
@@ -421,7 +430,7 @@ fn parse_m_objdata(html: &str) -> Result<(String, String, String), BeanfunError>
         // used to catch only the one that says 尚未登入 — every other shape was
         // reported as a generic error, leaving a dead token marked as connected.
         // The caller asks the session endpoint instead; see `classify`.
-        _ => Err(BeanfunError::Parse("m_objData not found in game_start_step2".into())),
+        _ => Err(BeanfunError::Parse("遊戲啟動頁沒有 m_objData（beanfun 可能改版）".into())),
     }
 }
 
@@ -534,10 +543,12 @@ pub async fn get_otp(
         Err(e) => return Err(classify(&client, token, e).await),
     };
 
-    // 2. Decrypt the blob and exchange the LaunchTicket for the OTP (v2).
-    // Also ambiguous: a session that dies here comes back as a non-JSON page or
-    // a JSON body with no `data`, neither of which names the real cause.
-    let (_service_account, otp) = match otp_v2_from_blob(&client, &sn, &data).await {
+    // 2. Decrypt the blob and exchange the LaunchTicket for the OTP (v2). Only
+    // the exchange is ambiguous: a session that dies there comes back as a
+    // non-JSON page or a JSON body with no `data`, neither of which names the
+    // real cause. The local prep is left to speak for itself.
+    let (_service_account, req) = v2_request(&sn, &data)?;
+    let otp = match v2_exchange(&client, &req).await {
         Ok(v) => v,
         Err(e) => return Err(classify(&client, token, e).await),
     };
@@ -545,37 +556,43 @@ pub async fn get_otp(
     Ok(OtpResult { sid: account_sid.to_owned(), otp })
 }
 
-/// Shared v2 OTP exchange: decrypt a launch blob to recover the LaunchTicket and
-/// ServiceAccount, POST them with the GGM integrity trio to
-/// `get_webstart_otp_v2.ashx`, and decrypt the returned OTP. Stateless — the
-/// LaunchTicket self-authenticates — so it works with or without a login session.
-async fn otp_v2_from_blob(
-    client: &Client,
-    sn: &str,
-    data: &str,
-) -> Result<(String, String), BeanfunError> {
+/// The half of the v2 OTP call that comes from this machine: the launch blob's
+/// own fields plus the GGM integrity trio. Returns `(service_account, body)`.
+///
+/// Split from [`v2_exchange`] because nothing here touches the network — a
+/// corrupt blob or a missing GGM install fails before beanfun is ever asked, so
+/// it can never mean "logged out". Callers must not run these through
+/// [`classify`]: replacing 找不到遊戲管理員（GGM），請先安裝 with SESSION_EXPIRED
+/// sends the user to rescan a QR code, which cannot fix a missing install.
+fn v2_request(sn: &str, data: &str) -> Result<(String, serde_json::Value), BeanfunError> {
     let plain = decrypt_blob(data)?;
     let launch_ticket = blob_field(&plain, "LaunchTicket")
         .ok_or_else(|| BeanfunError::Parse("blob 內找不到 LaunchTicket".into()))?;
     let service_account = blob_field(&plain, "ServiceAccount").unwrap_or_default();
-
     let (cv, hash, arch) = ggm_integrity()?;
-    let v2_url = format!("{}beanfun_block/generic_handlers/get_webstart_otp_v2.ashx", PORTAL_BASE);
-    let req_body = serde_json::json!({
+    let body = serde_json::json!({
         "SN": sn, "LaunchTicket": launch_ticket, "CV": cv, "Hash": hash, "arch": arch,
     });
-    let resp_text = client.post(&v2_url).json(&req_body).send().await?.text().await?;
+    Ok((service_account, body))
+}
+
+/// POST a prepared v2 request to `get_webstart_otp_v2.ashx` and decrypt the OTP
+/// out of the reply. Stateless — the LaunchTicket self-authenticates — so this
+/// works with or without a login session; but every failure here involves
+/// beanfun, so an ambiguous one is worth handing to [`classify`].
+async fn v2_exchange(client: &Client, body: &serde_json::Value) -> Result<String, BeanfunError> {
+    let v2_url = format!("{}beanfun_block/generic_handlers/get_webstart_otp_v2.ashx", PORTAL_BASE);
+    let resp_text = client.post(&v2_url).json(body).send().await?.text().await?;
 
     let resp: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
-        BeanfunError::Parse(format!("v2 回應非 JSON：{e} — {}", &resp_text[..resp_text.len().min(200)]))
+        BeanfunError::Parse(format!("v2 回應非 JSON：{e} — {}", clip(&resp_text, 200)))
     })?;
     let enc = resp.get("data").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
-        .ok_or_else(|| BeanfunError::Parse(format!("v2 回應無 data 欄位：{resp_text}")))?;
+        .ok_or_else(|| BeanfunError::Parse(format!("v2 回應無 data 欄位：{}", clip(&resp_text, 200))))?;
 
     // The v2 `data` is `{key8}{cipher_hex}` (no alphabet step) — DES-ECB/NoPadding
     // with the 8-char prefix as the key, i.e. the classic envelope minus "1;".
-    let otp = decrypt_envelope(&format!("1;{enc}"))?;
-    Ok((service_account, otp))
+    decrypt_envelope(&format!("1;{enc}"))
 }
 
 /// Recover `(service_account, otp)` straight from a shared
@@ -592,7 +609,9 @@ pub async fn otp_from_uri(uri: &str) -> Result<(String, String), BeanfunError> {
     let client = Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .build()?;
-    otp_v2_from_blob(&client, &sn, &data).await
+    let (service_account, req) = v2_request(&sn, &data)?;
+    let otp = v2_exchange(&client, &req).await?;
+    Ok((service_account, otp))
 }
 
 /// Compute the GGM client-integrity trio the OTP endpoint now requires:
@@ -797,7 +816,7 @@ fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {
     if parts.len() < 2 || parts[0] != "1" {
         return Err(BeanfunError::Parse(format!(
             "OTP envelope rejected: {}",
-            &envelope[..envelope.len().min(100)]
+            clip(envelope, 100)
         )));
     }
     let payload = parts[1];
@@ -845,10 +864,13 @@ pub async fn check_session_alive(
     session_alive(&client, token).await
 }
 
-/// The single place that judges whether a session is still good. Everything that
-/// needs that answer — the keepalive ping and every ambiguous launch failure —
-/// goes through here, so there is one behaviour to fix when beanfun changes how
-/// it turns people away.
+/// The single place that *asks beanfun* whether a session is still good — the
+/// keepalive ping and every ambiguous launch failure route through here, so
+/// there is one behaviour to fix when beanfun changes how it turns people away.
+///
+/// Not the only code that concludes a session is dead: `browser.rs` reads it off
+/// an empty cookie jar and `lib.rs` off a missing store entry. Those are local
+/// facts that need no round trip, which is why they stay separate.
 async fn session_alive(client: &Client, token: &str) -> Result<bool, BeanfunError> {
     let inner = format!(
         "game_start.aspx?service_code_and_region={}_{}",
@@ -869,4 +891,24 @@ async fn session_alive(client: &Client, token: &str) -> Result<bool, BeanfunErro
 
     let expired = final_url.contains("login") || body.contains("尚未登入") || body.contains("Please login");
     Ok(!expired)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clip;
+
+    /// The old `&s[..n]` form panicked here: byte 200 of a Chinese error page
+    /// lands inside a 3-byte character.
+    #[test]
+    fn clip_never_splits_a_character() {
+        let page = "登入逾時，請重新登入。".repeat(100);
+        assert_eq!(clip(&page, 200).chars().count(), 200);
+        assert!(page.starts_with(&clip(&page, 200)));
+    }
+
+    #[test]
+    fn clip_keeps_short_input_whole() {
+        assert_eq!(clip("abc", 200), "abc");
+        assert_eq!(clip("", 200), "");
+    }
 }
