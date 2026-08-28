@@ -355,12 +355,15 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
 }
 
 
+// Whether a session is dead is the backend's call — it asks beanfun before
+// reporting SESSION_EXPIRED, so the sentinel is the only thing that means
+// "logged out" here. Guessing that from the message text as well (jQuery / long
+// polling / OTP envelope rejected) could clear a token the server had just
+// confirmed was fine, and two of those strings belonged to the retired v1 flow
+// and can no longer occur. What is left is only tidying an unreadable message.
 function cleanError(msg: string): string {
   if (msg.includes("SESSION_EXPIRED")) return "SESSION_EXPIRED";
-  if (msg.includes("OTP envelope rejected") || msg.includes("jQuery")) return "SESSION_EXPIRED";
-  if (msg.length > 100 || msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("long polling")) {
-    if (msg.includes("尚未登入") || msg.includes("SESSION_EXPIRED") || msg.includes("long polling"))
-      return "SESSION_EXPIRED";
+  if (msg.length > 100 || msg.includes("<!DOCTYPE") || msg.includes("<html")) {
     return "伺服器回應異常，請稍後再試";
   }
   return msg;

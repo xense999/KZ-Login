@@ -14,6 +14,10 @@ pub enum BeanfunError {
     Network(#[from] reqwest::Error),
     #[error("Parse error: {0}")]
     Parse(String),
+    /// The session is gone and the user must log in again. The message is the
+    /// literal sentinel the frontend switches on — see `MainPage.vue`.
+    #[error("SESSION_EXPIRED")]
+    SessionExpired,
 }
 
 impl Serialize for BeanfunError {
@@ -392,7 +396,10 @@ pub async fn build_launch_uri(
         ])
         .send().await?.text().await?;
 
-    let (region, sn, data) = parse_m_objdata(&body)?;
+    let (region, sn, data) = match parse_m_objdata(&body) {
+        Ok(v) => v,
+        Err(e) => return Err(classify(&client, token, e).await),
+    };
     Ok(format!("gamaniagames://Region={region}&&&&SN={sn}&&&&Cmd=06004&&&&Data={data}"))
 }
 
@@ -409,13 +416,24 @@ fn parse_m_objdata(html: &str) -> Result<(String, String, String), BeanfunError>
     };
     match (grab("region"), grab("sn"), grab("data")) {
         (Some(region), Some(sn), Some(data)) => Ok((region, sn, data)),
-        _ => {
-            if html.contains("尚未登入") {
-                Err(BeanfunError::Parse("SESSION_EXPIRED".into()))
-            } else {
-                Err(BeanfunError::Parse("m_objData not found in game_start_step2".into()))
-            }
-        }
+        // Deliberately does not guess *why*: beanfun serves a login page, a
+        // redirect, or an error blob depending on how the session died, and this
+        // used to catch only the one that says 尚未登入 — every other shape was
+        // reported as a generic error, leaving a dead token marked as connected.
+        // The caller asks the session endpoint instead; see `classify`.
+        _ => Err(BeanfunError::Parse("m_objData not found in game_start_step2".into())),
+    }
+}
+
+/// Decide whether a failed launch/OTP step actually means "logged out".
+///
+/// Only an authoritative answer overrides `fallback`: if the probe itself fails,
+/// or says the session is fine, the original error is what the user sees. A
+/// wrong `SESSION_EXPIRED` costs a QR rescan, so it is never a guess.
+async fn classify(client: &Client, token: &str, fallback: BeanfunError) -> BeanfunError {
+    match session_alive(client, token).await {
+        Ok(false) => BeanfunError::SessionExpired,
+        _ => fallback,
     }
 }
 
@@ -511,10 +529,18 @@ pub async fn get_otp(
             ("dt", dt_compact().as_str()),
         ])
         .send().await?.text().await?;
-    let (_region, sn, data) = parse_m_objdata(&body)?;
+    let (_region, sn, data) = match parse_m_objdata(&body) {
+        Ok(v) => v,
+        Err(e) => return Err(classify(&client, token, e).await),
+    };
 
     // 2. Decrypt the blob and exchange the LaunchTicket for the OTP (v2).
-    let (_service_account, otp) = otp_v2_from_blob(&client, &sn, &data).await?;
+    // Also ambiguous: a session that dies here comes back as a non-JSON page or
+    // a JSON body with no `data`, neither of which names the real cause.
+    let (_service_account, otp) = match otp_v2_from_blob(&client, &sn, &data).await {
+        Ok(v) => v,
+        Err(e) => return Err(classify(&client, token, e).await),
+    };
 
     Ok(OtpResult { sid: account_sid.to_owned(), otp })
 }
@@ -816,6 +842,14 @@ pub async fn check_session_alive(
     token: &str,
 ) -> Result<bool, BeanfunError> {
     let client = build_client_from_store(cookie_store)?;
+    session_alive(&client, token).await
+}
+
+/// The single place that judges whether a session is still good. Everything that
+/// needs that answer — the keepalive ping and every ambiguous launch failure —
+/// goes through here, so there is one behaviour to fix when beanfun changes how
+/// it turns people away.
+async fn session_alive(client: &Client, token: &str) -> Result<bool, BeanfunError> {
     let inner = format!(
         "game_start.aspx?service_code_and_region={}_{}",
         SERVICE_CODE, SERVICE_REGION
