@@ -797,6 +797,19 @@ async fn ping_session(
     }
 }
 
+/// Drop a session's cookie jar.
+///
+/// Called when a re-login replaces an account's token: the old jar is
+/// unreachable from the UI from then on, and `session_stores` otherwise holds
+/// every jar it ever made for the life of the process. Dropping it also makes
+/// the old token answer `Expired` instead of pinging beanfun with a session
+/// that has already been superseded.
+#[tauri::command]
+async fn forget_session(state: tauri::State<'_, AppState>, token: String) -> Result<(), String> {
+    state.session_stores.lock().await.remove(&token);
+    Ok(())
+}
+
 // ─── Refresh key (F5 / Ctrl+R) ────────────────────────────────────────────────
 
 /// Turn the refresh keys on the main window into a session re-check instead of a
@@ -841,7 +854,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
-            check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session,
+            check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
             check_app_update, update_app, update_app_inplace
         ])

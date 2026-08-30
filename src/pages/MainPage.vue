@@ -541,7 +541,11 @@ function cleanError(msg: string): string {
             </div>
           </div>
 
-          <div v-if="errorMap[game.sn]" class="err-row">登入已失效，請重新掃描</div>
+          <!-- 只有 SESSION_EXPIRED 才是「要重新掃描」；其他錯誤照實說，否則會出現
+               「說已失效、右上角卻還是綠點」這種自相矛盾的畫面 -->
+          <div v-if="errorMap[game.sn]" class="err-row">
+            {{ errorMap[game.sn] === "SESSION_EXPIRED" ? "登入已失效，請重新掃描" : errorMap[game.sn] }}
+          </div>
           <div v-else-if="sentMap[game.sn]" class="sent-row">
             {{ sentMap[game.sn] === 'filled' ? '已填入此帳號的帳密' : '已啟動遊戲，請稍候' }}
           </div>
