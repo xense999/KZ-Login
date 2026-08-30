@@ -106,11 +106,22 @@ pub async fn get_session_key(client: &Client) -> Result<String, BeanfunError> {
         .send()
         .await?;
     let final_url = resp.url().to_string();
-    let _ = resp.text().await;
+    let body = resp.text().await.unwrap_or_default();
 
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"[sp][Ss]?[Kk]ey=([^&]+)").unwrap());
-    re.captures(&final_url)
+    // The redirect chain normally ends on checkin_step2.aspx?skey=… , but the
+    // page also declares the key in its own script. Reading both means a
+    // redirect that lands somewhere else (a logged-in jar taking a different
+    // route through the SSO checkpoint) does not blind the callers — for the
+    // session probe that would silently turn every verdict into "unknown".
+    static URL_RE: OnceLock<Regex> = OnceLock::new();
+    let url_re = URL_RE.get_or_init(|| Regex::new(r"[sp][Ss]?[Kk]ey=([^&]+)").unwrap());
+    if let Some(k) = url_re.captures(&final_url).and_then(|c| c.get(1)) {
+        return Ok(k.as_str().to_owned());
+    }
+
+    static BODY_RE: OnceLock<Regex> = OnceLock::new();
+    let body_re = BODY_RE.get_or_init(|| Regex::new(r#"strSessionKey\s*=\s*"([^"]+)""#).unwrap());
+    body_re.captures(&body)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_owned())
         .ok_or_else(|| BeanfunError::Parse(format!("pSKey not found in redirect URL: {}", clip(&final_url, 200))))
@@ -407,7 +418,7 @@ pub async fn build_launch_uri(
 
     let (region, sn, data) = match parse_m_objdata(&body) {
         Ok(v) => v,
-        Err(e) => return Err(classify(&client, token, e).await),
+        Err(e) => return Err(classify(&client, e).await),
     };
     Ok(format!("gamaniagames://Region={region}&&&&SN={sn}&&&&Cmd=06004&&&&Data={data}"))
 }
@@ -439,9 +450,9 @@ fn parse_m_objdata(html: &str) -> Result<(String, String, String), BeanfunError>
 /// Only an authoritative answer overrides `fallback`: if the probe itself fails,
 /// or says the session is fine, the original error is what the user sees. A
 /// wrong `SESSION_EXPIRED` costs a QR rescan, so it is never a guess.
-async fn classify(client: &Client, token: &str, fallback: BeanfunError) -> BeanfunError {
-    match session_alive(client, token).await {
-        Ok(false) => BeanfunError::SessionExpired,
+async fn classify(client: &Client, fallback: BeanfunError) -> BeanfunError {
+    match token_state(client).await {
+        SessionState::Expired => BeanfunError::SessionExpired,
         _ => fallback,
     }
 }
@@ -540,7 +551,7 @@ pub async fn get_otp(
         .send().await?.text().await?;
     let (_region, sn, data) = match parse_m_objdata(&body) {
         Ok(v) => v,
-        Err(e) => return Err(classify(&client, token, e).await),
+        Err(e) => return Err(classify(&client, e).await),
     };
 
     // 2. Decrypt the blob and exchange the LaunchTicket for the OTP (v2). Only
@@ -550,7 +561,7 @@ pub async fn get_otp(
     let (_service_account, req) = v2_request(&sn, &data)?;
     let otp = match v2_exchange(&client, &req).await {
         Ok(v) => v,
-        Err(e) => return Err(classify(&client, token, e).await),
+        Err(e) => return Err(classify(&client, e).await),
     };
 
     Ok(OtpResult { sid: account_sid.to_owned(), otp })
@@ -852,50 +863,145 @@ fn decrypt_envelope(envelope: &str) -> Result<String, BeanfunError> {
     Ok(raw.trim_matches('\0').to_string())
 }
 
-// ─── Session Keep-Alive ───────────────────────────────────────────────────────
+// ─── Session state ────────────────────────────────────────────────────────────
 
-/// Ping the Beanfun session to prevent idle logout.
-/// Returns true if the session is still valid.
-pub async fn check_session_alive(
-    cookie_store: &Arc<CookieStoreMutex>,
-    token: &str,
-) -> Result<bool, BeanfunError> {
-    let client = build_client_from_store(cookie_store)?;
-    session_alive(&client, token).await
+/// What beanfun says about a session. Three-state on purpose: a dropped
+/// connection and "beanfun says you are logged out" must not collapse into the
+/// same answer, because only the second one may cost the user a QR rescan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionState {
+    Alive,
+    Expired,
+    Unknown,
 }
 
-/// The single place that *asks beanfun* whether a session is still good — the
-/// keepalive ping and every ambiguous launch failure route through here, so
-/// there is one behaviour to fix when beanfun changes how it turns people away.
+/// beanfun's own SSO checkpoint, and the authority on whether a web token is
+/// still logged in.
+const CHECK_TOKEN_URL: &str = "https://tw.newlogin.beanfun.com/generic_handlers/check_token.ashx";
+
+/// beanfun's verdict on the `bfWebToken` in this client's cookie jar.
 ///
-/// Not the only code that concludes a session is dead: `browser.rs` reads it off
-/// an empty cookie jar and `lib.rs` off a missing store entry. Those are local
-/// facts that need no round trip, which is why they stay separate.
-async fn session_alive(client: &Client, token: &str) -> Result<bool, BeanfunError> {
-    let inner = format!(
-        "game_start.aspx?service_code_and_region={}_{}",
-        SERVICE_CODE, SERVICE_REGION
+/// This runs the check beanfun's own pages run. `checkin_step2.aspx`'s
+/// `DealWebToken()` reads the cookie, POSTs `web_token=1&skey=…` here, and
+/// branches on `intResult`: 1 the token is good, 0 it sends the browser to the
+/// login screen. Anything else is their "service error" path, which tells us
+/// nothing about the session.
+///
+/// It replaces reading tea leaves from `auth.aspx`'s HTML. That check called a
+/// session dead only when the reply happened to land on a login URL or contain
+/// 尚未登入 — which a *superseded* token does not do. So when the same account
+/// logged in again anywhere (a second scan here, a phone, the official
+/// launcher), beanfun had already dropped the older token but the keepalive
+/// ping kept reporting that account online, and the user only found out when
+/// 取得密碼 failed. Verified against the live endpoint: an absent token answers
+/// `0 Token value error`, an unknown one `0 Token is not a existence`.
+async fn token_state(client: &Client) -> SessionState {
+    // The skey identifies this check to beanfun and comes from the same SSO
+    // entry point the QR login uses. Failing to get one means we never reached
+    // the checkpoint — not that the session is gone.
+    let skey = match get_session_key(client).await {
+        Ok(k) => k,
+        Err(_) => return SessionState::Unknown,
+    };
+
+    let referer = format!(
+        "https://tw.newlogin.beanfun.com/checkin_step2.aspx?skey={}&display_mode=2",
+        skey
     );
-    let resp = client
-        .get(&format!("{}beanfun_block/auth.aspx", PORTAL_BASE))
-        .query(&[
-            ("channel", "game_zone"),
-            ("page_and_query", inner.as_str()),
-            ("web_token", token),
-        ])
+    let body = match client
+        .post(CHECK_TOKEN_URL)
+        .header(header::REFERER, referer)
+        .header("X-Requested-With", "XMLHttpRequest")
+        .form(&[("web_token", "1"), ("skey", skey.as_str())])
         .send()
-        .await?;
+        .await
+    {
+        Ok(r) => match r.text().await {
+            Ok(b) => b,
+            Err(_) => return SessionState::Unknown,
+        },
+        Err(_) => return SessionState::Unknown,
+    };
 
-    let final_url = resp.url().as_str().to_lowercase();
-    let body = resp.text().await.unwrap_or_default();
+    read_token_check(&body)
+}
 
-    let expired = final_url.contains("login") || body.contains("尚未登入") || body.contains("Please login");
-    Ok(!expired)
+#[derive(Deserialize)]
+struct TokenCheck {
+    #[serde(rename = "intResult")]
+    int_result: i64,
+}
+
+/// Split out from the request so the contract this depends on is testable
+/// without a live session. An unparsable body is `Unknown`: beanfun changing
+/// this reply must degrade into "ask again later", never into a mass logout.
+fn read_token_check(body: &str) -> SessionState {
+    match serde_json::from_str::<TokenCheck>(body) {
+        Ok(TokenCheck { int_result: 1 }) => SessionState::Alive,
+        Ok(TokenCheck { int_result: 0 }) => SessionState::Expired,
+        _ => SessionState::Unknown,
+    }
+}
+
+/// Ask beanfun whether this session is still logged in.
+///
+/// The jar is checked first: it is the thing that carries the token to beanfun,
+/// so a jar whose `bfWebToken` is no longer the token we were asked about is
+/// already answering the question locally, no round trip needed.
+pub async fn check_session(
+    cookie_store: &Arc<CookieStoreMutex>,
+    token: &str,
+) -> SessionState {
+    let carries_token = match cookie_store.lock() {
+        Ok(store) => store
+            .iter_unexpired()
+            .any(|c| c.name().eq_ignore_ascii_case("bfWebToken") && c.value() == token),
+        // A poisoned mutex is our bug, not a logout.
+        Err(_) => return SessionState::Unknown,
+    };
+    if !carries_token {
+        return SessionState::Expired;
+    }
+
+    let client = match build_client_from_store(cookie_store) {
+        Ok(c) => c,
+        Err(_) => return SessionState::Unknown,
+    };
+    token_state(&client).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::clip;
+    use super::{clip, read_token_check, SessionState};
+
+    /// The three replies the live endpoint actually returns. The two zero cases
+    /// were captured from beanfun on 2026-08-30: no cookie answers "Token value
+    /// error", an unknown token "Token is not a existence(RememberFlag)" — the
+    /// shape a token beanfun has superseded comes back as.
+    #[test]
+    fn reads_beanfuns_verdict() {
+        assert_eq!(
+            read_token_check(r#"{"intResult": 1, "strResult": "", "strAuthKey": "abc"}"#),
+            SessionState::Alive
+        );
+        assert_eq!(
+            read_token_check(r#"{"intResult": 0, "strResult": "Token value error", "strAuthKey": ""}"#),
+            SessionState::Expired
+        );
+        assert_eq!(
+            read_token_check(r#"{"intResult": 0, "strResult": "Token is not a existence(RememberFlag)", "strAuthKey": ""}"#),
+            SessionState::Expired
+        );
+    }
+
+    /// Anything we do not recognise must not log anyone out.
+    #[test]
+    fn an_unreadable_reply_is_never_a_logout() {
+        for body in ["", "<html>maintenance</html>", r#"{"intResult": 9}"#] {
+            assert_eq!(read_token_check(body), SessionState::Unknown);
+        }
+    }
 
     /// The old `&s[..n]` form panicked here: byte 200 of a Chinese error page
     /// lands inside a 3-byte character.

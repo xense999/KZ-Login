@@ -2,7 +2,7 @@ mod beanfun;
 mod browser;
 mod keyhook;
 
-use beanfun::{GameAccount, QrInit, QrPollOutcome};
+use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionState};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -762,19 +762,10 @@ async fn update_app_inplace(_app: tauri::AppHandle, _url: String) -> Result<(), 
 
 // ─── Session Ping ─────────────────────────────────────────────────────────────
 
-/// Three-state on purpose. A dropped connection and "beanfun says you are logged
-/// out" used to collapse into the same `false`, so a two-second network blip
-/// invalidated every token — and tokens only live in the frontend store, so the
-/// user had to rescan a QR code per account for a session that was never dead.
-/// Only `Expired` may invalidate; `Unknown` means try again later.
-#[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
-enum SessionState {
-    Alive,
-    Expired,
-    Unknown,
-}
-
+/// Ask beanfun whether this token is still logged in. The three states are
+/// `beanfun::SessionState`; only `Expired` may clear a token in the UI, since
+/// tokens live solely in the frontend store and a wrong verdict costs a QR
+/// rescan per account.
 #[tauri::command]
 async fn ping_session(
     state: tauri::State<'_, AppState>,
@@ -789,12 +780,7 @@ async fn ping_session(
             None => return Ok(SessionState::Expired),
         }
     };
-    match beanfun::check_session_alive(&cookie_store, &token).await {
-        Ok(true) => Ok(SessionState::Alive),
-        Ok(false) => Ok(SessionState::Expired),
-        // Transport error — we learned nothing about the session.
-        Err(_) => Ok(SessionState::Unknown),
-    }
+    Ok(beanfun::check_session(&cookie_store, &token).await)
 }
 
 /// Drop a session's cookie jar.

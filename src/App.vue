@@ -133,18 +133,6 @@ function onReauth(accountId: string) {
   page.value = "qr";
 }
 
-// Which card a scan belongs to is decided by the sub-accounts it returns: a sid
-// belongs to exactly one beanfun account, so a shared sid means "this is that
-// account logging in again". Without this, scanning an account already in the
-// list built a second card, and nothing downstream could tell the two apart —
-// beanfun supersedes the older session, but the keepalive ping reported both
-// cards online (and when beanfun hands back the same bfWebToken, both cards
-// really do share one live jar).
-function matchExistingAccount(games: { sid: string }[]): string | null {
-  const sids = new Set(games.map((g) => g.sid));
-  return store.accounts.find((a) => a.gameAccounts.some((g) => sids.has(g.sid)))?.id ?? null;
-}
-
 // Free the cookie jar of a session a re-login just replaced. Only safe when the
 // token string actually changed — the backend keys jars by token, so forgetting
 // an unchanged token would throw away the jar the new login just stored.
@@ -157,9 +145,7 @@ async function forgetSession(token: string) {
 }
 
 async function onQrSuccess(token: string, games: { sn: string; sid: string; sname: string }[]) {
-  const matched = matchExistingAccount(games);
-  const targetId = matched ?? reauthAccountId.value;
-  const wasReauth = reauthAccountId.value !== null;
+  const targetId = reauthAccountId.value;
   reauthAccountId.value = null;
 
   if (targetId) {
@@ -167,7 +153,6 @@ async function onQrSuccess(token: string, games: { sn: string; sid: string; snam
     await store.updateToken(targetId, token, games);
     if (previous && previous !== token) await forgetSession(previous);
     page.value = "main";
-    if (matched && !wasReauth) toast("這個帳號已經在清單中，已更新為最新的登入");
     return;
   }
 
