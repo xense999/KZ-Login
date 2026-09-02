@@ -32,26 +32,38 @@ function close() { Window.getCurrent().close(); }
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 type SessionState = "alive" | "expired" | "unknown";
+type SessionProbe = { state: SessionState; stage: string | null };
+
+// 沒有結論時，是哪一關看不見。Rust 只給代號，話在這裡講——這樣一張 toast 的截圖
+// 就能指出卡在哪，不必為了看一行 log 去開 dev 版。
+const BLIND_AT: Record<string, string> = {
+  jar: "登入資料不完整",
+  skey: "取不到檢查碼",
+  post: "送不出檢查請求",
+  body: "讀不到伺服器回應",
+  reply: "伺服器回應看不懂",
+};
 
 // Only "expired" clears a token. "unknown" means the ping itself failed (no
 // network, server down), which says nothing about the session — treating it as
 // a logout would force a QR rescan for accounts that are still perfectly alive.
-async function checkSessions(): Promise<{ expired: number; unknown: number }> {
+async function checkSessions(): Promise<{ expired: number; unknown: number; blindAt: string | null }> {
   let expired = 0;
   let unknown = 0;
+  let blindAt: string | null = null;
   for (const acc of store.accounts) {
     if (!acc.token) continue;
     const pinged = acc.token;
     try {
-      const state = await invoke<SessionState>('ping_session', { token: pinged });
+      const probe = await invoke<SessionProbe>('ping_session', { token: pinged });
       // A re-login can land mid-loop and hand this account a fresh token; the
       // verdict we are holding belongs to the token we pinged, not to that one.
       if (acc.token !== pinged) continue;
-      if (state === "expired") { store.invalidateToken(acc.id); expired++; }
-      else if (state === "unknown") unknown++;
+      if (probe.state === "expired") { store.invalidateToken(acc.id); expired++; }
+      else if (probe.state === "unknown") { unknown++; blindAt = probe.stage ?? blindAt; }
     } catch { unknown++; }
   }
-  return { expired, unknown };
+  return { expired, unknown, blindAt };
 }
 
 const refreshing = ref(false);
@@ -70,11 +82,13 @@ async function refreshSessions() {
   refreshing.value = true;
   toast("重新檢查登入狀態…", { ms: 15000 });
   try {
-    const { expired, unknown } = await checkSessions();
+    const { expired, unknown, blindAt } = await checkSessions();
     if (expired > 0) {
       toast(`${expired} 個帳號已登出，請點右側的掃碼圖示重新登入`, { kind: "error", ms: 5000 });
     } else if (unknown > 0) {
-      toast("連不上伺服器，這次無法確認登入狀態", { kind: "error" });
+      const why = blindAt ? BLIND_AT[blindAt] ?? blindAt : null;
+      toast(why ? `這次無法確認登入狀態：${why}` : "連不上伺服器，這次無法確認登入狀態",
+        { kind: "error", ms: 5000 });
     } else {
       toast(`${checked.length} 個帳號都還在線上`);
     }

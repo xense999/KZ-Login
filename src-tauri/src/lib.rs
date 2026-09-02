@@ -2,7 +2,7 @@ mod beanfun;
 mod browser;
 mod keyhook;
 
-use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionState};
+use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionProbe};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -770,14 +770,14 @@ async fn update_app_inplace(_app: tauri::AppHandle, _url: String) -> Result<(), 
 async fn ping_session(
     state: tauri::State<'_, AppState>,
     token: String,
-) -> Result<SessionState, String> {
+) -> Result<SessionProbe, String> {
     let cookie_store = {
         let stores = state.session_stores.lock().await;
         match stores.get(&token).cloned() {
             // No cookie jar for this token: the session cannot be revived, and
             // every command that needs it already reports SESSION_EXPIRED.
             Some(s) => s,
-            None => return Ok(SessionState::Expired),
+            None => return Ok(SessionProbe::expired()),
         }
     };
     Ok(beanfun::check_session(&cookie_store, &token).await)
