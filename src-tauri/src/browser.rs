@@ -502,6 +502,25 @@ enum Decision {
     Refuse,
 }
 
+/// 那個視窗還真的在不在。**不能只看 `get_webview_window()` 有沒有回東西**：
+/// WebView2 就是 Edge 的執行環境，Edge 在背景更新時會把執行中的 WebView2 連同
+/// 視窗一起收掉，而 `Destroyed` 事件不保證跑得到我們的處理器——簿記裡就留下一個
+/// 螢幕上根本不存在的幽靈，`WINDOW_OWNER` 也沒被清掉，之後開別的帳號一律被擋，
+/// 而且要重開整個 app 才會好。所以改成去問視窗本人：只有活著的視窗答得出自己
+/// 可不可見。最小化也算還在（`IsWindowVisible` 對最小化視窗仍為真，這裡兩個都
+/// 收是為了不依賴那個細節）。
+fn toolbar_is_alive<R: Runtime>(window: &WebviewWindow<R>) -> bool {
+    alive_from(window.is_visible().ok(), window.is_minimized().ok())
+}
+
+/// 拆出來可單測：問不到答案（`None`）＝視窗已經不在，不是「暫時不確定」。
+fn alive_from(visible: Option<bool>, minimized: Option<bool>) -> bool {
+    match (visible, minimized) {
+        (Some(v), Some(m)) => v || m,
+        _ => false,
+    }
+}
+
 /// 守門判斷。`owner` 是目前視窗組歸屬的帳號、`alive` 是那組視窗還在不在。
 /// 拒絕時**不代關**——使用者親自定的：跳警告請他自己關，別把他正在看的頁面關掉。
 fn decide(owner: Option<&str>, requested: &str, alive: bool) -> Decision {
@@ -526,9 +545,10 @@ pub fn open<R: Runtime>(
     jar: &Arc<CookieStoreMutex>,
 ) -> Result<(), String> {
     let existing = app.get_webview_window(TOOLBAR_LABEL);
+    let alive = existing.as_ref().map(toolbar_is_alive).unwrap_or(false);
     let decision = {
         let owner = WINDOW_OWNER.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
-        decide(owner.as_deref(), account_id, existing.is_some())
+        decide(owner.as_deref(), account_id, alive)
     };
     match decision {
         Decision::Focus => {
@@ -540,6 +560,21 @@ pub fn open<R: Runtime>(
         }
         Decision::Refuse => return Err("BROWSER_STILL_OPEN".to_string()),
         Decision::Open => {}
+    }
+
+    // 放行了但簿記裡還躺著上一組的殘骸：label 是唯一的，不先收掉就建不出新視窗。
+    // 分頁視窗是 owned window，通常會跟著主視窗走，這裡一起補收乾淨。
+    if let Some(ghost) = existing {
+        let ids: Vec<u64> = STATE
+            .lock()
+            .map(|s| s.tabs.iter().map(|t| t.id).collect())
+            .unwrap_or_default();
+        for id in ids {
+            if let Some(tab) = app.get_webview_window(&tab_label(id)) {
+                let _ = tab.destroy();
+            }
+        }
+        let _ = ghost.destroy();
     }
 
     // 沒有一顆 beanfun cookie＝這個 session 已經不帶登入態，開下去只會停在未登入
@@ -1353,6 +1388,19 @@ mod tests {
         // 歸屬還留著但視窗已經關掉（Destroyed 事件沒跑到也一樣要放行）
         assert_eq!(decide(Some("acc-1"), "acc-2", false), Decision::Open);
         assert_eq!(decide(Some("acc-1"), "acc-1", false), Decision::Open);
+    }
+
+    #[test]
+    fn a_window_that_cannot_answer_is_not_there() {
+        // Edge 更新收掉 WebView2 之後的幽靈：簿記還在，但問它什麼都問不到。
+        assert!(!alive_from(None, None));
+        assert!(!alive_from(None, Some(false)));
+        assert!(!alive_from(Some(false), None));
+        // 真的還開著，或只是被最小化。
+        assert!(alive_from(Some(true), Some(false)));
+        assert!(alive_from(Some(false), Some(true)));
+        // 兩邊都說不在＝視窗被藏起來或已經沒了，一樣要放行。
+        assert!(!alive_from(Some(false), Some(false)));
     }
 
     #[test]
