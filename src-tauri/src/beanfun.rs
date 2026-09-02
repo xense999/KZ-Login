@@ -451,7 +451,7 @@ fn parse_m_objdata(html: &str) -> Result<(String, String, String), BeanfunError>
 /// or says the session is fine, the original error is what the user sees. A
 /// wrong `SESSION_EXPIRED` costs a QR rescan, so it is never a guess.
 async fn classify(client: &Client, fallback: BeanfunError) -> BeanfunError {
-    match token_state(client).await.state {
+    match token_state(client).await {
         SessionState::Expired => BeanfunError::SessionExpired,
         _ => fallback,
     }
@@ -876,47 +876,6 @@ pub enum SessionState {
     Unknown,
 }
 
-/// Which step could not answer, when the verdict is `Unknown`. The UI turns
-/// these into words; keeping them as codes here is what lets a screenshot of
-/// the toast name the failing step without a debug build attached.
-pub mod stage {
-    /// The account's own jar no longer carries the token we were asked about.
-    pub const JAR: &str = "jar";
-    /// Never reached beanfun's checkpoint: no session key came back.
-    pub const SKEY: &str = "skey";
-    /// The check itself could not be sent.
-    pub const POST: &str = "post";
-    /// It was sent, but the reply could not be read off the wire.
-    pub const BODY: &str = "body";
-    /// A reply arrived and is not one we recognise.
-    pub const REPLY: &str = "reply";
-}
-
-/// A verdict plus, when there is none, which step went blind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct SessionProbe {
-    pub state: SessionState,
-    pub stage: Option<&'static str>,
-}
-
-impl SessionProbe {
-    /// beanfun answered.
-    fn settled(state: SessionState) -> Self {
-        Self { state, stage: None }
-    }
-
-    /// The session is gone and we know it without asking — there is no jar left
-    /// to ask with.
-    pub fn expired() -> Self {
-        Self::settled(SessionState::Expired)
-    }
-
-    /// It did not, and this is where we stopped seeing.
-    fn blind(stage: &'static str) -> Self {
-        Self { state: SessionState::Unknown, stage: Some(stage) }
-    }
-}
-
 /// beanfun's own SSO checkpoint, and the authority on whether a web token is
 /// still logged in.
 const CHECK_TOKEN_URL: &str = "https://tw.newlogin.beanfun.com/generic_handlers/check_token.ashx";
@@ -937,13 +896,13 @@ const CHECK_TOKEN_URL: &str = "https://tw.newlogin.beanfun.com/generic_handlers/
 /// ping kept reporting that account online, and the user only found out when
 /// 取得密碼 failed. Verified against the live endpoint: an absent token answers
 /// `0 Token value error`, an unknown one `0 Token is not a existence`.
-async fn token_state(client: &Client) -> SessionProbe {
+async fn token_state(client: &Client) -> SessionState {
     // The skey identifies this check to beanfun and comes from the same SSO
     // entry point the QR login uses. Failing to get one means we never reached
     // the checkpoint — not that the session is gone.
     let skey = match get_session_key(client).await {
         Ok(k) => k,
-        Err(_) => return SessionProbe::blind(stage::SKEY),
+        Err(_) => return SessionState::Unknown,
     };
 
     let referer = format!(
@@ -960,15 +919,12 @@ async fn token_state(client: &Client) -> SessionProbe {
     {
         Ok(r) => match r.text().await {
             Ok(b) => b,
-            Err(_) => return SessionProbe::blind(stage::BODY),
+            Err(_) => return SessionState::Unknown,
         },
-        Err(_) => return SessionProbe::blind(stage::POST),
+        Err(_) => return SessionState::Unknown,
     };
 
-    match read_token_check(&body) {
-        SessionState::Unknown => SessionProbe::blind(stage::REPLY),
-        settled => SessionProbe::settled(settled),
-    }
+    read_token_check(&body)
 }
 
 #[derive(Deserialize)]
@@ -1014,16 +970,16 @@ fn read_token_check(body: &str) -> SessionState {
 pub async fn check_session(
     cookie_store: &Arc<CookieStoreMutex>,
     token: &str,
-) -> SessionProbe {
+) -> SessionState {
     let carries_token = match cookie_store.lock() {
         Ok(store) => store
             .iter_unexpired()
             .any(|c| c.name().eq_ignore_ascii_case("bfWebToken") && c.value() == token),
         // A poisoned mutex is our bug, not a logout.
-        Err(_) => return SessionProbe::blind(stage::JAR),
+        Err(_) => return SessionState::Unknown,
     };
     if !carries_token {
-        return SessionProbe::settled(SessionState::Expired);
+        return SessionState::Expired;
     }
 
     probe_with_session(cookie_store).await
@@ -1039,10 +995,10 @@ pub async fn check_session(
 /// altogether, which the verdict then read as a logout and cleared every account
 /// at once. The owning session asking about itself is the same call beanfun's own
 /// page makes, and changes nothing.
-async fn probe_with_session(cookie_store: &Arc<CookieStoreMutex>) -> SessionProbe {
+async fn probe_with_session(cookie_store: &Arc<CookieStoreMutex>) -> SessionState {
     let client = match build_client_from_store(cookie_store) {
         Ok(c) => c,
-        Err(_) => return SessionProbe::blind(stage::JAR),
+        Err(_) => return SessionState::Unknown,
     };
     token_state(&client).await
 }

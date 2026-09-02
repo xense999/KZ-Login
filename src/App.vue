@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { Window } from "@tauri-apps/api/window";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import MainPage from "./pages/MainPage.vue";
 import QrPage from "./pages/QrPage.vue";
@@ -32,68 +31,24 @@ function close() { Window.getCurrent().close(); }
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 type SessionState = "alive" | "expired" | "unknown";
-type SessionProbe = { state: SessionState; stage: string | null };
 
-// 沒有結論時，是哪一關看不見。Rust 只給代號，話在這裡講——這樣一張 toast 的截圖
-// 就能指出卡在哪，不必為了看一行 log 去開 dev 版。
-const BLIND_AT: Record<string, string> = {
-  jar: "登入資料不完整",
-  skey: "取不到檢查碼",
-  post: "送不出檢查請求",
-  body: "讀不到伺服器回應",
-  reply: "伺服器回應看不懂",
-};
-
+// 每 8 分鐘自己跑一次，沒有手動觸發的入口——按 F5 只會被 Rust 端吞掉。斷線的卡片
+// 右邊自己變回掃碼圖示，所以這裡不出聲；沒有結論時更要安靜，那不代表任何事。
+//
 // Only "expired" clears a token. "unknown" means the ping itself failed (no
 // network, server down), which says nothing about the session — treating it as
 // a logout would force a QR rescan for accounts that are still perfectly alive.
-async function checkSessions(): Promise<{ expired: number; unknown: number; blindAt: string | null }> {
-  let expired = 0;
-  let unknown = 0;
-  let blindAt: string | null = null;
+async function checkSessions() {
   for (const acc of store.accounts) {
     if (!acc.token) continue;
     const pinged = acc.token;
     try {
-      const probe = await invoke<SessionProbe>('ping_session', { token: pinged });
+      const state = await invoke<SessionState>('ping_session', { token: pinged });
       // A re-login can land mid-loop and hand this account a fresh token; the
       // verdict we are holding belongs to the token we pinged, not to that one.
       if (acc.token !== pinged) continue;
-      if (probe.state === "expired") { store.invalidateToken(acc.id); expired++; }
-      else if (probe.state === "unknown") { unknown++; blindAt = probe.stage ?? blindAt; }
-    } catch { unknown++; }
-  }
-  return { expired, unknown, blindAt };
-}
-
-const refreshing = ref(false);
-
-// Manual refresh: F5 / Ctrl+R are swallowed by the Rust side (a real reload
-// would wipe the in-memory account list) and arrive here as `refresh-sessions`.
-// Re-ping every session right away so the dead ones flip back to the rescan
-// state instead of failing later on 取得密碼.
-async function refreshSessions() {
-  if (refreshing.value) return;
-  const checked = store.accounts.filter((a) => a.token);
-  if (checked.length === 0) {
-    toast("目前沒有已登入的帳號");
-    return;
-  }
-  refreshing.value = true;
-  toast("重新檢查登入狀態…", { ms: 15000 });
-  try {
-    const { expired, unknown, blindAt } = await checkSessions();
-    if (expired > 0) {
-      toast(`${expired} 個帳號已登出，請點右側的掃碼圖示重新登入`, { kind: "error", ms: 5000 });
-    } else if (unknown > 0) {
-      const why = blindAt ? BLIND_AT[blindAt] ?? blindAt : null;
-      toast(why ? `這次無法確認登入狀態：${why}` : "連不上伺服器，這次無法確認登入狀態",
-        { kind: "error", ms: 5000 });
-    } else {
-      toast(`${checked.length} 個帳號都還在線上`);
-    }
-  } finally {
-    refreshing.value = false;
+      if (state === "expired") store.invalidateToken(acc.id);
+    } catch { /* 沒有結論就什麼都不做 */ }
   }
 }
 
@@ -126,20 +81,14 @@ async function confirmUpdate() {
   }
 }
 
-let unlistenRefresh: UnlistenFn | null = null;
-
 onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
-  // Manual refresh wins: skip this tick rather than run a second ping loop over
-  // the same accounts and muddle the counts the manual run reports.
-  keepAliveTimer = setInterval(() => { if (!refreshing.value) checkSessions(); }, 8 * 60 * 1000);
-  unlistenRefresh = await listen("refresh-sessions", () => { refreshSessions(); });
+  keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
 });
 
 onUnmounted(() => {
   if (keepAliveTimer) clearInterval(keepAliveTimer);
-  unlistenRefresh?.();
 });
 
 function onReauth(accountId: string) {

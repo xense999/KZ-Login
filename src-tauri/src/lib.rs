@@ -2,7 +2,7 @@ mod beanfun;
 mod browser;
 mod keyhook;
 
-use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionProbe};
+use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionState};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -770,14 +770,14 @@ async fn update_app_inplace(_app: tauri::AppHandle, _url: String) -> Result<(), 
 async fn ping_session(
     state: tauri::State<'_, AppState>,
     token: String,
-) -> Result<SessionProbe, String> {
+) -> Result<SessionState, String> {
     let cookie_store = {
         let stores = state.session_stores.lock().await;
         match stores.get(&token).cloned() {
             // No cookie jar for this token: the session cannot be revived, and
             // every command that needs it already reports SESSION_EXPIRED.
             Some(s) => s,
-            None => return Ok(SessionProbe::expired()),
+            None => return Ok(SessionState::Expired),
         }
     };
     Ok(beanfun::check_session(&cookie_store, &token).await)
@@ -798,31 +798,20 @@ async fn forget_session(state: tauri::State<'_, AppState>, token: String) -> Res
 
 // ─── Refresh key (F5 / Ctrl+R) ────────────────────────────────────────────────
 
-/// Turn the refresh keys on the main window into a session re-check instead of a
-/// page reload.
+/// Take the refresh keys away from the main window and do nothing with them.
 ///
 /// WebView2's native F5 reloads the whole SPA, and the account list plus its
 /// tokens live only in the frontend store (deliberately not persisted), so a
-/// reload wipes every account and forces a rescan. Pressing refresh means "tell
-/// me whether I am still logged in", not "log me out": we swallow the reload and
-/// emit `refresh-sessions`, and the frontend re-pings each session, flipping the
-/// dead ones back to the rescan state.
-fn hook_refresh_key<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>, app: &tauri::AppHandle<R>) {
-    use tauri::Emitter;
-
-    let app = app.clone();
-    keyhook::hook_keys(win, move |key| {
+/// reload wipes every account and forces a rescan. Swallowing the key is the
+/// point; there is nothing to trigger behind it, because the session check runs
+/// on its own every eight minutes and a manual one adds nothing but a way to hit
+/// beanfun harder than that.
+fn swallow_refresh_keys<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
+    keyhook::hook_keys(win, |key| {
         // Spelled out rather than pulled from windows-sys so this function stays
         // free of `cfg(windows)` — keyhook already handles the platform split.
         const VK_F5: u32 = 0x74;
-        if key.vk != VK_F5 && !(key.ctrl && key.vk == u32::from(b'R')) {
-            return false;
-        }
-        let app = app.clone();
-        std::thread::spawn(move || {
-            let _ = app.emit("refresh-sessions", ());
-        });
-        true
+        key.vk == VK_F5 || (key.ctrl && key.vk == u32::from(b'R'))
     });
 }
 
@@ -862,7 +851,7 @@ pub fn run() {
                     let y = bottom - sz.height as i32;
                     let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
                 }
-                hook_refresh_key(&w, app.handle());
+                swallow_refresh_keys(&w);
             }
             Ok(())
         })
