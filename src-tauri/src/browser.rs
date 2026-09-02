@@ -11,6 +11,7 @@
 //! 契約見 `docs/規範.md` 的 `browser` 條目。
 
 use reqwest_cookie_store::CookieStoreMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent},
@@ -21,8 +22,11 @@ use tauri::{
 const TOOLBAR_LABEL: &str = "browser";
 
 /// 分頁視窗的 label。分頁視窗不在任何 capability 檔裡＝零 IPC。
+/// 分頁視窗 label 的前綴。掃殘骸時靠它認人，不必先問得到 id。
+const TAB_LABEL_PREFIX: &str = "browser-tab-";
+
 fn tab_label(id: u64) -> String {
-    format!("browser-tab-{id}")
+    format!("{TAB_LABEL_PREFIX}{id}")
 }
 
 /// 標題列與導覽列的高度。
@@ -211,6 +215,11 @@ struct BrowserState {
     active: u64,
     next_id: u64,
     cookies: Vec<WebviewCookie>,
+    /// 哪一組視窗擁有現在這份狀態。`destroy()` 是排進主執行緒的，舊視窗的
+    /// `Destroyed` 可能在下一組都建好之後才跑到——它一律清空 STATE 與
+    /// `WINDOW_OWNER`，那就會把新視窗的 cookie 清掉（開出來直接是未登入，
+    /// 而且沒有任何錯誤訊息）。每組視窗記住自己的號碼，號碼不對就不要動。
+    generation: u64,
 }
 
 static STATE: Mutex<BrowserState> = Mutex::new(BrowserState {
@@ -218,6 +227,7 @@ static STATE: Mutex<BrowserState> = Mutex::new(BrowserState {
     active: 0,
     next_id: 1,
     cookies: Vec::new(),
+    generation: 0,
 });
 
 /// 推給殼層的分頁列狀態。
@@ -491,6 +501,24 @@ fn relayout_tabs<R: Runtime>(app: &AppHandle<R>) {
 /// cookie 儲存區，兩個帳號同時開會互相踩掉登入態），所以這裡就是單一狀態。
 static WINDOW_OWNER: Mutex<Option<String>> = Mutex::new(None);
 
+/// 有一組視窗正在建、但還沒顯示出來。這段期間它答不出「我看得見」，沒有這個旗標
+/// 就會被下一次開啟當成幽靈砍掉。
+static OPENING: AtomicBool = AtomicBool::new(false);
+
+/// 這個 `Destroyed` 是不是還在清自己那一組。拆出來可單測。
+fn teardown_belongs_to(mine: u64, current: u64) -> bool {
+    mine == current
+}
+
+/// 開啟流程結束就放掉旗標——中途 `?` 掉出去也一樣。
+struct OpeningGuard;
+
+impl Drop for OpeningGuard {
+    fn drop(&mut self) {
+        OPENING.store(false, Ordering::Release);
+    }
+}
+
 /// 一次開啟請求該怎麼處理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Decision {
@@ -546,9 +574,17 @@ pub fn open<R: Runtime>(
 ) -> Result<(), String> {
     let existing = app.get_webview_window(TOOLBAR_LABEL);
     let alive = existing.as_ref().map(toolbar_is_alive).unwrap_or(false);
+    // 判定與登記在同一個鎖裡完成，否則兩個帳號同時點會雙雙判到 Open。
+    // `OPENING` 補的是視窗建好到 show 之間那段：那時它還看不見，會被下面的
+    // 幽靈清理當成殘骸砍掉——而那正是使用者剛剛才點開的視窗。
     let decision = {
-        let owner = WINDOW_OWNER.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
-        decide(owner.as_deref(), account_id, alive)
+        let mut owner = WINDOW_OWNER.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
+        let decision = decide(owner.as_deref(), account_id, alive || OPENING.load(Ordering::Acquire));
+        if decision == Decision::Open {
+            OPENING.store(true, Ordering::Release);
+            *owner = Some(account_id.to_string());
+        }
+        decision
     };
     match decision {
         Decision::Focus => {
@@ -562,17 +598,30 @@ pub fn open<R: Runtime>(
         Decision::Open => {}
     }
 
+    // 判定已經登記完，之後不管成功或中途失敗都要把「正在開」放掉。
+    let _opening = OpeningGuard;
+
+    // 換代要在砍幽靈**之前**：舊視窗的 `Destroyed` 只要還認得出自己那一代，就會
+    // 把 STATE 和歸屬清掉，而那時登記的已經是這一組了。先換代，晚到的事件就會
+    // 看到號碼不對而自己收手。
+    let generation = {
+        let mut state = STATE.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
+        state.generation += 1;
+        state.generation
+    };
+
     // 放行了但簿記裡還躺著上一組的殘骸：label 是唯一的，不先收掉就建不出新視窗。
-    // 分頁視窗是 owned window，通常會跟著主視窗走，這裡一起補收乾淨。
+    // 分頁視窗照 label 直接掃，不從 STATE 拿——鎖壞掉時 STATE 讀不出東西，那些分頁
+    // 會失去母視窗浮在桌面上。
     if let Some(ghost) = existing {
-        let ids: Vec<u64> = STATE
-            .lock()
-            .map(|s| s.tabs.iter().map(|t| t.id).collect())
-            .unwrap_or_default();
-        for id in ids {
-            if let Some(tab) = app.get_webview_window(&tab_label(id)) {
-                let _ = tab.destroy();
-            }
+        let orphans: Vec<_> = app
+            .webview_windows()
+            .into_iter()
+            .filter(|(label, _)| label.starts_with(TAB_LABEL_PREFIX))
+            .map(|(_, win)| win)
+            .collect();
+        for tab in orphans {
+            let _ = tab.destroy();
         }
         let _ = ghost.destroy();
     }
@@ -657,6 +706,12 @@ pub fn open<R: Runtime>(
         // 工具列視窗沒了就把整組收掉：分頁視窗是 owned window，系統會跟著銷毀，
         // 這裡再補一次 destroy 是保險（也把 tauri 的簿記清乾淨），並清空狀態。
         tauri::WindowEvent::Destroyed => {
+            // 這個事件可能晚到——晚到下一組視窗都開好了。那時 STATE 已經是別人的，
+            // 清下去就是把新視窗的 cookie 和歸屬洗掉。
+            let current = STATE.lock().map(|s| s.generation).unwrap_or_default();
+            if !teardown_belongs_to(generation, current) {
+                return;
+            }
             let ids: Vec<u64> = STATE
                 .lock()
                 .map(|s| s.tabs.iter().map(|t| t.id).collect())
@@ -678,9 +733,6 @@ pub fn open<R: Runtime>(
         _ => {}
     });
 
-    if let Ok(mut owner) = WINDOW_OWNER.lock() {
-        *owner = Some(account_id.to_string());
-    }
     // 焦點在工具列（網址列）時 Ctrl+W 也要能關作用中的分頁
     hook_tab_shortcuts(&toolbar, app, None);
     toolbar.show().map_err(|e| e.to_string())?;
@@ -1401,6 +1453,14 @@ mod tests {
         assert!(alive_from(Some(false), Some(true)));
         // 兩邊都說不在＝視窗被藏起來或已經沒了，一樣要放行。
         assert!(!alive_from(Some(false), Some(false)));
+    }
+
+    /// 晚到的 `Destroyed` 只能清自己那一代。號碼對不上就代表下一組視窗已經接手，
+    /// 清下去會把新視窗的 cookie 洗掉，開出來直接是未登入。
+    #[test]
+    fn a_late_teardown_only_clears_its_own_generation() {
+        assert!(teardown_belongs_to(7, 7));
+        assert!(!teardown_belongs_to(7, 8));
     }
 
     #[test]
