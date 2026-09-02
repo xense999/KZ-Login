@@ -964,9 +964,13 @@ fn read_token_check(body: &str) -> SessionState {
 
 /// Ask beanfun whether this session is still logged in.
 ///
-/// The jar is checked first: it is the thing that carries the token to beanfun,
-/// so a jar whose `bfWebToken` is no longer the token we were asked about is
-/// already answering the question locally, no round trip needed.
+/// The jar is checked first, but a mismatch is not a logout. The probe walks
+/// beanfun's SSO entry point on this same jar, and that walk may hand back a
+/// rotated `bfWebToken`; the account would then be logged in under a token this
+/// app no longer knows, and calling that a logout would clear every account on
+/// the next tick — 1.4.2's failure by another road. Adopting the new token is
+/// the real answer and is more than a session check may decide, so a jar that
+/// does not carry the token we were asked about settles nothing.
 pub async fn check_session(
     cookie_store: &Arc<CookieStoreMutex>,
     token: &str,
@@ -979,7 +983,7 @@ pub async fn check_session(
         Err(_) => return SessionState::Unknown,
     };
     if !carries_token {
-        return SessionState::Expired;
+        return SessionState::Unknown;
     }
 
     probe_with_session(cookie_store).await

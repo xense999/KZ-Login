@@ -510,12 +510,32 @@ fn teardown_belongs_to(mine: u64, current: u64) -> bool {
     mine == current
 }
 
-/// 開啟流程結束就放掉旗標——中途 `?` 掉出去也一樣。
-struct OpeningGuard;
+/// 開啟流程的登記：判定當下就先佔住歸屬與「正在開」，中途 `?` 掉出去也要還原，
+/// 否則簿記說某個帳號開著、桌面上卻什麼都沒有——那正是原本那個誤擋的形狀。
+struct OpeningGuard {
+    account: String,
+    opened: bool,
+}
 
 impl Drop for OpeningGuard {
     fn drop(&mut self) {
         OPENING.store(false, Ordering::Release);
+        if self.opened {
+            return;
+        }
+        if let Ok(mut owner) = WINDOW_OWNER.lock() {
+            // 只收自己那一筆：期間若已經換人登記，那是別人的視窗。
+            if owner.as_deref() == Some(self.account.as_str()) {
+                *owner = None;
+            }
+        }
+        // 快照留著也沒有視窗會用，下一組開起來會整份覆寫；留著只是給後來讀
+        // `state.cookies` 的人一份沒有主人的資料。
+        if let Ok(mut state) = STATE.lock() {
+            state.tabs.clear();
+            state.active = 0;
+            state.cookies.clear();
+        }
     }
 }
 
@@ -598,8 +618,8 @@ pub fn open<R: Runtime>(
         Decision::Open => {}
     }
 
-    // 判定已經登記完，之後不管成功或中途失敗都要把「正在開」放掉。
-    let _opening = OpeningGuard;
+    // 判定已經登記完，之後不管成功或中途失敗都要把登記還原。
+    let mut opening = OpeningGuard { account: account_id.to_string(), opened: false };
 
     // 換代要在砍幽靈**之前**：舊視窗的 `Destroyed` 只要還認得出自己那一代，就會
     // 把 STATE 和歸屬清掉，而那時登記的已經是這一組了。先換代，晚到的事件就會
@@ -610,19 +630,19 @@ pub fn open<R: Runtime>(
         state.generation
     };
 
-    // 放行了但簿記裡還躺著上一組的殘骸：label 是唯一的，不先收掉就建不出新視窗。
-    // 分頁視窗照 label 直接掃，不從 STATE 拿——鎖壞掉時 STATE 讀不出東西，那些分頁
-    // 會失去母視窗浮在桌面上。
+    // 放行了就先把上一組的殘骸收乾淨。分頁一律掃——工具列被 Edge 收掉時它可能
+    // 已經不在簿記裡，分頁卻還在，那些視窗沒有標題列、不進工作列，留下來就是一片
+    // 關不掉的東西賴在桌面上。工具列本身則是 label 唯一，不先收掉就建不出新的。
+    let orphans: Vec<_> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with(TAB_LABEL_PREFIX))
+        .map(|(_, win)| win)
+        .collect();
+    for tab in orphans {
+        let _ = tab.destroy();
+    }
     if let Some(ghost) = existing {
-        let orphans: Vec<_> = app
-            .webview_windows()
-            .into_iter()
-            .filter(|(label, _)| label.starts_with(TAB_LABEL_PREFIX))
-            .map(|(_, win)| win)
-            .collect();
-        for tab in orphans {
-            let _ = tab.destroy();
-        }
         let _ = ghost.destroy();
     }
 
@@ -708,7 +728,9 @@ pub fn open<R: Runtime>(
         tauri::WindowEvent::Destroyed => {
             // 這個事件可能晚到——晚到下一組視窗都開好了。那時 STATE 已經是別人的，
             // 清下去就是把新視窗的 cookie 和歸屬洗掉。
-            let current = STATE.lock().map(|s| s.generation).unwrap_or_default();
+            // 鎖壞掉時就當作是自己的：收尾寧可多做一次，也不要靜靜不做——
+            // 不做的話 `WINDOW_OWNER` 永遠留著，等於回到那個要重開程式才好的誤擋。
+            let current = STATE.lock().map(|s| s.generation).unwrap_or(generation);
             if !teardown_belongs_to(generation, current) {
                 return;
             }
@@ -741,7 +763,9 @@ pub fn open<R: Runtime>(
     let home: Url = HOME_URL
         .parse()
         .map_err(|e| format!("起始頁網址無效：{e}"))?;
-    open_tab(app, Some(home), None).map(|_| ())
+    open_tab(app, Some(home), None)?;
+    opening.opened = true;
+    Ok(())
 }
 
 /// 開一個新分頁。`navigate_to` 有值＝手動開的分頁（先注入 cookie 再導向）；
