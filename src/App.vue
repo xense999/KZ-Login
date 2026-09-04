@@ -9,6 +9,7 @@ import SettingsPage from "./pages/SettingsPage.vue";
 import ToastPop from "./components/ToastPop.vue";
 import { toast } from "./composables/useToast";
 import { useAccountsStore } from "./stores/accounts";
+import { useTheme } from "./composables/useTheme";
 
 type Page = "main" | "qr" | "success" | "settings";
 
@@ -84,6 +85,10 @@ async function confirmUpdate() {
 onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
+  // The app icon follows the theme, applied once per launch — switching theme
+  // mid-session only shows up next time. Fire-and-forget: it never fails, and
+  // nothing here depends on it.
+  invoke("apply_icon_theme", { theme: useTheme().theme.value });
   keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
 });
 

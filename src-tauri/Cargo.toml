@@ -13,7 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# image-ico：執行期用 Image::from_path 讀 .ico 換視窗圖示（見 icon 模組）
+tauri = { version = "2", features = ["image-ico"] }
 tauri-plugin-store = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
@@ -39,6 +40,14 @@ winreg = "0.52"
 # WebView2 自己的 cookie manager。版本要跟著 tauri-runtime-wry 拉進來的那份。
 webview2-com = "0.38"
 windows-core = "0.61"
+# 改寫捷徑 .lnk 的圖示要走 COM（IShellLink / IPersistFile），windows-sys 只有裸 FFI
+# 沒有 COM 介面包裝。版本對齊相依樹裡既有的 0.61，不另拉一份 major。
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

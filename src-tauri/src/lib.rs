@@ -1,5 +1,6 @@
 mod beanfun;
 mod browser;
+mod icon;
 mod keyhook;
 
 use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionState};
@@ -619,6 +620,21 @@ async fn browser_tab(
 
 /// Check GitHub for a newer app release. Current version comes from Tauri's
 /// package info (i.e. `tauri.conf.json`), the authoritative version.
+/// Apply the app icon that matches the frontend theme. Fire-and-forget: the icon
+/// module never fails, so the frontend has nothing to handle.
+///
+/// The theme string is the frontend's vocabulary (`neutral` / `dark`); it is
+/// translated here so the icon module never learns about it.
+#[tauri::command]
+fn apply_icon_theme(app: tauri::AppHandle, theme: String) {
+    let t = if theme == "dark" {
+        icon::IconTheme::Dark
+    } else {
+        icon::IconTheme::Light
+    };
+    icon::apply(&app, t);
+}
+
 #[tauri::command]
 async fn check_app_update(app: tauri::AppHandle) -> Result<beanfun::AppUpdate, String> {
     let current = app.package_info().version.to_string();
@@ -831,7 +847,8 @@ pub fn run() {
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
-            check_app_update, update_app, update_app_inplace
+            check_app_update, update_app, update_app_inplace,
+            apply_icon_theme
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
