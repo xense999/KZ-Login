@@ -6,6 +6,8 @@
 
 ## 公開介面
 
+★ 本模組內部有一個私有子模組 `icon::win`（`windows` crate 包 COM）。它與 `lib.rs` 的 `crate::win`（`windows_sys` 包鍵鼠模擬與視窗量測）**同名但毫不相干**——不同 crate、不同職責、無重疊行為。不要合併它們。
+
 ```rust
 pub enum IconTheme { Light, Dark }
 pub fn apply(app: &AppHandle, theme: IconTheme)
@@ -56,6 +58,9 @@ pub fn apply(app: &AppHandle, theme: IconTheme)
 3. `tauri.conf.json` 的 `bundle.resources` 加一行
 4. `IconTheme` 加一個 variant 與對應檔名
 
-`tauri icon` 產出的 .ico 含 16/24/32/48/64/256——Explorer 實際用到的尺寸都在裡面，128 由 256 縮，肉眼無差。
+`tauri icon` 產出的 .ico 含 16/24/32/48/64/256，沒有 128；缺的尺寸由 Windows 從最接近的那張縮。
+規格書 [#7](https://github.com/xense999/KZ-Login/issues/7) 原本寫要含 128，改掉是為了整條產線只用 repo 既有的 `npx tauri icon`——
+多一個尺寸不值得為同一個產物多養一套 Python 工具鏈。**沒有實測過 128 缺席在哪些檢視模式下看得出來**，
+若日後有人回報某個檢視下圖示糊掉，這裡是第一個要查的地方。
 
 **來源美術素材（那隻兔子的原圖）不在 repo 內。** 這兩張 1024 PNG 就是本 repo 的來源，改設計要從外部素材重新合成。

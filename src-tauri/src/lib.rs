@@ -616,10 +616,8 @@ async fn browser_tab(
     browser::tab_command(&app, &action, id)
 }
 
-// ─── App self-update ──────────────────────────────────────────────────────────
+// ─── Icon ────────────────────────────────────────────────────────────────────
 
-/// Check GitHub for a newer app release. Current version comes from Tauri's
-/// package info (i.e. `tauri.conf.json`), the authoritative version.
 /// Apply the app icon that matches the frontend theme. Fire-and-forget: the icon
 /// module never fails, so the frontend has nothing to handle.
 ///
@@ -635,6 +633,10 @@ fn apply_icon_theme(app: tauri::AppHandle, theme: String) {
     icon::apply(&app, t);
 }
 
+// ─── App self-update ──────────────────────────────────────────────────────────
+
+/// Check GitHub for a newer app release. Current version comes from Tauri's
+/// package info (i.e. `tauri.conf.json`), the authoritative version.
 #[tauri::command]
 async fn check_app_update(app: tauri::AppHandle) -> Result<beanfun::AppUpdate, String> {
     let current = app.package_info().version.to_string();
