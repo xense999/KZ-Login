@@ -137,7 +137,7 @@ fn shortcut_targets(desktop: &Path, programs: &Path, roaming: &Path, product: &s
 
 #[cfg(windows)]
 fn set_shortcut_icons(app: &AppHandle, ico: &Path, log: &mut String) {
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
     let (Some(desktop), Some(programs), Some(roaming)) = (
         win::known_folder(&windows::Win32::UI::Shell::FOLDERID_Desktop),
@@ -148,9 +148,9 @@ fn set_shortcut_icons(app: &AppHandle, ico: &Path, log: &mut String) {
         return;
     };
 
-    // 這條執行緒是自己開的，COM 一定沒初始化過。回傳值刻意不檢查：已經初始化過
-    // （RPC_E_CHANGED_MODE）對接下來的呼叫沒有影響。
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    // 這條執行緒是自己開的，所以 COM 由我們初始化、也由我們收。RPC_E_CHANGED_MODE
+    // （別人先用別的模式初始化過）不影響接下來的呼叫，但那種情況不該由我們 uninit。
+    let owned = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
 
     for t in shortcut_targets(&desktop, &programs, &roaming, &app.package_info().name) {
         if !t.lnk.exists() {
@@ -165,6 +165,10 @@ fn set_shortcut_icons(app: &AppHandle, ico: &Path, log: &mut String) {
                 let _ = writeln!(log, "{}: {e}  {}", t.label, t.lnk.display());
             }
         }
+    }
+
+    if owned {
+        unsafe { CoUninitialize() };
     }
 }
 
@@ -185,9 +189,10 @@ mod win {
     pub fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
         unsafe {
             let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
-            let s = p.to_string().ok()?;
+            // 先取出字串再釋放，兩條路徑都要 free——`?` 早退會漏掉這塊 shell 配置的記憶體。
+            let s = p.to_string();
             windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as *const _));
-            Some(PathBuf::from(s))
+            Some(PathBuf::from(s.ok()?))
         }
     }
 
