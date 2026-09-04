@@ -6,6 +6,11 @@
 //!
 //! 整個模組是盡力而為：任何一個目標失敗都不中斷、不回報給呼叫端、不影響登入功能，
 //! 只留一行到 log。release build 沒有 console，所以 log 一定要寫檔才存在。
+//!
+//! 兩張 .ico **編進 exe**，不走 `bundle.resources`。捷徑的圖示欄位需要一個留在磁碟上
+//! 的檔案，所以啟動時把它們寫到安裝目錄底下。這條路徑是被就地更新逼出來的：
+//! `update_app_inplace` 只換 exe 一個檔，任何額外的安裝檔案都到不了已經更新過的使用者
+//! 手上——v1.5.0 就是這樣整批失效的。exe 自己帶著，就地更新才帶得動。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -26,6 +31,13 @@ impl IconTheme {
             IconTheme::Dark => "navy.ico",
         }
     }
+
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            IconTheme::Light => include_bytes!("../icons/themed/cream.ico"),
+            IconTheme::Dark => include_bytes!("../icons/themed/navy.ico"),
+        }
+    }
 }
 
 /// 把 `theme` 對應的圖標套到視窗與所有捷徑上。永不失敗——呼叫端不需要處理錯誤。
@@ -37,15 +49,16 @@ pub fn apply(app: &AppHandle, theme: IconTheme) {
         let mut log = String::new();
         let _ = writeln!(log, "theme={:?} icon={}", theme, theme.icon_file());
 
-        match resolve_icon(&app, theme) {
+        set_window_icon(&app, theme, &mut log);
+
+        match ensure_icon_file(&app, theme, &mut log) {
             Some(ico) => {
-                let _ = writeln!(log, "ico={}", ico.display());
-                set_window_icon(&app, &ico, &mut log);
                 #[cfg(windows)]
                 set_shortcut_icons(&app, &ico, &mut log);
+                let _ = ico;
             }
             None => {
-                let _ = writeln!(log, "!! 找不到圖標資源，整批跳過");
+                let _ = writeln!(log, "!! 圖標檔寫不出來，捷徑整批跳過");
             }
         }
 
@@ -53,25 +66,42 @@ pub fn apply(app: &AppHandle, theme: IconTheme) {
     });
 }
 
-/// 打包進安裝檔的 .ico 路徑（`bundle.resources`）。找不到就回 None——沒有備援圖，
-/// 因為套用失敗的正確行為是保持現狀，不是換成別的圖。
-fn resolve_icon(app: &AppHandle, theme: IconTheme) -> Option<PathBuf> {
-    let p = app
-        .path()
-        .resolve(
-            format!("icons/themed/{}", theme.icon_file()),
-            tauri::path::BaseDirectory::Resource,
-        )
-        .ok()?;
-    p.exists().then_some(p)
+/// 把編進 exe 的 .ico 寫到磁碟上，回傳它的路徑——捷徑的圖示欄位指的是檔案，不是位元組。
+///
+/// 內容相同就不重寫：使用者每次開程式都會走到這裡，沒必要每次都動檔案。
+fn ensure_icon_file(app: &AppHandle, theme: IconTheme, log: &mut String) -> Option<PathBuf> {
+    let dir = app_dir(app)?.join("icons");
+    let path = dir.join(theme.icon_file());
+    let want = theme.bytes();
+
+    if std::fs::read(&path).is_ok_and(|got| got == want) {
+        let _ = writeln!(log, "ico: 已是最新 {}", path.display());
+        return Some(path);
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        let _ = writeln!(log, "ico: 建目錄失敗 {e}");
+        return None;
+    }
+    match std::fs::write(&path, want) {
+        Ok(()) => {
+            let _ = writeln!(log, "ico: 已寫出 {}", path.display());
+            Some(path)
+        }
+        Err(e) => {
+            let _ = writeln!(log, "ico: 寫檔失敗 {e}");
+            None
+        }
+    }
 }
 
-fn set_window_icon(app: &AppHandle, ico: &Path, log: &mut String) {
+/// 視窗圖示直接吃 exe 裡的位元組——它不需要磁碟上有檔案，所以就算寫檔失敗也照樣會換。
+fn set_window_icon(app: &AppHandle, theme: IconTheme, log: &mut String) {
     let Some(w) = app.get_webview_window("main") else {
         let _ = writeln!(log, "window: 找不到 main 視窗");
         return;
     };
-    match tauri::image::Image::from_path(ico).and_then(|img| w.set_icon(img)) {
+    match tauri::image::Image::from_bytes(theme.bytes()).and_then(|img| w.set_icon(img)) {
         Ok(()) => {
             let _ = writeln!(log, "window: ok");
         }
@@ -81,13 +111,17 @@ fn set_window_icon(app: &AppHandle, ico: &Path, log: &mut String) {
     }
 }
 
+/// 安裝目錄。`currentUser` 安裝，所以它就在 `%LOCALAPPDATA%` 底下、寫得進去。
+fn app_dir(app: &AppHandle) -> Option<PathBuf> {
+    Some(app.path().local_data_dir().ok()?.join(&app.package_info().name))
+}
+
 /// 每次啟動覆寫，天然有界，不需要額外的截斷邏輯。寫不進去就算了——log 本身失敗
 /// 不值得再做一層錯誤處理。
 fn write_log(app: &AppHandle, body: &str) {
-    let Ok(dir) = app.path().local_data_dir() else {
+    let Some(dir) = app_dir(app) else {
         return;
     };
-    let dir = dir.join(&app.package_info().name);
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(dir.join("icon.log"), body);
 }
@@ -215,6 +249,18 @@ mod tests {
     fn maps_theme_to_icon_file() {
         assert_eq!(IconTheme::Light.icon_file(), "cream.ico");
         assert_eq!(IconTheme::Dark.icon_file(), "navy.ico");
+    }
+
+    /// 兩張圖是 `include_bytes!` 進來的——路徑打錯或檔案被清空都不會是編譯錯誤，
+    /// 會變成執行期悄悄換不了圖示。
+    #[test]
+    fn embedded_icons_are_real_and_distinct() {
+        for t in [IconTheme::Light, IconTheme::Dark] {
+            let b = t.bytes();
+            assert!(b.len() > 4096, "{:?} 的圖檔太小，像是空的", t);
+            assert_eq!(&b[..4], &[0x00, 0x00, 0x01, 0x00], "{:?} 不是 .ico", t);
+        }
+        assert_ne!(IconTheme::Light.bytes(), IconTheme::Dark.bytes());
     }
 
     #[test]

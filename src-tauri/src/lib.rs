@@ -717,9 +717,12 @@ fn sync_installed_version(product: &str, version: &str) {
 /// Replace the running executable with a freshly downloaded one and restart.
 ///
 /// Preferred over [`update_app`] because it never runs the NSIS installer, and
-/// so never trips the uninstaller that strips our taskbar pins. The install
-/// directory holds nothing but this exe and `uninstall.exe`, which is what
-/// makes a bare file swap sufficient.
+/// so never trips the uninstaller that strips our taskbar pins.
+///
+/// A bare file swap is sufficient only while the exe carries everything it
+/// needs. Nothing may be added to `bundle.resources`: an installed-only file
+/// never reaches anyone who updates this way. v1.5.0 shipped the themed icons
+/// that way and the whole feature was inert until v1.5.1 embedded them.
 ///
 /// The download lands next to the running exe rather than in `%TEMP%` so the
 /// final move is a same-volume rename — atomic, and never a half-copied binary.

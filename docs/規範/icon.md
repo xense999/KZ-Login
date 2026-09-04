@@ -35,6 +35,14 @@ pub fn apply(app: &AppHandle, theme: IconTheme)
 - **不可為此新增任何設定項**。圖標跟著現有主題走，設定頁不動。
 - **不可主動刷新圖示快取**（`SHChangeNotify`），介面也不對釘選工作列的延遲做任何說明。這是刻意的取捨。
 - **不可嘗試改寫 exe 內嵌圖示**。那是編譯期資源，執行中的 exe 檔被系統鎖住；「關閉時替換 exe」方案已評估並否決（牽動自我更新流程、可能被防毒誤判）。
+- ★★ **不可把執行期需要的檔案放進 `bundle.resources`**。本程式優先走 `update_app_inplace`（只換 exe 一個檔，才不會被 NSIS 解除安裝流程拔掉工作列釘選），所以只有完整安裝才會送達的檔案，**永遠到不了已經更新過的使用者手上**。v1.5.0 就是這樣整批失效的：`icons/themed/*.ico` 走 resources，就地更新沒帶到，log 只留下一行「找不到圖標資源」。執行期要用的東西一律 `include_bytes!` 編進 exe。
+
+## 圖標檔怎麼送到使用者機器上
+
+兩張 .ico 用 `include_bytes!` 編進 exe，啟動時寫到 `%LOCALAPPDATA%\久世登入器\icons\`（內容相同就不重寫）。
+捷徑的圖示欄位指向的是那兩個檔案，所以磁碟上必須真的有；視窗圖示則直接吃 exe 裡的位元組，寫檔失敗也照樣會換。
+
+★ 這條路徑是被就地更新逼出來的，理由見「禁止」段最後一條。
 
 ## 前提：currentUser 安裝
 
@@ -46,7 +54,7 @@ pub fn apply(app: &AppHandle, theme: IconTheme)
 |---|---|
 | `icons/bunny_cream_1024.png`、`icons/bunny_navy_1024.png` | **來源圖**。所有衍生檔都從這兩張產生 |
 | `icons/icon.ico` 與 `icons/*.png`、`icons/icon.icns` | 編譯期內嵌的預設圖示（= cream），由 `tauri icon` 產生 |
-| `icons/themed/cream.ico`、`icons/themed/navy.ico` | 執行期用，透過 `tauri.conf.json` 的 `bundle.resources` 打包 |
+| `icons/themed/cream.ico`、`icons/themed/navy.ico` | 執行期用，`include_bytes!` **編進 exe**；啟動時寫到 `%LOCALAPPDATA%\久世登入器\icons\` |
 
 設計：macOS 風格 squircle（超橢圓 n=5），952/1024 本體、垂直漸層、內緣頂部高光、雙層投影。
 兩色：cream `#FFF3DE`、navy `#2E3D59`。
@@ -55,8 +63,7 @@ pub fn apply(app: &AppHandle, theme: IconTheme)
 
 1. 產一張 1024×1024 的 `icons/bunny_<色名>_1024.png`（來源美術素材不在 repo 內，見下）
 2. `npx tauri icon src-tauri/icons/bunny_<色名>_1024.png -o <暫存目錄>`，把產出的 `icon.ico` 複製成 `icons/themed/<色名>.ico`
-3. `tauri.conf.json` 的 `bundle.resources` 加一行
-4. `IconTheme` 加一個 variant 與對應檔名
+3. `IconTheme` 加一個 variant，`icon_file()` 與 `bytes()` 各補一行（`bytes()` 的 `include_bytes!` 就是它進到安裝檔的方式，不要動 `bundle.resources`）
 
 `tauri icon` 產出的 .ico 含 16/24/32/48/64/256，沒有 128；缺的尺寸由 Windows 從最接近的那張縮。
 規格書 [#7](https://github.com/xense999/KZ-Login/issues/7) 原本寫要含 128，改掉是為了整條產線只用 repo 既有的 `npx tauri icon`——
