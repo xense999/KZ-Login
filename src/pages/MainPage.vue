@@ -4,6 +4,7 @@ import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "../composables/useToast";
 import { useAccountsStore, type BeanfunAccount } from "../stores/accounts";
+import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useDiscord";
 
 const HUES = [210, 150, 270, 35, 0, 190];
 function hue(id: string) {
@@ -258,7 +259,10 @@ function commitRename(accountId: string, sn: string) {
   }
 }
 
-async function shareLaunch(account: BeanfunAccount, sn: string) {
+const { shareKeyToDiscord } = useDiscordShare();
+
+async function shareLaunch(account: BeanfunAccount, game: { sn: string; sname: string; localName: string | null }) {
+  const sn = game.sn;
   if (!account.token) { errorMap.value[sn] = "SESSION_EXPIRED"; return; }
   loadingOtp.value.add(sn);
   errorMap.value[sn] = "";
@@ -270,6 +274,21 @@ async function shareLaunch(account: BeanfunAccount, sn: string) {
     await writeText(uri);
     copiedOtp.value.add(sn);
     setTimeout(() => copiedOtp.value.delete(sn), 1800);
+
+    // 剪貼簿已經拿到金鑰了，Discord 這段是額外的——傳不出去也不影響 ✓。
+    if (shareKeyToDiscord.value) {
+      const sent = await sendEmbed({
+        title: displayName(game),
+        description: `\`\`\`\n${uri}\n\`\`\``,
+        color: EMBED_COLOR_KEY,
+      });
+      toast(
+        sent
+          ? "已複製金鑰，並傳送到 Discord 頻道"
+          : "已複製金鑰，但傳送到 Discord 失敗",
+        sent ? undefined : { kind: "error" }
+      );
+    }
   } catch (e: unknown) {
     const raw = e instanceof Error ? e.message : String(e);
     const msg = cleanError(raw);
@@ -519,7 +538,7 @@ function cleanError(msg: string): string {
               <button class="btn-pill auto-btn" :class="{ done: copiedOtp.has(game.sn) }"
                 :disabled="!acc.token || loadingOtp.has(game.sn)"
                 title="複製此帳號的分享登入金鑰"
-                @click.stop="shareLaunch(acc, game.sn)">
+                @click.stop="shareLaunch(acc, game)">
                 <span v-if="loadingOtp.has(game.sn)" class="spin"></span>
                 <template v-else-if="copiedOtp.has(game.sn)">✓</template>
                 <svg v-else viewBox="0 0 16 16" fill="none" width="13" height="13">

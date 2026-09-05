@@ -7,6 +7,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "../composables/useToast";
 import { useTheme } from "../composables/useTheme";
+import { useDiscordShare } from "../composables/useDiscord";
 
 const AUTHOR_DISCORD = "xense999";
 const GITHUB_URL = "https://github.com/xense999";
@@ -25,8 +26,45 @@ const showAbout = ref(false);
 const appVersion = ref("");
 const discordCopied = ref(false);
 
+// 「通知設定」標題連點五下才顯示金鑰同步開關。限時是為了讓「隔幾天各點一下」
+// 不會累積成解鎖——只有刻意的連點才算。
+const TAP_WINDOW_MS = 1500;
+const TAP_TARGET = 5;
+const { unlocked, shareKeyToDiscord, unlockAdvanced, setShareKeyToDiscord } = useDiscordShare();
+let tapCount = 0;
+let tapTimer: ReturnType<typeof setTimeout> | undefined;
+
+// 以「已儲存的」webhook 為準，不是輸入框的即時值——設定頁可以不按儲存就用齒輪
+// 離開，否則會出現開關存了、webhook 沒存，按分享只會傳送失敗的組合。
+const savedWebhook = ref("");
+const shareKeyDisabled = computed(() => !savedWebhook.value);
+const shareKeyHint = computed(() =>
+  shareKeyDisabled.value
+    ? "請先在下方填入 Discord Webhook 網址並儲存"
+    : "開啟後，按子帳號的「分享登入金鑰」時會同步把金鑰傳到上方設定的 Discord 頻道。"
+);
+
+function onNotifyTitleTap() {
+  if (unlocked.value) return;
+  tapCount += 1;
+  clearTimeout(tapTimer);
+  if (tapCount >= TAP_TARGET) {
+    tapCount = 0;
+    unlockAdvanced();
+    toast("已開啟進階選項");
+    return;
+  }
+  tapTimer = setTimeout(() => { tapCount = 0; }, TAP_WINDOW_MS);
+}
+
+function toggleShareKey() {
+  if (shareKeyDisabled.value) return;
+  setShareKeyToDiscord(!shareKeyToDiscord.value);
+}
+
 onMounted(async () => {
   webhookUrl.value = localStorage.getItem(WEBHOOK_KEY) ?? "";
+  savedWebhook.value = webhookUrl.value;
   try { gamePath.value = await invoke<string>("get_game_path"); } catch { /* ignore */ }
   try { appVersion.value = await getVersion(); } catch { /* ignore */ }
 });
@@ -133,6 +171,7 @@ async function save() {
   const wh = webhookUrl.value.trim();
   if (wh) localStorage.setItem(WEBHOOK_KEY, wh);
   else localStorage.removeItem(WEBHOOK_KEY);
+  savedWebhook.value = wh;
 
   const gp = gamePath.value.trim();
   if (gp) {
@@ -172,8 +211,18 @@ async function supportAuthor() {
       </div>
 
       <div class="card">
-        <div class="row col">
-          <span class="row-title" title="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
+        <div class="row col switch-row">
+          <span class="row-title" @click="onNotifyTitleTap" title="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
+          <button
+            v-if="unlocked"
+            class="pill-switch"
+            :class="{ on: shareKeyToDiscord && !shareKeyDisabled }"
+            :disabled="shareKeyDisabled"
+            :title="shareKeyHint"
+            @click="toggleShareKey"
+          >
+            <span class="pill-knob"></span>
+          </button>
         </div>
         <div class="row-sep"></div>
         <div class="path-row">
@@ -321,10 +370,54 @@ async function supportAuthor() {
   min-height: unset;
 }
 
+/* 標題與開關同列，但沿用 .row.col 的內距，跟隔壁「遊戲路徑」卡片高度一致 */
+.row.col.switch-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+/* 連點解鎖時不要把標題反白選起來 */
+.switch-row .row-title {
+  user-select: none;
+}
+
 .row-title {
   font-size: 14px;
   font-weight: 400;
   color: var(--text);
+}
+
+/* ── 膠囊開關 ── */
+.pill-switch {
+  flex: none;
+  width: 34px;
+  height: 19px;
+  padding: 2px;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: background 0.18s ease;
+}
+.pill-switch:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.pill-switch.on {
+  background: var(--primary-color);
+}
+.pill-knob {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.18s ease;
+}
+.pill-switch.on .pill-knob {
+  transform: translateX(15px);
 }
 .row-desc {
   font-size: 12px;

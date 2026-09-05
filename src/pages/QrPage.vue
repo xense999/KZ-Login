@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "../composables/useToast";
+import { sendEmbed, EMBED_COLOR_LINK } from "../composables/useDiscord";
 
 const emit = defineEmits<{
   cancel: [];
@@ -46,22 +47,12 @@ async function copyDeeplink() {
   const shareUrl = `${REDIRECT_BASE}#${b64}`;
   await writeText(shareUrl);
 
-  let sentToDiscord = false;
-  const webhook = localStorage.getItem("kusei:discord_webhook");
-  if (webhook) {
-    try {
-      await fetch(webhook, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: "久世登入器",
-          avatar_url: "https://raw.githubusercontent.com/xense999/KZ-Login/master/public/avatar.png",
-          content: `[登入連結](${shareUrl})`,
-        }),
-      });
-      sentToDiscord = true;
-    } catch { /* fallback to clipboard-only */ }
-  }
+  // 標題直接掛網址：整條標題都可點，手機上最好按，也不必把長網址攤在卡片裡。
+  const sentToDiscord = await sendEmbed({
+    title: "登入連結",
+    url: shareUrl,
+    color: EMBED_COLOR_LINK,
+  });
 
   linkCopied.value = true;
   setTimeout(() => { linkCopied.value = false; }, 2000);
