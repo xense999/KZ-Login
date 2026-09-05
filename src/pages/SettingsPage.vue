@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -34,13 +34,10 @@ const { unlocked, shareKeyToDiscord, unlockAdvanced, lockAdvanced, setShareKeyTo
 let tapCount = 0;
 let tapTimer: ReturnType<typeof setTimeout> | undefined;
 
-// 以「已儲存的」webhook 為準，不是輸入框的即時值——設定頁可以不按儲存就用齒輪
-// 離開，否則會出現開關存了、webhook 沒存，按分享只會傳送失敗的組合。
-const savedWebhook = ref("");
-const shareKeyDisabled = computed(() => !savedWebhook.value);
+const shareKeyDisabled = computed(() => !webhookUrl.value.trim());
 const shareKeyHint = computed(() =>
   shareKeyDisabled.value
-    ? "請先在下方填入 Discord Webhook 網址並儲存"
+    ? "請先在下方填入 Discord Webhook 網址"
     : "開啟後，按子帳號的「分享登入金鑰」時會同步把金鑰傳到上方設定的 Discord 頻道。"
 );
 
@@ -68,7 +65,12 @@ function toggleShareKey() {
 
 onMounted(async () => {
   webhookUrl.value = localStorage.getItem(WEBHOOK_KEY) ?? "";
-  savedWebhook.value = webhookUrl.value;
+  // onMounted 之後才掛 watch，否則初始化那次讀取會反過來寫一次 localStorage
+  watch(webhookUrl, (v) => {
+    const wh = v.trim();
+    if (wh) localStorage.setItem(WEBHOOK_KEY, wh);
+    else localStorage.removeItem(WEBHOOK_KEY);
+  });
   try { gamePath.value = await invoke<string>("get_game_path"); } catch { /* ignore */ }
   try { appVersion.value = await getVersion(); } catch { /* ignore */ }
 });
@@ -172,11 +174,6 @@ async function browse() {
 }
 
 async function save() {
-  const wh = webhookUrl.value.trim();
-  if (wh) localStorage.setItem(WEBHOOK_KEY, wh);
-  else localStorage.removeItem(WEBHOOK_KEY);
-  savedWebhook.value = wh;
-
   const gp = gamePath.value.trim();
   if (gp) {
     try {

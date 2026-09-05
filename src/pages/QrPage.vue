@@ -49,7 +49,7 @@ async function copyDeeplink() {
 
   // 標題直接掛網址：整條標題都可點，手機上最好按，也不必把長網址攤在卡片裡。
   const sentToDiscord = await sendEmbed({
-    title: "登入連結",
+    title: "久世登入器 · 登入連結",
     url: shareUrl,
     color: EMBED_COLOR_LINK,
   });

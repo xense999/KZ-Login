@@ -36,13 +36,9 @@ export async function sendEmbed(embed: Embed): Promise<boolean> {
       body: JSON.stringify({
         username: WEBHOOK_NAME,
         avatar_url: WEBHOOK_AVATAR,
-        embeds: [
-          {
-            ...embed,
-            timestamp: new Date().toISOString(),
-            footer: { text: WEBHOOK_NAME },
-          },
-        ],
+        // 不放 footer：卡片上方的發送者名稱與 title 都已經帶了工具名，
+        // 再寫一次就是同一張卡片重複三遍。沒有 footer 時 timestamp 仍會單獨顯示。
+        embeds: [{ ...embed, timestamp: new Date().toISOString() }],
       }),
     });
     return true;
