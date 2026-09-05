@@ -30,7 +30,7 @@ const discordCopied = ref(false);
 // 不會累積成解鎖——只有刻意的連點才算。
 const TAP_WINDOW_MS = 1500;
 const TAP_TARGET = 5;
-const { unlocked, shareKeyToDiscord, unlockAdvanced, setShareKeyToDiscord } = useDiscordShare();
+const { unlocked, shareKeyToDiscord, unlockAdvanced, lockAdvanced, setShareKeyToDiscord } = useDiscordShare();
 let tapCount = 0;
 let tapTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -45,13 +45,17 @@ const shareKeyHint = computed(() =>
 );
 
 function onNotifyTitleTap() {
-  if (unlocked.value) return;
   tapCount += 1;
   clearTimeout(tapTimer);
   if (tapCount >= TAP_TARGET) {
     tapCount = 0;
-    unlockAdvanced();
-    toast("已開啟進階選項");
+    if (unlocked.value) {
+      lockAdvanced();
+      toast("已隱藏進階選項");
+    } else {
+      unlockAdvanced();
+      toast("已開啟進階選項");
+    }
     return;
   }
   tapTimer = setTimeout(() => { tapCount = 0; }, TAP_WINDOW_MS);
@@ -399,6 +403,8 @@ async function supportAuthor() {
   cursor: pointer;
   display: flex;
   align-items: center;
+  /* 全域 button 規則是 justify-content: center，會把圓點推到中間 */
+  justify-content: flex-start;
   transition: background 0.18s ease;
 }
 .pill-switch:disabled {

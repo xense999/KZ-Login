@@ -65,5 +65,11 @@ export function useDiscordShare() {
     shareKeyToDiscord.value = on;
     localStorage.setItem(SHARE_KEY_KEY, on ? "1" : "0");
   }
-  return { unlocked, shareKeyToDiscord, unlockAdvanced, setShareKeyToDiscord };
+  // 收起來時一併關掉同步——留著開關值等於功能還在跑，但開關已經看不見了。
+  function lockAdvanced() {
+    unlocked.value = false;
+    localStorage.removeItem(ADVANCED_KEY);
+    setShareKeyToDiscord(false);
+  }
+  return { unlocked, shareKeyToDiscord, unlockAdvanced, lockAdvanced, setShareKeyToDiscord };
 }
