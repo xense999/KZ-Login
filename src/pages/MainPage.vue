@@ -278,8 +278,11 @@ async function shareLaunch(account: BeanfunAccount, game: { sn: string; sname: s
     // 剪貼簿已經拿到金鑰了，Discord 這段是額外的——傳不出去也不影響 ✓。
     if (shareKeyToDiscord.value) {
       const sent = await sendEmbed({
-        title: `久世登入器 ·「${displayName(game)}」的登入金鑰`,
-        description: `點一下即可複製金鑰，再到登入器按「代理登入」\n\`\`\`\n${uri}\n\`\`\``,
+        title: `久世登入器｜帳號名稱："${displayName(game)}"`,
+        // 說明與金鑰各自一個 code block：金鑰那塊的複製鈕才不會把說明也複製走
+        description:
+          "```\n右上角點一下即可複製金鑰，再到登入器按「代理登入」\n```\n" +
+          `\`\`\`\n${uri}\n\`\`\``,
         color: EMBED_COLOR_KEY,
       });
       toast(
