@@ -101,10 +101,10 @@ body {
   user-select: none;
   -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
-  /* keep layout identical under the Windows accessibility text-size setting,
-     which scales fonts without scaling their containers */
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
+  /* The Windows accessibility text-size setting is not something CSS can hold
+     back: WebView2 folds it into whole-page scaling, and text-size-adjust only
+     governs mobile text inflation. The fix lives in Rust — win::text_scale_factor
+     grows the window by the same factor the page grew by. */
 }
 
 button {

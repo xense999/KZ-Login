@@ -1,7 +1,7 @@
 # browser — 模組規範
 
 > 本模組契約的唯一 owner。涵蓋 Rust 端 `browser` 模組與它專屬的工具列前端 `BrowserShell`。
-> 最後更新：2026-09-08（工具列 label 改逐組換號）
+> 最後更新：2026-09-08（工具列 label 改逐組換號；貼合改吃系統文字倍率）
 
 ## 架構（為什麼長這樣）
 
@@ -41,6 +41,7 @@
 - **工具列 label 每開一組換一個號碼**（`toolbar_label(generation)`），不得改回固定字串。`destroy()` 一律走 `proxy.send_event`（tauri-runtime-wry 2.11 的 `destroy` 明文不走 `send_user_message`），tauri 的 webview 簿記要等 event loop 收到 `Destroyed` 才清 label——「砍幽靈→立刻用同一個 label 建新視窗」**必定**報 `a webview with label ... already exists`。Edge 在背景更新收掉 WebView2 留下幽靈時走的就是這條路。capability 因此是 glob `browser-shell-*`（`capabilities/browser.json`）。
 - 開新一組前掃殘骸靠 `is_browser_label`（舊工具列＋所有分頁），**不等它們消失**。
 - 工具列視窗一動（Moved/Resized/ScaleFactorChanged）就 `relayout_tabs` 把**所有**分頁貼回框裡（隱藏中的也排，切換時才不閃舊位置）。
+- **算貼合位置要用 `css_to_px(scale_factor())`，不是裸的 `scale_factor()`**：Windows 的「協助工具 → 文字大小」不進 tao 回報的 DPI，卻被 WebView2 併進整頁縮放，殼層畫出來的標題列因此比 `TOOLBAR_H * scale_factor()` 高——少算就讓分頁視窗往上蓋掉分頁列與網址列。工具列的初始尺寸與下限同樣要乘 `text_scale()`；記住的幾何是實體像素、已含當時的設定，不再乘一次。
 - 網頁要求的新視窗：**帶尺寸特徵（`features.size()` 有值）→ `Allow` 原生彈窗**（金流靠 `window.opener` 回報付款結果）；**沒帶尺寸 → `Create` 開成分頁**（走 `SetNewWindow`，opener 一樣保留）。分頁開不成要退回 `Allow`，不可吞掉連結。
 - `Create` 的分頁 builder 必須套 `window_features(features)`（沿用來源 webview 的 WebView2 environment，`Create` 的硬性要求），且**不得自行 navigate**（內容由 WebView2 灌入）。
 - 關掉最後一個分頁＝關掉整個瀏覽器，且要走 `toolbar.close()`（讓 `CloseRequested` 存幾何）；工具列 `Destroyed` 時補 destroy 所有分頁並清空 `STATE` 與 `WINDOW_OWNER`。

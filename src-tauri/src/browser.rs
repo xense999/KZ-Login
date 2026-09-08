@@ -55,6 +55,32 @@ fn tab_label(id: u64) -> String {
     format!("{TAB_LABEL_PREFIX}{id}")
 }
 
+/// CSS 像素換算成實體像素的比率。**不等於 `scale_factor()`**：Windows 的
+/// 「協助工具 → 文字大小」不進 tao 回報的 DPI，卻會被 WebView2 併進自己的縮放
+/// （見 `crate::win::text_scale_factor`），所以殼層畫出來的標題列在螢幕上比
+/// `TOOLBAR_H * scale_factor()` 高——少算就會讓分頁視窗往上蓋掉分頁列與網址列。
+fn text_scale() -> f64 {
+    #[cfg(windows)]
+    {
+        crate::win::text_scale_factor()
+    }
+    #[cfg(not(windows))]
+    {
+        1.0
+    }
+}
+
+fn css_to_px(window_scale: f64) -> f64 {
+    #[cfg(windows)]
+    {
+        window_scale * text_scale()
+    }
+    #[cfg(not(windows))]
+    {
+        window_scale
+    }
+}
+
 /// 這個 label 是不是帳號瀏覽器的視窗（任何一組的工具列或分頁）。掃殘骸用。
 fn is_browser_label(label: &str) -> bool {
     label.starts_with(TOOLBAR_LABEL_PREFIX) || label.starts_with(TAB_LABEL_PREFIX)
@@ -473,7 +499,8 @@ fn monitor_rects<R: Runtime>(app: &AppHandle<R>) -> Vec<MonitorRect> {
 // ─── 版面 ─────────────────────────────────────────────────────────────────────
 
 /// 分頁視窗在螢幕上的實體位置與大小：貼在工具列視窗畫出的框裡面（邊框內、工具列
-/// 下方）。輸入是工具列視窗的實體位置、實體大小與 DPI 縮放。放不下就回 `None`
+/// 下方）。輸入是工具列視窗的實體位置、實體大小，以及 **CSS 像素換算實體像素的
+/// 比率**（`css_to_px`，不是裸的 `scale_factor()`）。放不下就回 `None`
 /// （最小化時 size 是 0×0）。
 fn tab_rect_px(
     pos: (i32, i32),
@@ -502,7 +529,8 @@ fn relayout_tabs<R: Runtime>(app: &AppHandle<R>) {
     ) else {
         return;
     };
-    let Some((x, y, w, h)) = tab_rect_px((pos.x, pos.y), (size.width, size.height), scale)
+    let Some((x, y, w, h)) =
+        tab_rect_px((pos.x, pos.y), (size.width, size.height), css_to_px(scale))
     else {
         return;
     };
@@ -706,8 +734,11 @@ pub fn open<R: Runtime>(
     let label = toolbar_label(generation);
     let toolbar = WebviewWindowBuilder::new(app, label, WebviewUrl::App(shell_url.into()))
         .title(alias)
-        .inner_size(DEFAULT_W, DEFAULT_H)
-        .min_inner_size(MIN_W, MIN_H)
+        // 初始尺寸也要吃文字倍率，否則第一次開就是被裁掉的版面。記住的幾何是
+        // 實體像素、已經帶著使用者當時的設定，所以下面套用時不再乘一次。
+        .inner_size(DEFAULT_W * text_scale(), DEFAULT_H * text_scale())
+        // 下限跟著一起放大，否則放大倍率下還是縮得到「CSS 寬度比設計最小值更小」
+        .min_inner_size(MIN_W * text_scale(), MIN_H * text_scale())
         .decorations(false)
         .transparent(true)
         .shadow(false)

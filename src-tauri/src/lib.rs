@@ -131,6 +131,65 @@ mod win {
         Some((r.left, r.top, r.right, r.bottom))
     }
 
+    /// Windows「設定 → 協助工具 → 文字大小」的倍率（1.0＝100%，最大 2.25）。
+    /// 沒調過的機器連這個值都不存在，所以讀不到一律當 100%。
+    ///
+    /// ★這個設定**不會**改變 `GetDpiForWindow` 回報的 DPI，所以 tao 算出來的視窗
+    /// 尺寸完全不含它；WebView2 卻把它併進自己的縮放——Microsoft 在
+    /// WebView2Feedback#3699 的說法是「we tie the text setting with DPI scaling
+    /// for both the browser and WebView2」，也就是整頁一起放大而不是只放大字。
+    /// 兩邊對不起來，頁面就比視窗大一圈、右邊與下面被裁掉。
+    ///
+    /// ★只讀一次就記住：拖動帳號瀏覽器時 `relayout_tabs` 會被高頻觸發，每個
+    /// `Moved` 都去開一次登錄檔太浪費。副作用剛好就是想要的行為——改完設定要
+    /// 重開程式才生效。
+    pub fn text_scale_factor() -> f64 {
+        static CACHED: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+        *CACHED.get_or_init(|| {
+            use winreg::enums::HKEY_CURRENT_USER;
+            use winreg::RegKey;
+            let percent = RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey(r"Software\Microsoft\Accessibility")
+                .ok()
+                .and_then(|k| k.get_value::<u32, _>("TextScaleFactor").ok())
+                .unwrap_or(100);
+            percent.clamp(100, 225) as f64 / 100.0
+        })
+    }
+
+    /// 視窗要多大才裝得下被放大的頁面。**夾在工作區以內**：文字調到 225% 時
+    /// 640 的高度會要 1440，1080p 螢幕根本放不下，寧可切掉一點內容，也不要讓
+    /// 視窗大到標題列跑出螢幕外變成抓不到、關不掉。
+    pub fn size_for_text_scale(base: (u32, u32), scale: f64, work: (u32, u32)) -> (u32, u32) {
+        let scaled = |v: u32, limit: u32| {
+            let want = (v as f64 * scale).round() as u32;
+            if limit == 0 { want } else { want.min(limit) }
+        };
+        (scaled(base.0, work.0), scaled(base.1, work.1))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::size_for_text_scale;
+
+        #[test]
+        fn the_window_grows_by_the_same_factor_the_page_did() {
+            assert_eq!(size_for_text_scale((420, 640), 1.5, (1920, 1080)), (630, 960));
+        }
+
+        #[test]
+        fn a_window_too_tall_for_the_screen_is_clamped_to_the_work_area() {
+            // 225% × 640 ＝ 1440，1080p 放不下：寧可切掉內容也不要讓標題列跑出螢幕。
+            assert_eq!(size_for_text_scale((420, 640), 2.25, (1920, 1040)), (945, 1040));
+        }
+
+        #[test]
+        fn without_a_work_area_the_size_is_left_unclamped() {
+            // 問不到工作區時不能夾——夾成 0 等於把視窗弄不見。
+            assert_eq!(size_for_text_scale((420, 640), 1.5, (0, 0)), (630, 960));
+        }
+    }
+
     unsafe fn post_key(hwnd: HWND, vk: u32) {
         let scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
         let dn = ((scan << 16) | 1) as isize;
@@ -868,6 +927,25 @@ pub fn run() {
             // 用工作區（扣掉工作列）而非螢幕尺寸，否則會被工作列蓋掉一截；用 outer_size
             // （含外框）不是設定檔尺寸，DPI 縮放時才不會少算。
             if let Some(w) = app.get_webview_window("main") {
+                // 系統文字大小放大了頁面，卻沒放大視窗（見 win::text_scale_factor），
+                // 內容因此溢出被裁掉。把視窗乘回同一個倍率，CSS 視口就回到設計時的
+                // 420×640，版面比例一模一樣、字跟著變大——使用者調大文字本來就是要
+                // 看得清楚，用 set_zoom 壓回去只會換成「字太小」的抱怨。
+                // ★只在啟動時讀一次：改完設定要重開程式才生效。
+                #[cfg(windows)]
+                {
+                    let scale = win::text_scale_factor();
+                    if scale > 1.0 {
+                        if let (Ok(sz), Some((l, t, r, b))) =
+                            (w.inner_size(), win::primary_work_area())
+                        {
+                            let work = ((r - l).max(0) as u32, (b - t).max(0) as u32);
+                            let (nw, nh) =
+                                win::size_for_text_scale((sz.width, sz.height), scale, work);
+                            let _ = w.set_size(tauri::PhysicalSize::new(nw, nh));
+                        }
+                    }
+                }
                 if let (Some((_, _, right, bottom)), Ok(sz)) = (win::primary_work_area(), w.outer_size()) {
                     let x = right - sz.width as i32;
                     let y = bottom - sz.height as i32;
