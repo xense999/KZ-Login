@@ -874,6 +874,21 @@ pub fn run() {
                     let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
                 }
                 swallow_refresh_keys(&w);
+
+                // 關掉主視窗＝結束整個程式。沒有這段的話，只要帳號瀏覽器還開著，
+                // event loop 就認為還有視窗活著而不退出——而主視窗一關就再也叫不
+                // 回來（沒有系統匣、沒有 single instance、沒有任何 show 回主視窗的
+                // 路徑）。帳號瀏覽器留下的幽靈條目更是永遠不會消失，那時連進程都
+                // 退不掉，會一直留在背景。
+                // ★代價（使用者拍板接受）：exit 不會觸發任何視窗的 CloseRequested，
+                // 帳號瀏覽器的視窗幾何（browser-window.json）因此存不到——先關主視窗
+                // 的那條路，下次開瀏覽器會回到預設大小位置。
+                let exit_handle = app.handle().clone();
+                w.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                        exit_handle.exit(0);
+                    }
+                });
             }
             Ok(())
         })
