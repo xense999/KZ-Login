@@ -1,7 +1,7 @@
 # browser — 模組規範
 
 > 本模組契約的唯一 owner。涵蓋 Rust 端 `browser` 模組與它專屬的工具列前端 `BrowserShell`。
-> 最後更新：2026-09-08（工具列 label 改逐組換號；貼合改吃系統文字倍率）
+> 最後更新：2026-09-09（工具列 label 改逐組換號；貼合與視窗尺寸改吃系統文字倍率）
 
 ## 架構（為什麼長這樣）
 
@@ -41,10 +41,11 @@
 - **工具列 label 每開一組換一個號碼**（`toolbar_label(generation)`），不得改回固定字串。`destroy()` 一律走 `proxy.send_event`（tauri-runtime-wry 2.11 的 `destroy` 明文不走 `send_user_message`），tauri 的 webview 簿記要等 event loop 收到 `Destroyed` 才清 label——「砍幽靈→立刻用同一個 label 建新視窗」**必定**報 `a webview with label ... already exists`。Edge 在背景更新收掉 WebView2 留下幽靈時走的就是這條路。capability 因此是 glob `browser-shell-*`（`capabilities/browser.json`）。
 - 開新一組前掃殘骸靠 `is_browser_label`（舊工具列＋所有分頁），**不等它們消失**。
 - 工具列視窗一動（Moved/Resized/ScaleFactorChanged）就 `relayout_tabs` 把**所有**分頁貼回框裡（隱藏中的也排，切換時才不閃舊位置）。
-- **算貼合位置要用 `css_to_px(scale_factor())`，不是裸的 `scale_factor()`**：Windows 的「協助工具 → 文字大小」不進 tao 回報的 DPI，卻被 WebView2 併進整頁縮放，殼層畫出來的標題列因此比 `TOOLBAR_H * scale_factor()` 高——少算就讓分頁視窗往上蓋掉分頁列與網址列。工具列的初始尺寸與下限同樣要乘 `text_scale()`；記住的幾何是實體像素、已含當時的設定，不再乘一次。
+- **算貼合位置要用 `css_to_px(scale_factor())`，不是裸的 `scale_factor()`**：Windows 的「協助工具 → 文字大小」不進 tao 回報的 DPI，卻被 WebView2 併進整頁縮放，殼層畫出來的標題列因此比 `TOOLBAR_H * scale_factor()` 高——少算就讓分頁視窗往上蓋掉分頁列與網址列。
+- **工具列的初始尺寸與下限走 `win::size_for_text_scale`**（與主視窗同一個函式，不另寫一份）：乘上倍率**並夾進工作區**。不夾的話 `DEFAULT_H` 在 225% 下算出 1620，比多數螢幕高，而工具列的標題列是自繪的，視窗一超出螢幕就抓不到、關不掉。記住的幾何是實體像素、已含當時的設定，直接套、不再乘一次。
 - 網頁要求的新視窗：**帶尺寸特徵（`features.size()` 有值）→ `Allow` 原生彈窗**（金流靠 `window.opener` 回報付款結果）；**沒帶尺寸 → `Create` 開成分頁**（走 `SetNewWindow`，opener 一樣保留）。分頁開不成要退回 `Allow`，不可吞掉連結。
 - `Create` 的分頁 builder 必須套 `window_features(features)`（沿用來源 webview 的 WebView2 environment，`Create` 的硬性要求），且**不得自行 navigate**（內容由 WebView2 灌入）。
-- 關掉最後一個分頁＝關掉整個瀏覽器，且要走 `toolbar.close()`（讓 `CloseRequested` 存幾何）；工具列 `Destroyed` 時補 destroy 所有分頁並清空 `STATE` 與 `WINDOW_OWNER`。
+- 關掉最後一個分頁＝關掉整個瀏覽器，且要走 `toolbar.close()`（讓 `CloseRequested` 存幾何）；工具列 `Destroyed` 時補 destroy 所有分頁並清空 `STATE` 與 `WINDOW_OWNER`。**例外＝先關主視窗**：那條路走 `app.exit(0)`，不觸發任何視窗的 `CloseRequested`，幾何不會被存（見已知取捨）。
 - 分頁網址的更新要掛 **`on_navigation`**（回 `true` 放行）＋`on_page_load(Finished)` 兩處：上一頁/下一頁這類歷史導航**不觸發 on_page_load**，只靠它網址列會停在舊網址（重寫當日實測踩到）。`about:blank` 不推進網址列。
 - 殼層任何區塊都不能長高：工具列高度是 Rust 算好的。錯誤訊息蓋在網址列上。
 - 視窗先 `visible(false)` 開、套完幾何才 `show()`；分頁先 `relayout` 再顯示。
@@ -70,3 +71,5 @@
 - 守門只看工具列視窗；原生彈窗比它長壽時，開別的帳號會踩掉彈窗的登入態（彈窗通常短命，暫時接受）。
 - 上下頁走手打 COM（`GoBack`/`GoForward`）；上下頁鈕一律可按（問 `CanGoBack` 要嘛阻塞要嘛加事件管線，先不做 disabled 狀態）。
 - 拖動工具列時分頁靠 `Moved` 事件跟隨，理論上有一兩幀的延遲；實測貼合正確，手感待使用者驗收。
+- **先關主視窗＝不存瀏覽器幾何**：主視窗的 `CloseRequested` 走 `app.exit(0)` 結束整個程式（沒有系統匣也沒有 single-instance，主視窗一關就叫不回來，而幽靈視窗條目會讓進程連退都退不掉）。`exit` 直接停掉 event loop，不觸發任何視窗的 `CloseRequested`，所以這條路存不到 `browser-window.json`。使用者 2026-09-09 拍板接受（另一案「先存幾何再 exit」當場否決）。
+- **改完系統文字大小要重開程式**：倍率只在啟動時讀一次（`win::text_scale_factor` 用 `OnceLock` 快取，否則拖動時每個 `Moved` 都要開一次登錄檔）。改完設定直接開瀏覽器，`load_geometry` 套的會是**舊倍率**下記住的尺寸，可能偏大或偏小，手動拉一次即可。

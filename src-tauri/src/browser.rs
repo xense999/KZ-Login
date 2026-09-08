@@ -71,14 +71,7 @@ fn text_scale() -> f64 {
 }
 
 fn css_to_px(window_scale: f64) -> f64 {
-    #[cfg(windows)]
-    {
-        window_scale * text_scale()
-    }
-    #[cfg(not(windows))]
-    {
-        window_scale
-    }
+    window_scale * text_scale()
 }
 
 /// 這個 label 是不是帳號瀏覽器的視窗（任何一組的工具列或分頁）。掃殘骸用。
@@ -505,11 +498,11 @@ fn monitor_rects<R: Runtime>(app: &AppHandle<R>) -> Vec<MonitorRect> {
 fn tab_rect_px(
     pos: (i32, i32),
     size: (u32, u32),
-    scale: f64,
+    px_per_css: f64,
 ) -> Option<(i32, i32, u32, u32)> {
-    let scale = if scale > 0.0 { scale } else { 1.0 };
-    let edge = (EDGE * scale).round() as i32;
-    let top = (TOOLBAR_H * scale).round() as i32;
+    let px_per_css = if px_per_css > 0.0 { px_per_css } else { 1.0 };
+    let edge = (EDGE * px_per_css).round() as i32;
+    let top = (TOOLBAR_H * px_per_css).round() as i32;
     let w = size.0 as i32 - edge * 2;
     let h = size.1 as i32 - top - edge;
     if w <= 0 || h <= 0 {
@@ -662,8 +655,17 @@ pub fn open<R: Runtime>(
             if let Some(window) = existing {
                 window.unminimize().ok();
                 window.set_focus().map_err(|e| e.to_string())?;
+                return Ok(());
             }
-            return Ok(());
+            // 判到 Focus 卻查不到視窗，只有兩種可能。前者無事：視窗還在建、
+            // 還沒進簿記，這就是連點的第二下。
+            if OPENING.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            // 後者是 `STATE` 鎖壞掉，`toolbar_window()` 因此回不出視窗。契約要求
+            // 失敗要講出來——靜默 `Ok` 會讓使用者點了完全沒反應，還以為程式當了。
+            eprintln!("[browser] 判定要帶到前景，卻查不到工具列視窗（狀態鎖可能已損壞）");
+            return Err("瀏覽器狀態異常，請重新啟動程式".to_string());
         }
         Decision::Refuse => return Err("BROWSER_STILL_OPEN".to_string()),
         Decision::Open => {}
@@ -734,11 +736,8 @@ pub fn open<R: Runtime>(
     let label = toolbar_label(generation);
     let toolbar = WebviewWindowBuilder::new(app, label, WebviewUrl::App(shell_url.into()))
         .title(alias)
-        // 初始尺寸也要吃文字倍率，否則第一次開就是被裁掉的版面。記住的幾何是
-        // 實體像素、已經帶著使用者當時的設定，所以下面套用時不再乘一次。
-        .inner_size(DEFAULT_W * text_scale(), DEFAULT_H * text_scale())
-        // 下限跟著一起放大，否則放大倍率下還是縮得到「CSS 寬度比設計最小值更小」
-        .min_inner_size(MIN_W * text_scale(), MIN_H * text_scale())
+        .inner_size(DEFAULT_W, DEFAULT_H)
+        .min_inner_size(MIN_W, MIN_H)
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -748,6 +747,27 @@ pub fn open<R: Runtime>(
         .build()
         .map_err(|e| format!("開啟瀏覽器視窗失敗：{e}"))?;
 
+    // 系統文字大小放大的是頁面，視窗要跟著長大，否則版面被裁——跟主視窗同一條
+    // 路徑（`win::size_for_text_scale`），連「不可大過工作區」的保護也共用：
+    // 工具列的標題列是自己畫的，視窗一超出螢幕就抓不到、關不掉。
+    // 開窗時是隱藏的，所以這裡改尺寸不會閃。
+    #[cfg(windows)]
+    if text_scale() > 1.0 {
+        let work = crate::win::work_area_size();
+        if let Ok(sz) = toolbar.inner_size() {
+            let (w, h) =
+                crate::win::size_for_text_scale((sz.width, sz.height), text_scale(), work);
+            let _ = toolbar.set_size(tauri::PhysicalSize::new(w, h));
+            let _ = toolbar.center();
+        }
+        if let Ok(dpi) = toolbar.scale_factor() {
+            let min = ((MIN_W * dpi).round() as u32, (MIN_H * dpi).round() as u32);
+            let (mw, mh) = crate::win::size_for_text_scale(min, text_scale(), work);
+            let _ = toolbar.set_min_size(Some(tauri::PhysicalSize::new(mw, mh)));
+        }
+    }
+
+    // 記住的幾何是實體像素、已經帶著使用者當時的文字倍率，所以直接套、不再乘一次。
     if let Some(saved) = load_geometry(app) {
         if titlebar_is_reachable(&saved, &monitor_rects(app)) {
             let _ = toolbar.set_size(tauri::PhysicalSize::new(saved.width, saved.height));

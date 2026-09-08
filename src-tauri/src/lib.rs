@@ -157,36 +157,56 @@ mod win {
         })
     }
 
+    /// 工作區的寬高（實體像素）。問不到就是 `None`——呼叫端照樣要把視窗放大，
+    /// 只是沒有上限可夾。
+    pub fn work_area_size() -> Option<(u32, u32)> {
+        let (l, t, r, b) = primary_work_area()?;
+        Some(((r - l).max(0) as u32, (b - t).max(0) as u32))
+    }
+
+    /// 尺寸夾進工作區。`work` 是 `None`（問不到工作區）就原樣放行。
+    pub fn clamp_to_work_area(size: (u32, u32), work: Option<(u32, u32)>) -> (u32, u32) {
+        match work {
+            Some((mw, mh)) => (size.0.min(mw), size.1.min(mh)),
+            None => size,
+        }
+    }
+
     /// 視窗要多大才裝得下被放大的頁面。**夾在工作區以內**：文字調到 225% 時
     /// 640 的高度會要 1440，1080p 螢幕根本放不下，寧可切掉一點內容，也不要讓
     /// 視窗大到標題列跑出螢幕外變成抓不到、關不掉。
-    pub fn size_for_text_scale(base: (u32, u32), scale: f64, work: (u32, u32)) -> (u32, u32) {
-        let scaled = |v: u32, limit: u32| {
-            let want = (v as f64 * scale).round() as u32;
-            if limit == 0 { want } else { want.min(limit) }
-        };
-        (scaled(base.0, work.0), scaled(base.1, work.1))
+    pub fn size_for_text_scale(base: (u32, u32), scale: f64, work: Option<(u32, u32)>) -> (u32, u32) {
+        let grown = (
+            (base.0 as f64 * scale).round() as u32,
+            (base.1 as f64 * scale).round() as u32,
+        );
+        clamp_to_work_area(grown, work)
     }
 
     #[cfg(test)]
     mod tests {
-        use super::size_for_text_scale;
+        use super::{clamp_to_work_area, size_for_text_scale};
 
         #[test]
         fn the_window_grows_by_the_same_factor_the_page_did() {
-            assert_eq!(size_for_text_scale((420, 640), 1.5, (1920, 1080)), (630, 960));
+            assert_eq!(size_for_text_scale((420, 640), 1.5, Some((1920, 1080))), (630, 960));
         }
 
         #[test]
         fn a_window_too_tall_for_the_screen_is_clamped_to_the_work_area() {
             // 225% × 640 ＝ 1440，1080p 放不下：寧可切掉內容也不要讓標題列跑出螢幕。
-            assert_eq!(size_for_text_scale((420, 640), 2.25, (1920, 1040)), (945, 1040));
+            assert_eq!(size_for_text_scale((420, 640), 2.25, Some((1920, 1040))), (945, 1040));
         }
 
         #[test]
-        fn without_a_work_area_the_size_is_left_unclamped() {
-            // 問不到工作區時不能夾——夾成 0 等於把視窗弄不見。
-            assert_eq!(size_for_text_scale((420, 640), 1.5, (0, 0)), (630, 960));
+        fn a_missing_work_area_still_grows_the_window() {
+            // 問不到工作區照樣要放大——不放大等於這台機器的顯示問題完全沒修。
+            assert_eq!(size_for_text_scale((420, 640), 1.5, None), (630, 960));
+        }
+
+        #[test]
+        fn clamping_leaves_a_window_that_already_fits_alone() {
+            assert_eq!(clamp_to_work_area((630, 960), Some((1920, 1040))), (630, 960));
         }
     }
 
@@ -936,12 +956,12 @@ pub fn run() {
                 {
                     let scale = win::text_scale_factor();
                     if scale > 1.0 {
-                        if let (Ok(sz), Some((l, t, r, b))) =
-                            (w.inner_size(), win::primary_work_area())
-                        {
-                            let work = ((r - l).max(0) as u32, (b - t).max(0) as u32);
-                            let (nw, nh) =
-                                win::size_for_text_scale((sz.width, sz.height), scale, work);
+                        if let Ok(sz) = w.inner_size() {
+                            let (nw, nh) = win::size_for_text_scale(
+                                (sz.width, sz.height),
+                                scale,
+                                win::work_area_size(),
+                            );
                             let _ = w.set_size(tauri::PhysicalSize::new(nw, nh));
                         }
                     }
