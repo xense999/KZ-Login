@@ -1,11 +1,11 @@
 # browser — 模組規範
 
 > 本模組契約的唯一 owner。涵蓋 Rust 端 `browser` 模組與它專屬的工具列前端 `BrowserShell`。
-> 最後更新：2026-08-18（重寫版：雙視窗貼合＋分頁）
+> 最後更新：2026-09-08（工具列 label 改逐組換號）
 
 ## 架構（為什麼長這樣）
 
-- **工具列視窗**（label `browser`，`WebviewWindow`）：自己的 webview，畫整圈邊框＋標題列（帳號名｜分頁框框｜＋）＋導覽列；transparent、上兩角圓下兩角方。
+- **工具列視窗**（label `browser-shell-{組號}`，`WebviewWindow`）：自己的 webview，畫整圈邊框＋標題列（帳號名｜分頁框框｜＋）＋導覽列；transparent、上兩角圓下兩角方。
 - **分頁視窗**（label `browser-tab-{id}`，每分頁一個 `WebviewWindow`）：owned window 疊在工具列視窗畫出的框裡（內縮 EDGE、工具列下方），切分頁＝顯示/隱藏。owner 關係讓它恆在工具列之上、跟著最小化與銷毀、不進工作列。
 - **不用 multi-webview（`Window::add_child`）**：子 webview 在 Windows 收不到鍵盤（Chromium 視為未啟用而丟鍵，2026-08-18 診斷坐實，證據見 docs/瀏覽器重寫目標.md）。獨立視窗的 webview 與主視窗同構，鍵盤正常——本架構的成立前提就是這個。
 - 不需要 tauri 的 `unstable` feature。
@@ -38,6 +38,8 @@
 - **注入不按網域過濾**，jar 有幾顆注幾顆（彈窗走 gamania 關聯網域，被過濾掉的正是那些）。單向注入，不回寫。
 - 旗標一律照抄 jar，**唯一例外是 `bfWebToken` 要拿掉 HttpOnly**（`is_js_readable_cookie`）：SSO 檢查點 `tw.newlogin.beanfun.com/checkin_step2.aspx` 的 `DealWebToken()` 是用 `document.cookie` 讀這顆的，讀不到就 `GotoLoginPage()` 把使用者打回掃碼登入頁。詳見 docs/瀏覽器登入態診斷.md。要再加例外必須先有「哪段網頁 JS 讀它」的證據。
 - 分頁視窗（`browser-tab-*`）**不得出現在任何 capability 檔**＝零 IPC——它載外部網站。
+- **工具列 label 每開一組換一個號碼**（`toolbar_label(generation)`），不得改回固定字串。`destroy()` 一律走 `proxy.send_event`（tauri-runtime-wry 2.11 的 `destroy` 明文不走 `send_user_message`），tauri 的 webview 簿記要等 event loop 收到 `Destroyed` 才清 label——「砍幽靈→立刻用同一個 label 建新視窗」**必定**報 `a webview with label ... already exists`。Edge 在背景更新收掉 WebView2 留下幽靈時走的就是這條路。capability 因此是 glob `browser-shell-*`（`capabilities/browser.json`）。
+- 開新一組前掃殘骸靠 `is_browser_label`（舊工具列＋所有分頁），**不等它們消失**。
 - 工具列視窗一動（Moved/Resized/ScaleFactorChanged）就 `relayout_tabs` 把**所有**分頁貼回框裡（隱藏中的也排，切換時才不閃舊位置）。
 - 網頁要求的新視窗：**帶尺寸特徵（`features.size()` 有值）→ `Allow` 原生彈窗**（金流靠 `window.opener` 回報付款結果）；**沒帶尺寸 → `Create` 開成分頁**（走 `SetNewWindow`，opener 一樣保留）。分頁開不成要退回 `Allow`，不可吞掉連結。
 - `Create` 的分頁 builder 必須套 `window_features(features)`（沿用來源 webview 的 WebView2 environment，`Create` 的硬性要求），且**不得自行 navigate**（內容由 WebView2 灌入）。

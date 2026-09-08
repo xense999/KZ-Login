@@ -1,8 +1,8 @@
 //! 帳號瀏覽器：帶著某個 beanfun 帳號登入態、有分頁的內建瀏覽器。
 //!
-//! 架構＝雙視窗貼合：工具列視窗（label `browser`，自己的 webview 畫邊框＋標題列
-//! ＋分頁＋導覽列）是 owner；每個分頁是一個獨立的 `WebviewWindow`（owned window，
-//! 疊在工具列視窗畫出的框裡面），切分頁＝顯示/隱藏。
+//! 架構＝雙視窗貼合：工具列視窗（label `browser-shell-<組號>`，自己的 webview 畫
+//! 邊框＋標題列＋分頁＋導覽列）是 owner；每個分頁是一個獨立的 `WebviewWindow`
+//! （owned window，疊在工具列視窗畫出的框裡面），切分頁＝顯示/隱藏。
 //!
 //! **為什麼不用 multi-webview（`Window::add_child`）**：子 webview 在 Windows 上
 //! 收不到鍵盤輸入（Chromium 視自己為未啟用而丟鍵，2026-08-18 診斷坐實，見
@@ -18,15 +18,46 @@ use tauri::{
     AppHandle, Emitter, Manager, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
-/// 工具列視窗的 label。同時出現在 `capabilities/browser.json`。
-const TOOLBAR_LABEL: &str = "browser";
+/// 工具列視窗 label 的前綴，後面接視窗組的號碼（`browser-shell-3`）。
+/// 同時出現在 `capabilities/browser.json`（glob `browser-shell-*`）。
+///
+/// ★**為什麼不是固定的 `browser`**：`destroy()` 是丟給主執行緒的訊息
+/// （tauri-runtime-wry 的 `destroy()` 一律走 `proxy.send_event`，連本來就在主
+/// 執行緒也不例外），呼叫回來時 tauri 的 webview 簿記還留著那個 label——簿記要
+/// 等 event loop 收到 `Destroyed` 才清。所以「砍掉幽靈→馬上用同一個 label 建新
+/// 視窗」**必定**撞上 `a webview with label "browser" already exists`，
+/// 而 Edge 在背景更新收掉 WebView2 之後走的正是這條路：使用者從此開不了瀏覽器，
+/// 要重開整個 app 才會好。換號碼就完全不必等簿記清乾淨。
+const TOOLBAR_LABEL_PREFIX: &str = "browser-shell-";
 
-/// 分頁視窗的 label。分頁視窗不在任何 capability 檔裡＝零 IPC。
+/// 第 `generation` 組的工具列 label。號碼來源就是 `BrowserState::generation`。
+fn toolbar_label(generation: u64) -> String {
+    format!("{TOOLBAR_LABEL_PREFIX}{generation}")
+}
+
+/// 現在這一組的工具列視窗。舊組的 label 號碼不同，查不到就是沒開著。
+fn toolbar_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
+    let generation = STATE.lock().ok()?.generation;
+    app.get_webview_window(&toolbar_label(generation))
+}
+
+/// 推事件給現在這一組的工具列。
+fn toolbar_target() -> tauri::EventTarget {
+    let generation = STATE.lock().map(|s| s.generation).unwrap_or(0);
+    tauri::EventTarget::webview_window(toolbar_label(generation))
+}
+
 /// 分頁視窗 label 的前綴。掃殘骸時靠它認人，不必先問得到 id。
+/// 分頁視窗不在任何 capability 檔裡＝零 IPC。
 const TAB_LABEL_PREFIX: &str = "browser-tab-";
 
 fn tab_label(id: u64) -> String {
     format!("{TAB_LABEL_PREFIX}{id}")
+}
+
+/// 這個 label 是不是帳號瀏覽器的視窗（任何一組的工具列或分頁）。掃殘骸用。
+fn is_browser_label(label: &str) -> bool {
+    label.starts_with(TOOLBAR_LABEL_PREFIX) || label.starts_with(TAB_LABEL_PREFIX)
 }
 
 /// 標題列與導覽列的高度。
@@ -253,11 +284,7 @@ fn emit_tabs<R: Runtime>(app: &AppHandle<R>) {
             })
             .collect()
     };
-    let _ = app.emit_to(
-        tauri::EventTarget::webview_window(TOOLBAR_LABEL),
-        TABS_EVENT,
-        entries,
-    );
+    let _ = app.emit_to(toolbar_target(), TABS_EVENT, entries);
 }
 
 /// 關掉一個分頁後該輪到誰。優先右邊鄰居、沒有就左邊；關的不是作用中分頁則不變。
@@ -282,11 +309,7 @@ struct NavState {
 }
 
 fn emit_nav<R: Runtime>(app: &AppHandle<R>, url: &str) {
-    let _ = app.emit_to(
-        tauri::EventTarget::webview_window(TOOLBAR_LABEL),
-        NAV_EVENT,
-        NavState { url: url.to_string() },
-    );
+    let _ = app.emit_to(toolbar_target(), NAV_EVENT, NavState { url: url.to_string() });
 }
 
 /// 把使用者在網址列打的東西變成可導覽的網址。看得出是網址就直接開（裸主機補
@@ -471,7 +494,7 @@ fn tab_rect_px(
 /// 把所有分頁視窗排到工具列視窗的框裡。隱藏中的分頁也排——切過去時才不會先閃一下
 /// 舊位置。
 fn relayout_tabs<R: Runtime>(app: &AppHandle<R>) {
-    let Some(toolbar) = app.get_webview_window(TOOLBAR_LABEL) else { return };
+    let Some(toolbar) = toolbar_window(app) else { return };
     let (Ok(pos), Ok(size), Ok(scale)) = (
         toolbar.outer_position(),
         toolbar.inner_size(),
@@ -592,7 +615,7 @@ pub fn open<R: Runtime>(
     alias: &str,
     jar: &Arc<CookieStoreMutex>,
 ) -> Result<(), String> {
-    let existing = app.get_webview_window(TOOLBAR_LABEL);
+    let existing = toolbar_window(app);
     let alive = existing.as_ref().map(toolbar_is_alive).unwrap_or(false);
     // 判定與登記在同一個鎖裡完成，否則兩個帳號同時點會雙雙判到 Open。
     // `OPENING` 補的是視窗建好到 show 之間那段：那時它還看不見，會被下面的
@@ -630,20 +653,19 @@ pub fn open<R: Runtime>(
         state.generation
     };
 
-    // 放行了就先把上一組的殘骸收乾淨。分頁一律掃——工具列被 Edge 收掉時它可能
-    // 已經不在簿記裡，分頁卻還在，那些視窗沒有標題列、不進工作列，留下來就是一片
-    // 關不掉的東西賴在桌面上。工具列本身則是 label 唯一，不先收掉就建不出新的。
+    // 放行了就把上幾組的殘骸都收乾淨——舊工具列連同它的分頁一起掃，label 前綴就是
+    // 認人的依據。分頁一定要掃：工具列被 Edge 收掉時它可能已經不在簿記裡，分頁卻
+    // 還在，那些視窗沒有標題列、不進工作列，留下來就是一片關不掉的東西賴在桌面上。
+    // 這裡**不等**它們真的消失（也等不到——見 `TOOLBAR_LABEL_PREFIX`），新視窗的
+    // label 號碼本來就跟它們不同。
     let orphans: Vec<_> = app
         .webview_windows()
         .into_iter()
-        .filter(|(label, _)| label.starts_with(TAB_LABEL_PREFIX))
+        .filter(|(label, _)| is_browser_label(label))
         .map(|(_, win)| win)
         .collect();
-    for tab in orphans {
-        let _ = tab.destroy();
-    }
-    if let Some(ghost) = existing {
-        let _ = ghost.destroy();
+    for win in orphans {
+        let _ = win.destroy();
     }
 
     // 沒有一顆 beanfun cookie＝這個 session 已經不帶登入態，開下去只會停在未登入
@@ -681,7 +703,8 @@ pub fn open<R: Runtime>(
         "browser.html?alias={}&titlebar={TITLEBAR_H}&navbar={NAVBAR_H}&edge={EDGE}",
         urlencode(alias)
     );
-    let toolbar = WebviewWindowBuilder::new(app, TOOLBAR_LABEL, WebviewUrl::App(shell_url.into()))
+    let label = toolbar_label(generation);
+    let toolbar = WebviewWindowBuilder::new(app, label, WebviewUrl::App(shell_url.into()))
         .title(alias)
         .inner_size(DEFAULT_W, DEFAULT_H)
         .min_inner_size(MIN_W, MIN_H)
@@ -776,9 +799,7 @@ fn open_tab<R: Runtime>(
     navigate_to: Option<Url>,
     features: Option<NewWindowFeatures>,
 ) -> Result<WebviewWindow<R>, String> {
-    let toolbar = app
-        .get_webview_window(TOOLBAR_LABEL)
-        .ok_or_else(|| "瀏覽器沒有開著".to_string())?;
+    let toolbar = toolbar_window(app).ok_or_else(|| "瀏覽器沒有開著".to_string())?;
 
     let id = {
         let mut state = STATE.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
@@ -942,7 +963,7 @@ fn close_tab<R: Runtime>(app: &AppHandle<R>, id: u64) -> Result<(), String> {
         }
         None => {
             // 最後一個分頁沒了：走 close() 讓 CloseRequested 把幾何記下來
-            if let Some(toolbar) = app.get_webview_window(TOOLBAR_LABEL) {
+            if let Some(toolbar) = toolbar_window(app) {
                 let _ = toolbar.close();
             }
             Ok(())
@@ -1477,6 +1498,22 @@ mod tests {
         assert!(alive_from(Some(false), Some(true)));
         // 兩邊都說不在＝視窗被藏起來或已經沒了，一樣要放行。
         assert!(!alive_from(Some(false), Some(false)));
+    }
+
+    /// 每一組視窗都要拿到自己的 label。撞號＝新視窗建不出來（tauri 的簿記要等
+    /// `Destroyed` 才清得掉舊 label），那正是 Edge 收掉 WebView2 之後的死法。
+    #[test]
+    fn each_generation_gets_a_label_of_its_own() {
+        assert_ne!(toolbar_label(1), toolbar_label(2));
+        assert!(toolbar_label(3).starts_with(TOOLBAR_LABEL_PREFIX));
+    }
+
+    /// 掃殘骸要連舊組的工具列一起認出來，又不能誤傷主視窗。
+    #[test]
+    fn the_sweep_recognises_toolbars_and_tabs_only() {
+        assert!(is_browser_label(&toolbar_label(9)));
+        assert!(is_browser_label(&tab_label(4)));
+        assert!(!is_browser_label("main"));
     }
 
     /// 晚到的 `Destroyed` 只能清自己那一代。號碼對不上就代表下一組視窗已經接手，
