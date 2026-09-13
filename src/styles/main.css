@@ -37,6 +37,7 @@
   --red:   #dc2626;
   --blue:  #334155;
   --amber: #d97706;
+  --last-used: #334155;
   /* compat aliases */
   --glass:       rgba(20, 40, 80, 0.04);
   --glass-hover: rgba(20, 40, 80, 0.06);
@@ -79,7 +80,8 @@
   --red:   #ff453a;
   --blue:  #3dd6c3;
   --amber: #ff9f0a;
-  --glass:       rgba(160, 190, 230, 0.06);
+  --last-used: #3dd6c3;
+  --glass:      rgba(160, 190, 230, 0.06);
   --glass-hover: rgba(160, 190, 230, 0.10);
   --ctx-hover:       rgba(160, 190, 230, 0.08);
   --ctx-sep-color:   rgba(170, 195, 235, 0.09);

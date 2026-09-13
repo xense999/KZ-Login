@@ -775,7 +775,7 @@ function cleanError(msg: string): string {
 .game-row:hover .drag-handle { opacity: 0.6; }
 .drag-handle:hover { opacity: 1 !important; }
 .drag-handle:active { cursor: grabbing; opacity: 1 !important; }
-.game-row .drag-handle.last-used { color: var(--amber); opacity: 1; }
+.game-row .drag-handle.last-used { color: var(--last-used); opacity: 1; }
 
 .game-name-wrap {
   display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0;
