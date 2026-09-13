@@ -326,6 +326,7 @@ async function copyOtp(account: BeanfunAccount, game: { sn: string; sid: string;
       accountSname: game.sname,
     });
     await writeText(r.otp);
+    store.markUsed(game.sn);
     copiedPwd.value.add(game.sn);
     setTimeout(() => copiedPwd.value.delete(game.sn), 1800);
   } catch (e: unknown) {
@@ -358,6 +359,7 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
       accountSid: game.sid,
       accountSname: game.sname,
     });
+    store.markUsed(game.sn);
     sentMap.value[game.sn] = outcome;
     setTimeout(() => delete sentMap.value[game.sn], 4000);
   } catch (e: unknown) {
@@ -489,6 +491,7 @@ function cleanError(msg: string): string {
           <div class="game-row">
             <div
               class="drag-handle"
+              :class="{ 'last-used': store.lastUsedSn === game.sn }"
               title="拖移排序"
               @pointerdown="onPointerDown($event, acc.id, idx)"
               @pointermove="onPointerMove($event, acc.id)"
@@ -772,6 +775,7 @@ function cleanError(msg: string): string {
 .game-row:hover .drag-handle { opacity: 0.6; }
 .drag-handle:hover { opacity: 1 !important; }
 .drag-handle:active { cursor: grabbing; opacity: 1 !important; }
+.game-row .drag-handle.last-used { color: var(--amber); opacity: 1; }
 
 .game-name-wrap {
   display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0;

@@ -18,6 +18,11 @@ export interface BeanfunAccount {
 
 export const useAccountsStore = defineStore("accounts", () => {
   const accounts = ref<BeanfunAccount[]>([]);
+  const lastUsedSn = ref<string | null>(null);
+
+  function markUsed(sn: string) {
+    lastUsedSn.value = sn;
+  }
 
   function addAccount(account: BeanfunAccount) {
     accounts.value.push(account);
@@ -85,5 +90,5 @@ export const useAccountsStore = defineStore("accounts", () => {
     acc.gameAccounts = [...preserved, ...added];
   }
 
-  return { accounts, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
+  return { accounts, lastUsedSn, markUsed, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
 });
