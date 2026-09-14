@@ -8,6 +8,7 @@
 
 - 同時管理多個 Beanfun 帳號（`新增 / 改名 / 排序 / 刪除`）
 - 支持 QR Code 掃碼登入（`透過 Gama Play APP`）
+- 支持帳密輸入登入
 - 連結版本登入（`相機失效時，以登入連結在手機開啟`）
 - Discord 通知（`登入連結推送到指定頻道`）
 - 帳號改名記憶（`母帳號與子帳號的自訂名稱跨登入自動還原`）
@@ -53,8 +54,8 @@
 
 **擷圖**
 
-<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/62fcf359-ad25-4272-9672-bc1f8295cd21" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/5a9f30e8-45b3-42e1-bf4b-9746216d7eaf" />
-　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/fec73982-2945-4a8f-957d-e14db5d9fd5c" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/e592dc39-7b94-4728-9079-96a387c6665b" />
+<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/9641ae26-d935-434f-ba1d-6bc90bd1ffdd" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/03b2e139-2e8e-4e44-8336-5d74f37a1283" />　
+<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/ef28a828-444b-4c52-b28e-040838b9d5cb" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/62fcf359-ad25-4272-9672-bc1f8295cd21" />　<img width="294" height="448" alt="image" src="https://github.com/user-attachments/assets/e592dc39-7b94-4728-9079-96a387c6665b" />
 
 
 ## 免責聲明
