@@ -1,6 +1,7 @@
 mod beanfun;
 mod browser;
 mod captcha;
+mod credentials;
 mod icon;
 mod keyhook;
 
@@ -25,8 +26,8 @@ enum PasswordStage {
     AccountLogin,
 }
 
-/// A password login paused on a reCAPTCHA demand. The password lives here, in
-/// memory, only until the login ends; it is never written anywhere.
+/// A password login paused on a reCAPTCHA demand. Only a successful login hands
+/// the password on, to `credentials`, which stores it encrypted.
 struct PasswordSession {
     client: reqwest::Client,
     cookie_store: Arc<CookieStoreMutex>,
@@ -123,7 +124,8 @@ enum PasswordLoginResult {
 }
 
 #[tauri::command]
-async fn password_login_start(
+async fn password_login_start<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     account: String,
     password: String,
@@ -140,17 +142,29 @@ async fn password_login_start(
         password,
         stage: PasswordStage::AccountType,
     };
-    run_password_login(&state, session, "").await
+    run_password_login(&app, &state, session, "").await
 }
 
 #[tauri::command]
-async fn password_login_resume(
+async fn password_login_resume<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     captcha: String,
 ) -> Result<PasswordLoginResult, String> {
     let session = state.pending_password.lock().await.take()
         .ok_or("沒有進行中的帳密登入，請重新登入")?;
-    run_password_login(&state, session, &captcha).await
+    run_password_login(&app, &state, session, &captcha).await
+}
+
+/// The remembered logins, passwords included: the form fills them in.
+#[tauri::command]
+fn saved_logins<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<credentials::SavedLogin>, String> {
+    credentials::list(&app)
+}
+
+#[tauri::command]
+fn forget_saved_login<R: tauri::Runtime>(app: tauri::AppHandle<R>, account: String) -> Result<(), String> {
+    credentials::forget(&app, &account)
 }
 
 /// Opens the checkbox for the paused login. `None` = the user gave up.
@@ -173,7 +187,8 @@ async fn captcha_solve<R: tauri::Runtime>(
 
 /// Walk the steps from wherever `session` stopped. A captcha demand parks the
 /// session so the same step can be resent with a token; any other end drops it.
-async fn run_password_login(
+async fn run_password_login<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     state: &AppState,
     mut session: PasswordSession,
     captcha: &str,
@@ -209,6 +224,10 @@ async fn run_password_login(
         .map_err(map_err)?;
     let games = beanfun::get_game_accounts(&session.client, &token).await.unwrap_or_default();
     state.session_stores.lock().await.insert(token.clone(), session.cookie_store.clone());
+    // Saving is a convenience; failing to save must not undo a good login.
+    if let Err(e) = credentials::remember(app, &session.account, &session.password) {
+        eprintln!("[credentials] {e}");
+    }
     Ok(PasswordLoginResult::Approved { token, games })
 }
 
@@ -1049,7 +1068,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, saved_logins, forget_saved_login, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,

@@ -32,6 +32,13 @@ export const useAccountsStore = defineStore("accounts", () => {
   const accounts = ref<BeanfunAccount[]>([]);
   const lastUsedSn = ref<string | null>(null);
 
+  // beanfun ignores case in account names, and the saved-login list does too.
+  function findByLoginAccount(account: string): BeanfunAccount | undefined {
+    const wanted = account.trim().toLowerCase();
+    if (!wanted) return undefined;
+    return accounts.value.find((a) => a.loginAccount?.toLowerCase() === wanted);
+  }
+
   function markUsed(sn: string) {
     lastUsedSn.value = sn;
   }
@@ -102,5 +109,5 @@ export const useAccountsStore = defineStore("accounts", () => {
     acc.gameAccounts = [...preserved, ...added];
   }
 
-  return { accounts, lastUsedSn, markUsed, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
+  return { accounts, lastUsedSn, findByLoginAccount, markUsed, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
 });

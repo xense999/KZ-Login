@@ -144,7 +144,10 @@ async function forgetSession(token: string) {
 }
 
 async function onLoginSuccess(login: LoginResult) {
-  const targetId = reauthAccountId.value;
+  // Logging in an account that already has a card refreshes that card rather
+  // than adding a second one.
+  const targetId = reauthAccountId.value
+    ?? (login.account ? store.findByLoginAccount(login.account)?.id ?? null : null);
   reauthAccountId.value = null;
 
   if (targetId) {
@@ -178,9 +181,6 @@ function onAccountSaved() {
       </button>
       <button v-if="page === 'login'" class="title title-btn" :disabled="loginBusy" @click="switchLoginMode">
         {{ pageTitles[page] }}
-        <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
-          <path d="M3 5.5h9.5M10 3l2.5 2.5L10 8M13 10.5H3.5M6 8l-2.5 2.5L6 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
       </button>
       <span v-else class="title" data-tauri-drag-region>{{ pageTitles[page] }}</span>
       <div class="win-controls">
@@ -249,9 +249,6 @@ function onAccountSaved() {
 
 .title-btn {
   pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 5px;
   padding: 3px 10px;
   border: none;
   border-radius: 7px;

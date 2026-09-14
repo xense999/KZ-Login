@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useTheme } from "../composables/useTheme";
-import type { LoginResult } from "../stores/accounts";
+import { useAccountsStore, type LoginResult } from "../stores/accounts";
 
 const props = defineProps<{ initialAccount: string }>();
 const emit = defineEmits<{
@@ -26,13 +26,62 @@ const notice = ref<{ kind: "error" | "info"; text: string } | null>(null);
 
 const accountInput = ref<HTMLInputElement | null>(null);
 const passwordInput = ref<HTMLInputElement | null>(null);
+const accountField = ref<HTMLElement | null>(null);
+
+type Saved = { account: string; password: string };
+const store = useAccountsStore();
+const saved = ref<Saved[]>([]);
+const menuOpen = ref(false);
 
 const busy = computed(() => phase.value !== "idle");
 const canSubmit = computed(() => !busy.value && account.value.trim() !== "" && password.value !== "");
 
-onMounted(() => {
+const hasCard = (name: string) => store.findByLoginAccount(name) !== undefined;
+
+onMounted(async () => {
+  document.addEventListener("pointerdown", closeMenuOutside);
+  try {
+    saved.value = await invoke<Saved[]>("saved_logins");
+  } catch (e) {
+    notice.value = { kind: "error", text: String(e) };
+  }
+  // A re-login arrives with the card's account; its saved password, if any,
+  // makes it a single click.
+  if (props.initialAccount && !password.value) {
+    const match = findSaved(props.initialAccount);
+    if (match) password.value = match.password;
+  }
   (props.initialAccount ? passwordInput : accountInput).value?.focus();
 });
+
+onUnmounted(() => document.removeEventListener("pointerdown", closeMenuOutside));
+
+function findSaved(name: string) {
+  const wanted = name.trim().toLowerCase();
+  return saved.value.find((s) => s.account.toLowerCase() === wanted);
+}
+
+function closeMenuOutside(e: PointerEvent) {
+  if (menuOpen.value && !accountField.value?.contains(e.target as Node)) menuOpen.value = false;
+}
+
+function pick(entry: Saved) {
+  account.value = entry.account;
+  password.value = entry.password;
+  menuOpen.value = false;
+  notice.value = null;
+  passwordInput.value?.focus();
+}
+
+async function forget(entry: Saved) {
+  try {
+    await invoke("forget_saved_login", { account: entry.account });
+    saved.value = saved.value.filter((s) => s !== entry);
+    if (saved.value.length === 0) menuOpen.value = false;
+  } catch (e) {
+    notice.value = { kind: "error", text: String(e) };
+  }
+}
 
 function setPhase(p: typeof phase.value) {
   phase.value = p;
@@ -94,15 +143,38 @@ async function submit() {
     </div>
 
     <div class="pw-body">
-      <input
-        ref="accountInput"
-        v-model="account"
-        class="pw-input"
-        placeholder="帳號"
-        autocomplete="username"
-        spellcheck="false"
-        :disabled="busy"
-      />
+      <div ref="accountField" class="pw-field">
+        <span class="pw-dot" :class="{ on: hasCard(account) }"></span>
+        <input
+          ref="accountInput"
+          v-model="account"
+          class="pw-input with-dot"
+          placeholder="帳號"
+          autocomplete="off"
+          spellcheck="false"
+          :disabled="busy"
+          @keydown.esc="menuOpen = false"
+        />
+        <button
+          type="button"
+          class="pw-icon"
+          :class="{ on: menuOpen }"
+          title="已儲存的帳號"
+          :disabled="busy || saved.length === 0"
+          @click="menuOpen = !menuOpen"
+        >
+          <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <ul v-if="menuOpen" class="pw-menu">
+          <li v-for="entry in saved" :key="entry.account" class="pw-row" @click="pick(entry)">
+            <span class="pw-dot" :class="{ on: hasCard(entry.account) }"></span>
+            <span class="pw-row-name">{{ entry.account }}</span>
+            <button type="button" class="pw-row-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
+          </li>
+        </ul>
+      </div>
       <div class="pw-field">
         <input
           ref="passwordInput"
@@ -115,7 +187,7 @@ async function submit() {
         />
         <button
           type="button"
-          class="pw-eye"
+          class="pw-icon"
           :class="{ on: showPassword }"
           :title="showPassword ? '隱藏密碼' : '顯示密碼'"
           :disabled="busy"
@@ -178,13 +250,50 @@ async function submit() {
 .pw-input:focus { border-color: var(--primary-border); }
 .pw-input:disabled { opacity: 0.6; }
 
-.pw-eye {
+.pw-field .pw-input.with-dot { padding-left: 28px; }
+
+.pw-icon {
   position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
   width: 28px; height: 28px; border: none; border-radius: 7px;
   background: none; color: var(--text3);
   transition: background 0.15s, color 0.15s;
 }
-.pw-eye:hover:not(:disabled), .pw-eye.on { color: var(--text2); background: var(--glass-hover); }
+.pw-icon:hover:not(:disabled), .pw-icon.on { color: var(--text2); background: var(--glass-hover); }
+.pw-icon:disabled { opacity: 0.35; cursor: default; }
+
+.pw-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--text3); opacity: 0.55;
+}
+.pw-dot.on { background: var(--green); opacity: 1; }
+.pw-field > .pw-dot {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.pw-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
+  list-style: none; padding: 4px;
+  max-height: 180px; overflow-y: auto;
+  background: var(--ctx-menu-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--ctx-shadow);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.pw-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 6px 7px 8px; border-radius: 7px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+}
+.pw-row:hover { background: var(--ctx-hover); }
+.pw-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-row-del {
+  width: 22px; height: 22px; border: none; border-radius: 6px;
+  background: none; color: var(--text3); font-size: 11px;
+}
+.pw-row-del:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
 .pw-notice {
   min-height: 38px;

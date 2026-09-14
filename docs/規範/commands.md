@@ -8,6 +8,7 @@
 
 - `qr_start` / `qr_check`
 - `password_login_start(account, password)` / `password_login_resume(captcha)` → `{ status: "approved", token, games } | { status: "captcha" } | { status: "rejected", message } | { status: "use_qr", message }`；網路錯誤走 `Err(String)`。
+- `saved_logins() -> { account, password, last_used }[]`、`forget_saved_login(account)`：記住的帳密（見總表 `credentials` 條）。
 - `captcha_solve(palette) -> string | null`：替暫停中的帳密登入開驗證視窗（site key 與頁面網址從暫停狀態取，前端不經手）。
 
 ## 單一來源
@@ -17,5 +18,5 @@
 ## 不變量
 
 - `pending_password` 只在「需要驗證」時保存；成功、被拒、改用 QR、錯誤，或開始新的帳密登入時都不保留。
-- 密碼只在 `pending_password` 的記憶體裡，不寫檔、不回傳前端。
+- 密碼只有在帳密登入成功時才交給 `credentials` 加密儲存；被拒、改用 QR、錯誤時都不存。
 - 兩種登入成功後都把 cookie jar 登記進 `session_stores`，OTP／啟動沿用。
