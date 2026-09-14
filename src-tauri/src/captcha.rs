@@ -4,9 +4,10 @@
 //! neither be produced over HTTP nor drawn inside our app page. This opens a
 //! borderless window on beanfun's login page, laid over one region of the main
 //! window (the strip between the title bar and the bottom bar), and covers the
-//! page with an overlay that shows nothing but the checkbox. The token comes
-//! back through the URL fragment: the page's CSP keeps app IPC out, and the
-//! window deliberately has no capability anyway.
+//! page with an overlay that shows nothing but the checkbox. The image challenge
+//! is scaled down to fit that region rather than letting the window grow. The
+//! token comes back through the URL fragment: the page's CSP keeps app IPC out,
+//! and the window deliberately has no capability anyway.
 
 use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,10 +19,6 @@ use tauri::{
 
 const LABEL_PREFIX: &str = "captcha-";
 const TOKEN_FRAGMENT: &str = "kz-captcha=";
-/// The image challenge does not fit the region; while it is open the overlay
-/// asks for the whole main window through this fragment, and gives it back.
-const FULL_FRAGMENT: &str = "kz-captcha-size=full";
-const REGION_FRAGMENT: &str = "kz-captcha-size=region";
 /// Short enough that the window keeps up when the main window is dragged.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
 const TIMEOUT: Duration = Duration::from_secs(180);
@@ -46,13 +43,6 @@ pub struct Region {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-}
-
-#[derive(Debug, PartialEq)]
-enum Signal {
-    Token(String),
-    Full,
-    Region,
 }
 
 /// Show the checkbox and wait for the user. `None` means cancelled (see
@@ -94,12 +84,11 @@ pub async fn solve<R: Runtime>(
             "--disable-blink-features=AutomationControlled \
              --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,ThirdPartyStoragePartitioning,PartitionedCookies,msEdgeTrackingPrevention",
         )
-        .initialization_script(&overlay_script(site_key, palette, region))
+        .initialization_script(&overlay_script(site_key, palette))
         .build()
         .map_err(|e| format!("驗證視窗開不起來：{e}"))?;
 
-    let mut full = false;
-    place(&window, &main, region, full);
+    place(&window, &main, region);
     disable_tracking_prevention(&window);
     let _ = window.show();
     let _ = window.set_focus();
@@ -111,15 +100,12 @@ pub async fn solve<R: Runtime>(
         }
         tokio::time::sleep(POLL_INTERVAL).await;
         let Some(window) = app.get_webview_window(&label) else { break None };
-        match window.url().ok().as_ref().and_then(Url::fragment).and_then(read_fragment) {
-            Some(Signal::Token(token)) => break Some(token),
-            Some(Signal::Full) => full = true,
-            Some(Signal::Region) => full = false,
-            None => {}
+        if let Some(token) = window.url().ok().as_ref().and_then(Url::fragment).and_then(read_token) {
+            break Some(token);
         }
         // Every tick, not only on change: this is what makes the window follow
         // the main window when it is dragged.
-        place(&window, &main, region, full);
+        place(&window, &main, region);
     };
 
     if let Some(w) = app.get_webview_window(&label) {
@@ -137,19 +123,15 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn place<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>, region: Region, full: bool) {
-    let (Ok(origin), Ok(client), Ok(scale)) = (main.inner_position(), main.inner_size(), main.scale_factor())
-    else {
+fn place<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>, region: Region) {
+    let (Ok(origin), Ok(scale)) = (main.inner_position(), main.scale_factor()) else {
         return;
     };
-    let (pos, size) = if full {
-        (origin, client)
-    } else {
-        (
-            PhysicalPosition::new(origin.x + (region.x * scale).round() as i32, origin.y + (region.y * scale).round() as i32),
-            PhysicalSize::new((region.width * scale).round() as u32, (region.height * scale).round() as u32),
-        )
-    };
+    let pos = PhysicalPosition::new(
+        origin.x + (region.x * scale).round() as i32,
+        origin.y + (region.y * scale).round() as i32,
+    );
+    let size = PhysicalSize::new((region.width * scale).round() as u32, (region.height * scale).round() as u32);
     if window.outer_position().ok() != Some(pos) {
         let _ = window.set_position(pos);
     }
@@ -158,15 +140,11 @@ fn place<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>, region:
     }
 }
 
-fn read_fragment(fragment: &str) -> Option<Signal> {
-    match fragment {
-        FULL_FRAGMENT => Some(Signal::Full),
-        REGION_FRAGMENT => Some(Signal::Region),
-        _ => fragment
-            .strip_prefix(TOKEN_FRAGMENT)
-            .filter(|t| !t.is_empty())
-            .map(|t| Signal::Token(t.to_owned())),
-    }
+fn read_token(fragment: &str) -> Option<String> {
+    fragment
+        .strip_prefix(TOKEN_FRAGMENT)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(windows)]
@@ -195,49 +173,43 @@ fn disable_tracking_prevention<R: Runtime>(window: &WebviewWindow<R>) {
 #[cfg(not(windows))]
 fn disable_tracking_prevention<R: Runtime>(_window: &WebviewWindow<R>) {}
 
-fn overlay_script(site_key: &str, palette: &Palette, region: Region) -> String {
+fn overlay_script(site_key: &str, palette: &Palette) -> String {
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     OVERLAY_JS
         .replace("__SITE_KEY__", &json(site_key))
         .replace("__BG__", &json(&palette.bg))
         .replace("__TEXT__", &json(&palette.text))
         .replace("__DARK__", if palette.dark { "true" } else { "false" })
-        .replace("__REGION__", &format!("[{},{},{},{}]", region.x, region.y, region.width, region.height))
         .replace("__TOKEN_FRAGMENT__", &json(TOKEN_FRAGMENT))
-        .replace("__FULL_FRAGMENT__", &json(FULL_FRAGMENT))
-        .replace("__REGION_FRAGMENT__", &json(REGION_FRAGMENT))
 }
 
 /// Runs on every document in the window, but only acts on beanfun's login
 /// host. The widget is rendered by us into our own container rather than
 /// fished out of beanfun's page, so a redesign of their page cannot hide it.
 ///
-/// When the image challenge opens, the window grows to the whole main window;
-/// the box is then pinned at the region's offset so the checkbox does not jump
-/// under the user's cursor.
+/// The image challenge iframe is laid out by reCAPTCHA at its own size (about
+/// 400×580) and usually parked off-screen; it is pinned to the middle of the
+/// window and scaled down to fit. It is only ever visible while the challenge
+/// is open, because reCAPTCHA hides its container otherwise.
 const OVERLAY_JS: &str = r##"(() => {
   if (location.hostname !== "login.beanfun.com") return;
   try { Object.defineProperty(navigator, "webdriver", { get: () => false }); } catch (e) {}
   const SITE_KEY = __SITE_KEY__;
   const C = { bg: __BG__, text: __TEXT__ };
   const DARK = __DARK__;
-  const [RX, RY, RW, RH] = __REGION__;
-  const TOKEN = __TOKEN_FRAGMENT__, FULL = __FULL_FRAGMENT__, REGION = __REGION_FRAGMENT__;
+  const TOKEN = __TOKEN_FRAGMENT__;
+  const MARGIN = 6;
 
   const style = document.createElement("style");
   style.textContent =
     "html,body{background:transparent!important;overflow:hidden!important}" +
-    // Both layers stay below the image challenge, which reCAPTCHA stacks at about 2e9.
-    "#kz-cap-back{position:fixed;inset:0;z-index:999998;background:" + C.bg + "}" +
+    // Below the image challenge, which reCAPTCHA stacks at about 2e9.
     "#kz-cap{position:fixed;inset:0;z-index:999999;display:flex;flex-direction:column;" +
     "align-items:center;justify-content:center;gap:14px;background:" + C.bg + ";color:" + C.text + ";" +
     "font:13px 'Segoe UI','Microsoft JhengHei',system-ui,sans-serif}" +
-    "html.kz-full #kz-cap{inset:auto;left:" + RX + "px;top:" + RY + "px;width:" + RW + "px;height:" + RH + "px}" +
     "#kz-cap-box{min-height:78px;display:flex;align-items:center;justify-content:center}" +
     "#kz-cap-hint{opacity:.7;text-align:center;line-height:1.6}";
 
-  const back = document.createElement("div");
-  back.id = "kz-cap-back";
   const root = document.createElement("div");
   root.id = "kz-cap";
   root.innerHTML = '<div id="kz-cap-hint">載入驗證中…</div><div id="kz-cap-box"></div>';
@@ -245,26 +217,23 @@ const OVERLAY_JS: &str = r##"(() => {
   const mount = () => {
     if (document.getElementById("kz-cap")) return;
     document.head.appendChild(style);
-    document.body.appendChild(back);
     document.body.appendChild(root);
     render();
-    setInterval(watchChallenge, 150);
+    setInterval(fitChallenge, 150);
   };
 
-  // The challenge iframe always exists once rendered; it is "open" when no
-  // ancestor hides it or parks it off-screen.
-  let full = false;
-  const watchChallenge = () => {
+  const fitChallenge = () => {
     const frame = document.querySelector("iframe[src*='recaptcha'][src*='bframe']");
-    let open = !!frame;
-    for (let el = frame; open && el && el !== document.body; el = el.parentElement) {
-      const cs = getComputedStyle(el);
-      if (cs.visibility === "hidden" || cs.display === "none" || el.getBoundingClientRect().top < -1000) open = false;
-    }
-    if (open === full || location.hash.startsWith("#" + TOKEN)) return;
-    full = open;
-    document.documentElement.classList.toggle("kz-full", full);
-    location.hash = full ? FULL : REGION;
+    if (!frame || !frame.offsetWidth || !frame.offsetHeight) return;
+    const w = frame.offsetWidth, h = frame.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const k = Math.min(1, (vw - MARGIN * 2) / w, (vh - MARGIN * 2) / h);
+    const set = (prop, value) => frame.style.setProperty(prop, value, "important");
+    set("position", "fixed");
+    set("left", Math.round((vw - w * k) / 2) + "px");
+    set("top", Math.round((vh - h * k) / 2) + "px");
+    set("transform", "scale(" + k + ")");
+    set("transform-origin", "0 0");
   };
 
   let rendered = false;
@@ -302,20 +271,18 @@ const OVERLAY_JS: &str = r##"(() => {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_fragment, Signal};
+    use super::read_token;
 
     #[test]
-    fn reads_what_the_overlay_writes() {
-        assert_eq!(read_fragment("kz-captcha=abc-_123"), Some(Signal::Token("abc-_123".into())));
-        assert_eq!(read_fragment("kz-captcha-size=full"), Some(Signal::Full));
-        assert_eq!(read_fragment("kz-captcha-size=region"), Some(Signal::Region));
+    fn reads_the_token_the_overlay_writes() {
+        assert_eq!(read_token("kz-captcha=abc-_123").as_deref(), Some("abc-_123"));
     }
 
     /// beanfun's own page may set fragments of its own; none of them is an answer.
     #[test]
     fn ignores_other_fragments() {
-        assert!(read_fragment("").is_none());
-        assert!(read_fragment("kz-captcha=").is_none());
-        assert!(read_fragment("top").is_none());
+        assert!(read_token("").is_none());
+        assert!(read_token("kz-captcha=").is_none());
+        assert!(read_token("top").is_none());
     }
 }
