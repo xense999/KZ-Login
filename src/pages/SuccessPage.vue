@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
-import { useAccountsStore } from "../stores/accounts";
+import { useAccountsStore, type LoginResult } from "../stores/accounts";
 
-const props = defineProps<{
-  token: string;
-  games: { sn: string; sid: string; sname: string }[];
-}>();
+const props = defineProps<{ login: LoginResult }>();
 const emit = defineEmits<{ saved: [] }>();
 const store = useAccountsStore();
 
@@ -17,7 +14,7 @@ onMounted(() => {
   );
 
   // Restore the sub-account order the user arranged last time (by sid).
-  const games = [...props.games];
+  const games = [...props.login.games];
   const orderMem: Record<string, string[]> = JSON.parse(
     localStorage.getItem("kusei:suborder_memory") ?? "{}"
   );
@@ -32,14 +29,16 @@ onMounted(() => {
     id,
     alias: "Beanfun 帳號",
     email: "",
-    token: props.token,
+    token: props.login.token,
     gameAccounts: games.map((g) => ({
       ...g,
       localName: nameMem[g.sid] ?? null,
     })),
+    loginMethod: props.login.method,
+    loginAccount: props.login.account,
   });
 
-  const key = props.games.map(g => g.sid).sort().join("|");
+  const key = props.login.games.map(g => g.sid).sort().join("|");
   const aliasMem: Record<string, string> = JSON.parse(
     localStorage.getItem("kusei:alias_memory") ?? "{}"
   );

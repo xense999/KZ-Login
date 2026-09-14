@@ -1,6 +1,6 @@
 # 久世登入器 (KZ-Login)
 
-Tauri 2 + Vue 3 的 beanfun 登入工具：QR 登入、OTP 取號、一鍵啟動遊戲（走 GGM）、帳號內建瀏覽器（分頁式、雙視窗貼合架構）。
+Tauri 2 + Vue 3 的 beanfun 登入工具：QR／帳號密碼登入（必要時彈 reCAPTCHA 驗證視窗）、OTP 取號、一鍵啟動遊戲（走 GGM）、帳號內建瀏覽器（分頁式、雙視窗貼合架構）。
 
 ## 文件地圖
 

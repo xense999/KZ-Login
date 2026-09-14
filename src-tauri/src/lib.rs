@@ -1,9 +1,10 @@
 mod beanfun;
 mod browser;
+mod captcha;
 mod icon;
 mod keyhook;
 
-use beanfun::{GameAccount, QrInit, QrPollOutcome, SessionState};
+use beanfun::{GameAccount, LoginPage, LoginStep, QrInit, QrPollOutcome, SessionState};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -17,8 +18,27 @@ struct QrSession {
     init: QrInit,
 }
 
+/// Which request a password login is waiting to (re)send.
+#[derive(Clone, Copy)]
+enum PasswordStage {
+    AccountType,
+    AccountLogin,
+}
+
+/// A password login paused on a reCAPTCHA demand. The password lives here, in
+/// memory, only until the login ends; it is never written anywhere.
+struct PasswordSession {
+    client: reqwest::Client,
+    cookie_store: Arc<CookieStoreMutex>,
+    page: LoginPage,
+    account: String,
+    password: String,
+    stage: PasswordStage,
+}
+
 struct AppState {
     pending_qr: Mutex<Option<QrSession>>,
+    pending_password: Mutex<Option<PasswordSession>>,
     /// token → cookie_store for active sessions (OTP reuses the login cookie jar)
     session_stores: Mutex<HashMap<String, Arc<CookieStoreMutex>>>,
 }
@@ -89,6 +109,107 @@ async fn qr_check(state: tauri::State<'_, AppState>) -> Result<QrCheckResult, St
             Ok(QrCheckResult::Approved { token, games })
         }
     }
+}
+
+// ─── Password Login ───────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum PasswordLoginResult {
+    Approved { token: String, games: Vec<GameAccount> },
+    Captcha,
+    Rejected { message: String },
+    UseQr { message: String },
+}
+
+#[tauri::command]
+async fn password_login_start(
+    state: tauri::State<'_, AppState>,
+    account: String,
+    password: String,
+) -> Result<PasswordLoginResult, String> {
+    *state.pending_password.lock().await = None;
+    let (client, cookie_store) = beanfun::build_client_with_store().map_err(map_err)?;
+    let skey = beanfun::get_session_key(&client).await.map_err(map_err)?;
+    let page = beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
+    let session = PasswordSession {
+        client,
+        cookie_store,
+        page,
+        account: account.trim().to_owned(),
+        password,
+        stage: PasswordStage::AccountType,
+    };
+    run_password_login(&state, session, "").await
+}
+
+#[tauri::command]
+async fn password_login_resume(
+    state: tauri::State<'_, AppState>,
+    captcha: String,
+) -> Result<PasswordLoginResult, String> {
+    let session = state.pending_password.lock().await.take()
+        .ok_or("沒有進行中的帳密登入，請重新登入")?;
+    run_password_login(&state, session, &captcha).await
+}
+
+/// Opens the checkbox for the paused login. `None` = the user gave up.
+#[tauri::command]
+async fn captcha_solve<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    palette: captcha::Palette,
+) -> Result<Option<String>, String> {
+    let (page_url, site_key) = {
+        let guard = state.pending_password.lock().await;
+        let session = guard.as_ref().ok_or("沒有進行中的帳密登入，請重新登入")?;
+        (session.page.url(), session.page.captcha_site_key.clone())
+    };
+    if site_key.is_empty() {
+        return Err("beanfun 沒有提供驗證金鑰，請改用 QR 登入".into());
+    }
+    captcha::solve(&app, &page_url, &site_key, &palette).await
+}
+
+/// Walk the steps from wherever `session` stopped. A captcha demand parks the
+/// session so the same step can be resent with a token; any other end drops it.
+async fn run_password_login(
+    state: &AppState,
+    mut session: PasswordSession,
+    captcha: &str,
+) -> Result<PasswordLoginResult, String> {
+    // A token answers exactly one request; the next step needs a fresh one.
+    let mut captcha = captcha;
+    loop {
+        let step = match session.stage {
+            PasswordStage::AccountType => {
+                beanfun::check_account_type(&session.client, &session.page, &session.account, captcha).await
+            }
+            PasswordStage::AccountLogin => {
+                beanfun::account_login(&session.client, &session.page, &session.account, &session.password, captcha).await
+            }
+        }
+        .map_err(map_err)?;
+        captcha = "";
+
+        match (step, session.stage) {
+            (LoginStep::Proceed, PasswordStage::AccountType) => session.stage = PasswordStage::AccountLogin,
+            (LoginStep::Proceed, PasswordStage::AccountLogin) => break,
+            (LoginStep::CaptchaRequired, _) => {
+                *state.pending_password.lock().await = Some(session);
+                return Ok(PasswordLoginResult::Captcha);
+            }
+            (LoginStep::Rejected(message), _) => return Ok(PasswordLoginResult::Rejected { message }),
+            (LoginStep::UseQr(message), _) => return Ok(PasswordLoginResult::UseQr { message }),
+        }
+    }
+
+    let token = beanfun::complete_login(&session.client, &session.cookie_store, &session.page.skey)
+        .await
+        .map_err(map_err)?;
+    let games = beanfun::get_game_accounts(&session.client, &token).await.unwrap_or_default();
+    state.session_stores.lock().await.insert(token.clone(), session.cookie_store.clone());
+    Ok(PasswordLoginResult::Approved { token, games })
 }
 
 // ─── Windows helpers ─────────────────────────────────────────────────────────
@@ -922,12 +1043,13 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
             pending_qr: Mutex::new(None),
+            pending_password: Mutex::new(None),
             session_stores: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,

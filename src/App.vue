@@ -4,27 +4,57 @@ import { Window } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import MainPage from "./pages/MainPage.vue";
 import QrPage from "./pages/QrPage.vue";
+import PasswordPage from "./pages/PasswordPage.vue";
 import SuccessPage from "./pages/SuccessPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import ToastPop from "./components/ToastPop.vue";
 import { toast } from "./composables/useToast";
-import { useAccountsStore } from "./stores/accounts";
+import { useAccountsStore, type LoginMethod, type LoginResult } from "./stores/accounts";
 import { useTheme } from "./composables/useTheme";
 
-type Page = "main" | "qr" | "success" | "settings";
+type Page = "main" | "login" | "success" | "settings";
 
 const page = ref<Page>("main");
-const pendingToken = ref<string | null>(null);
-const pendingGames = ref<{ sn: string; sid: string; sname: string }[]>([]);
+const pendingLogin = ref<LoginResult | null>(null);
 const reauthAccountId = ref<string | null>(null);
 const store = useAccountsStore();
 
 const pageTitles: Record<Page, string> = {
   main: "久世登入器",
-  qr: "新增帳號",
+  login: "切換登入方式",
   success: "新增帳號",
   settings: "設定",
 };
+
+// Only "add account" remembers the mode; a re-login follows that account instead.
+const LOGIN_MODE_KEY = "kusei:login_mode";
+const loginMode = ref<LoginMethod>("qr");
+const loginPrefill = ref("");
+const loginBusy = ref(false);
+
+function openLogin(mode: LoginMethod, prefill: string) {
+  loginMode.value = mode;
+  loginPrefill.value = prefill;
+  loginBusy.value = false;
+  page.value = "login";
+}
+
+function onAddAccount() {
+  reauthAccountId.value = null;
+  const saved = localStorage.getItem(LOGIN_MODE_KEY);
+  openLogin(saved === "password" ? "password" : "qr", "");
+}
+
+function switchLoginMode() {
+  if (loginBusy.value) return;
+  loginMode.value = loginMode.value === "qr" ? "password" : "qr";
+  if (!reauthAccountId.value) localStorage.setItem(LOGIN_MODE_KEY, loginMode.value);
+}
+
+function cancelLogin() {
+  reauthAccountId.value = null;
+  page.value = "main";
+}
 
 function minimize() { Window.getCurrent().minimize(); }
 function close() { Window.getCurrent().close(); }
@@ -97,8 +127,9 @@ onUnmounted(() => {
 });
 
 function onReauth(accountId: string) {
+  const acc = store.accounts.find((a) => a.id === accountId);
   reauthAccountId.value = accountId;
-  page.value = "qr";
+  openLogin(acc?.loginMethod ?? "qr", acc?.loginAccount ?? "");
 }
 
 // Free the cookie jar of a session a re-login just replaced. Only safe when the
@@ -112,26 +143,24 @@ async function forgetSession(token: string) {
   }
 }
 
-async function onQrSuccess(token: string, games: { sn: string; sid: string; sname: string }[]) {
+async function onLoginSuccess(login: LoginResult) {
   const targetId = reauthAccountId.value;
   reauthAccountId.value = null;
 
   if (targetId) {
     const previous = store.accounts.find((a) => a.id === targetId)?.token ?? null;
-    await store.updateToken(targetId, token, games);
-    if (previous && previous !== token) await forgetSession(previous);
+    await store.updateToken(targetId, login);
+    if (previous && previous !== login.token) await forgetSession(previous);
     page.value = "main";
     return;
   }
 
-  pendingToken.value = token;
-  pendingGames.value = games;
+  pendingLogin.value = login;
   page.value = "success";
 }
 
 function onAccountSaved() {
-  pendingToken.value = null;
-  pendingGames.value = [];
+  pendingLogin.value = null;
   page.value = "main";
 }
 </script>
@@ -147,7 +176,13 @@ function onAccountSaved() {
             stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <span class="title" data-tauri-drag-region>{{ pageTitles[page] }}</span>
+      <button v-if="page === 'login'" class="title title-btn" :disabled="loginBusy" @click="switchLoginMode">
+        {{ pageTitles[page] }}
+        <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+          <path d="M3 5.5h9.5M10 3l2.5 2.5L10 8M13 10.5H3.5M6 8l-2.5 2.5L6 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <span v-else class="title" data-tauri-drag-region>{{ pageTitles[page] }}</span>
       <div class="win-controls">
         <button class="wbtn" @click="minimize">&#x2212;</button>
         <button class="wbtn close" @click="close">&#x2715;</button>
@@ -155,9 +190,12 @@ function onAccountSaved() {
     </div>
 
     <div class="page-container">
-      <MainPage v-if="page === 'main'" @add-account="page = 'qr'" @reauth="onReauth" />
-      <QrPage v-else-if="page === 'qr'" @cancel="page = 'main'" @success="onQrSuccess" />
-      <SuccessPage v-else-if="page === 'success'" :token="pendingToken!" :games="pendingGames" @saved="onAccountSaved" />
+      <MainPage v-if="page === 'main'" @add-account="onAddAccount" @reauth="onReauth" />
+      <template v-else-if="page === 'login'">
+        <QrPage v-if="loginMode === 'qr'" @cancel="cancelLogin" @success="onLoginSuccess" />
+        <PasswordPage v-else :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
+      </template>
+      <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />
       <SettingsPage v-else-if="page === 'settings'" @back="page = 'main'" />
     </div>
 
@@ -208,6 +246,20 @@ function onAccountSaved() {
   transform: translateX(-50%);
   pointer-events: none;
 }
+
+.title-btn {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  transition: background 0.15s, color 0.15s;
+}
+.title-btn:hover:not(:disabled) { background: var(--glass-hover); color: var(--text); }
+.title-btn:disabled { opacity: 0.5; cursor: default; }
 
 .settings-btn {
   margin-right: auto;

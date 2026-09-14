@@ -8,12 +8,24 @@ export interface GameAccount {
   localName: string | null;
 }
 
+export type LoginMethod = "qr" | "password";
+
 export interface BeanfunAccount {
   id: string;
   alias: string;
   email: string;
   token: string | null;
   gameAccounts: GameAccount[];
+  loginMethod: LoginMethod;
+  // The beanfun account typed into the password form; never the password.
+  loginAccount: string | null;
+}
+
+export interface LoginResult {
+  token: string;
+  games: { sn: string; sid: string; sname: string }[];
+  method: LoginMethod;
+  account: string | null;
 }
 
 export const useAccountsStore = defineStore("accounts", () => {
@@ -66,14 +78,14 @@ export const useAccountsStore = defineStore("accounts", () => {
     if (acc) acc.token = null;
   }
 
-  function updateToken(
-    accountId: string,
-    token: string,
-    newGames: { sn: string; sid: string; sname: string }[],
-  ) {
+  function updateToken(accountId: string, login: LoginResult) {
     const acc = accounts.value.find((a) => a.id === accountId);
     if (!acc) return;
+    const { token, games: newGames } = login;
     acc.token = token;
+    acc.loginMethod = login.method;
+    // A QR login says nothing about the typed account, so keep the one we had.
+    if (login.account) acc.loginAccount = login.account;
     const existingMap = new Map(acc.gameAccounts.map((g) => [g.sn, g]));
     const newMap = new Map(newGames.map((g) => [g.sn, g]));
     // Preserve existing custom order; append new accounts sorted by sn

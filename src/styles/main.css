@@ -151,6 +151,26 @@ input {
 .wbtn:hover { background: var(--glass-hover); color: var(--text2); }
 .wbtn.close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
+/* ── 登入頁底部按鈕列 ── QR 與帳密兩種模式共用 */
+.login-actions { display: flex; gap: 7px; width: 100%; }
+
+.btn-ghost {
+  flex: 1; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 11px;
+  font-size: 13px; font-weight: 500; color: var(--text2);
+  transition: background 0.15s, color 0.15s;
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+
+.btn-solid {
+  flex: 1; background: var(--primary-bg); border: 1px solid var(--primary-border);
+  border-radius: 10px; padding: 11px;
+  font-size: 13px; font-weight: 600; color: var(--primary-color);
+  transition: background 0.15s;
+}
+.btn-solid:hover:not(:disabled) { background: var(--primary-bg-hover); }
+.btn-ghost:disabled, .btn-solid:disabled { opacity: 0.45; cursor: default; }
+
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {

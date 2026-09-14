@@ -127,8 +127,29 @@ pub async fn get_session_key(client: &Client) -> Result<String, BeanfunError> {
         .ok_or_else(|| BeanfunError::Parse(format!("pSKey not found in redirect URL: {}", clip(&final_url, 200))))
 }
 
-pub async fn init_qr_login(client: &Client, skey: &str) -> Result<QrInit, BeanfunError> {
-    let index_url = format!("{}Login/Index?pSKey={}", LOGIN_BASE, skey);
+/// The login page as both login methods need it: the anti-forgery token every
+/// POST must echo back, and what `InitLogin` reports about this session.
+#[derive(Debug, Clone)]
+pub struct LoginPage {
+    pub skey: String,
+    pub verification_token: String,
+    pub captcha_site_key: String,
+    qr_image: Option<String>,
+    deeplink: Option<String>,
+}
+
+impl LoginPage {
+    pub fn url(&self) -> String {
+        login_index_url(&self.skey)
+    }
+}
+
+fn login_index_url(skey: &str) -> String {
+    format!("{}Login/Index?pSKey={}", LOGIN_BASE, skey)
+}
+
+pub async fn open_login_page(client: &Client, skey: &str) -> Result<LoginPage, BeanfunError> {
+    let index_url = login_index_url(skey);
 
     let index_body = client
         .get(&index_url)
@@ -162,22 +183,35 @@ pub async fn init_qr_login(client: &Client, skey: &str) -> Result<QrInit, Beanfu
     struct InitData {
         #[serde(rename = "QRImage")] qr_image: Option<String>,
         #[serde(rename = "DeepLink")] deep_link: Option<String>,
+        #[serde(rename = "RecaptchaV2PublicKey")] captcha_site_key: Option<String>,
     }
 
     let parsed: InitResp = serde_json::from_str(&body)
-        .map_err(|e| BeanfunError::Parse(format!("QR init JSON parse failed: {e}")))?;
+        .map_err(|e| BeanfunError::Parse(format!("Login init JSON parse failed: {e}")))?;
     if parsed.result.unwrap_or(-1) != 0 {
-        return Err(BeanfunError::Parse("QR init result error".into()));
+        return Err(BeanfunError::Parse("Login init result error".into()));
     }
     let data = parsed.result_data.ok_or_else(|| BeanfunError::Parse("No ResultData".into()))?;
-    let qr_image = data.qr_image.filter(|s| !s.is_empty())
+
+    Ok(LoginPage {
+        skey: skey.to_owned(),
+        verification_token,
+        captcha_site_key: data.captcha_site_key.unwrap_or_default(),
+        qr_image: data.qr_image.filter(|s| !s.is_empty()),
+        deeplink: data.deep_link.filter(|s| !s.is_empty()),
+    })
+}
+
+pub async fn init_qr_login(client: &Client, skey: &str) -> Result<QrInit, BeanfunError> {
+    let page = open_login_page(client, skey).await?;
+    let qr_image = page.qr_image
         .ok_or_else(|| BeanfunError::Parse("QRImage empty".into()))?;
 
     Ok(QrInit {
-        skey: skey.to_owned(),
+        skey: page.skey,
         bitmap_base64: format!("data:image/png;base64,{}", qr_image),
-        deeplink: data.deep_link.filter(|s| !s.is_empty()),
-        verification_token,
+        deeplink: page.deeplink,
+        verification_token: page.verification_token,
     })
 }
 
@@ -218,13 +252,24 @@ pub async fn finalize_qr(
     cookie_store: &Arc<CookieStoreMutex>,
     init: &QrInit,
 ) -> Result<String, BeanfunError> {
-    let index_url = format!("{}Login/Index?pSKey={}", LOGIN_BASE, &init.skey);
-
     let _ = client
         .get(&format!("{}QRLogin/QRLogin", LOGIN_BASE))
         .header(header::ACCEPT, "application/json, text/plain, */*")
-        .header(header::REFERER, &index_url)
+        .header(header::REFERER, login_index_url(&init.skey))
         .send().await;
+
+    complete_login(client, cookie_store, &init.skey).await
+}
+
+/// The tail both login methods share once beanfun has accepted the user:
+/// beanfun's own page navigates to the same place after a QR approval and after
+/// a password login, and that is what hands out `bfWebToken`.
+pub async fn complete_login(
+    client: &Client,
+    cookie_store: &Arc<CookieStoreMutex>,
+    skey: &str,
+) -> Result<String, BeanfunError> {
+    let index_url = login_index_url(skey);
 
     let send_login_body = client
         .get(&format!("{}Login/SendLogin", LOGIN_BASE))
@@ -242,7 +287,7 @@ pub async fn finalize_qr(
     }
 
     let form5: &[(&str, &str)] = &[
-        ("SessionKey", &init.skey),
+        ("SessionKey", skey),
         ("AuthKey", "OK"),
         ("ServiceCode", ""),
         ("ServiceRegion", ""),
@@ -263,6 +308,135 @@ pub async fn finalize_qr(
         result
     };
     token.ok_or_else(|| BeanfunError::Parse("bfWebToken not found in any cookie after finalize".into()))
+}
+
+// ─── Password Login ───────────────────────────────────────────────────────────
+
+/// What one step of the password login concluded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginStep {
+    /// Accepted — go on to the next step.
+    Proceed,
+    /// beanfun wants a reCAPTCHA token before it will look at this step.
+    CaptchaRequired,
+    /// Refused with a message the user can act on here (wrong password…).
+    Rejected(String),
+    /// This account needs a flow we do not handle; the user should scan a QR.
+    UseQr(String),
+}
+
+pub async fn check_account_type(
+    client: &Client,
+    page: &LoginPage,
+    account: &str,
+    captcha: &str,
+) -> Result<LoginStep, BeanfunError> {
+    let body = post_login_json(
+        client,
+        page,
+        "Login/CheckAccountType",
+        serde_json::json!({ "Account": account, "Captcha": captcha }),
+    ).await?;
+    read_account_type(&body)
+}
+
+pub async fn account_login(
+    client: &Client,
+    page: &LoginPage,
+    account: &str,
+    password: &str,
+    captcha: &str,
+) -> Result<LoginStep, BeanfunError> {
+    let body = post_login_json(
+        client,
+        page,
+        "Login/AccountLogin",
+        serde_json::json!({ "Account": account, "Pasw": password, "Captcha": captcha, "IsMobile": false }),
+    ).await?;
+    read_account_login(&body)
+}
+
+async fn post_login_json(
+    client: &Client,
+    page: &LoginPage,
+    path: &str,
+    payload: serde_json::Value,
+) -> Result<String, BeanfunError> {
+    let mut req = client
+        .post(&format!("{}{}", LOGIN_BASE, path))
+        .header(header::ACCEPT, "application/json, text/plain, */*")
+        .header(header::REFERER, page.url())
+        .header("Origin", "https://login.beanfun.com")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .json(&payload);
+    if !page.verification_token.is_empty() {
+        req = req.header("RequestVerificationToken", &page.verification_token);
+    }
+    Ok(req.send().await?.text().await?)
+}
+
+struct LoginReply {
+    code: i64,
+    result: i64,
+    message: String,
+    data: serde_json::Value,
+}
+
+fn read_login_reply(body: &str) -> Result<LoginReply, BeanfunError> {
+    let v: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| BeanfunError::Parse(format!("Login reply parse failed: {}", clip(body, 200))))?;
+    // beanfun sends these as numbers today; accept numeric strings too.
+    let int = |key: &str| match &v[key] {
+        serde_json::Value::Number(n) => n.as_i64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    };
+    let code = int("ResultCode")
+        .ok_or_else(|| BeanfunError::Parse(format!("Login reply has no ResultCode: {}", clip(body, 200))))?;
+    Ok(LoginReply {
+        code,
+        result: int("Result").unwrap_or(0),
+        message: v["ResultMessage"].as_str().unwrap_or_default().to_owned(),
+        data: v["ResultData"].clone(),
+    })
+}
+
+/// A refusal that is really a demand for reCAPTCHA. The flag is not on every
+/// step's reply, but the message ("請點選「我不是機器人」！") is.
+fn refusal(reply: &LoginReply) -> LoginStep {
+    if reply.data["IsRecaptcha"].as_bool() == Some(true) || reply.message.contains("機器人") {
+        LoginStep::CaptchaRequired
+    } else if reply.message.is_empty() {
+        LoginStep::Rejected("登入失敗".into())
+    } else {
+        LoginStep::Rejected(reply.message.clone())
+    }
+}
+
+fn read_account_type(body: &str) -> Result<LoginStep, BeanfunError> {
+    let reply = read_login_reply(body)?;
+    match reply.code {
+        0 => Ok(refusal(&reply)),
+        1 if reply.data["IsGamaPass"].as_bool() == Some(true) => {
+            Ok(LoginStep::UseQr("此帳號是 GamaPass 帳號".into()))
+        }
+        1 if reply.result == 2 => Ok(LoginStep::UseQr("此帳號使用動態密碼（OTP）".into())),
+        1 => Ok(LoginStep::Proceed),
+        _ => Err(BeanfunError::Parse(format!("Unknown account type reply: {}", clip(body, 200)))),
+    }
+}
+
+fn read_account_login(body: &str) -> Result<LoginStep, BeanfunError> {
+    let reply = read_login_reply(body)?;
+    match reply.code {
+        0 => Ok(refusal(&reply)),
+        1 => Ok(LoginStep::Proceed),
+        // Either the lock notice or a URL to an advance check the user must
+        // pass on beanfun's site; the URL itself means nothing to them.
+        2 if reply.message == "AccountLock" => Ok(LoginStep::UseQr("帳號已被鎖定".into())),
+        2 => Ok(LoginStep::UseQr("beanfun 要求進階驗證".into())),
+        _ => Err(BeanfunError::Parse(format!("Unknown account login reply: {}", clip(body, 200)))),
+    }
 }
 
 // ─── Game Accounts ────────────────────────────────────────────────────────────
@@ -1009,7 +1183,7 @@ async fn probe_with_session(cookie_store: &Arc<CookieStoreMutex>) -> SessionStat
 
 #[cfg(test)]
 mod tests {
-    use super::{clip, read_token_check, SessionState};
+    use super::{clip, read_account_login, read_account_type, read_token_check, LoginStep, SessionState};
 
     /// The three replies the live endpoint actually returns. The two zero cases
     /// were captured from beanfun on 2026-08-30: no cookie answers "Token value
@@ -1063,6 +1237,69 @@ mod tests {
         let page = "登入逾時，請重新登入。".repeat(100);
         assert_eq!(clip(&page, 200).chars().count(), 200);
         assert!(page.starts_with(&clip(&page, 200)));
+    }
+
+    // Captured from beanfun on 2026-09-14 with an unknown account and no captcha:
+    // both steps refuse with the same "tick I'm not a robot" message, and only
+    // AccountLogin also raises the flag.
+    const ACCOUNT_TYPE_NEEDS_CAPTCHA: &str = r#"{"ResultData":{"IsGamaPass":false,"GamaPassUrl":null},"Result":0,"ResultCode":0,"ResultMessage":"請點選「我不是機器人」！"}"#;
+    const ACCOUNT_LOGIN_NEEDS_CAPTCHA: &str = r#"{"ResultData":{"IsRecaptcha":true},"Result":0,"ResultCode":0,"ResultMessage":"請點選「我不是機器人」！"}"#;
+
+    #[test]
+    fn account_type_reads_each_branch() {
+        assert_eq!(read_account_type(ACCOUNT_TYPE_NEEDS_CAPTCHA).unwrap(), LoginStep::CaptchaRequired);
+        assert_eq!(
+            read_account_type(r#"{"ResultData":{"IsGamaPass":false},"Result":0,"ResultCode":1,"ResultMessage":"Success"}"#).unwrap(),
+            LoginStep::Proceed
+        );
+        assert!(matches!(
+            read_account_type(r#"{"ResultData":{"IsGamaPass":false},"Result":2,"ResultCode":1,"ResultMessage":"Success"}"#).unwrap(),
+            LoginStep::UseQr(_)
+        ));
+        assert!(matches!(
+            read_account_type(r#"{"ResultData":{"IsGamaPass":true,"GamaPassUrl":"https://x"},"Result":0,"ResultCode":1,"ResultMessage":"Success"}"#).unwrap(),
+            LoginStep::UseQr(_)
+        ));
+        assert_eq!(
+            read_account_type(r#"{"ResultData":null,"Result":0,"ResultCode":0,"ResultMessage":"帳號格式錯誤"}"#).unwrap(),
+            LoginStep::Rejected("帳號格式錯誤".into())
+        );
+    }
+
+    #[test]
+    fn account_login_reads_each_branch() {
+        assert_eq!(read_account_login(ACCOUNT_LOGIN_NEEDS_CAPTCHA).unwrap(), LoginStep::CaptchaRequired);
+        // The message alone is enough, in case the flag goes missing.
+        assert_eq!(
+            read_account_login(r#"{"ResultData":null,"Result":0,"ResultCode":0,"ResultMessage":"請點選「我不是機器人」！"}"#).unwrap(),
+            LoginStep::CaptchaRequired
+        );
+        assert_eq!(
+            read_account_login(r#"{"ResultData":{"IsRecaptcha":false},"Result":1,"ResultCode":0,"ResultMessage":"帳號或密碼錯誤"}"#).unwrap(),
+            LoginStep::Rejected("帳號或密碼錯誤".into())
+        );
+        assert_eq!(
+            read_account_login(r#"{"ResultData":null,"Result":0,"ResultCode":1,"ResultMessage":"Success"}"#).unwrap(),
+            LoginStep::Proceed
+        );
+        assert!(matches!(
+            read_account_login(r#"{"ResultData":null,"Result":0,"ResultCode":2,"ResultMessage":"AccountLock"}"#).unwrap(),
+            LoginStep::UseQr(_)
+        ));
+        // An advance-check redirect: the URL must not reach the user as a message.
+        match read_account_login(r#"{"ResultData":null,"Result":0,"ResultCode":2,"ResultMessage":"https://login.beanfun.com/Advance"}"#).unwrap() {
+            LoginStep::UseQr(msg) => assert!(!msg.contains("http")),
+            other => panic!("expected UseQr, got {other:?}"),
+        }
+    }
+
+    /// A page we cannot read is an error, never a wrong password.
+    #[test]
+    fn an_unreadable_login_reply_is_an_error() {
+        for body in ["", "<html>maintenance</html>", r#"{"ResultCode":9,"ResultMessage":"?"}"#] {
+            assert!(read_account_type(body).is_err(), "{body}");
+            assert!(read_account_login(body).is_err(), "{body}");
+        }
     }
 
     #[test]

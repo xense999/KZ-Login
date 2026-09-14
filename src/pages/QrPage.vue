@@ -4,10 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "../composables/useToast";
 import { sendEmbed, EMBED_COLOR_LINK } from "../composables/useDiscord";
+import type { LoginResult } from "../stores/accounts";
 
 const emit = defineEmits<{
   cancel: [];
-  success: [token: string, games: { sn: string; sid: string; sname: string }[]];
+  success: [login: LoginResult];
 }>();
 
 type Status = "loading" | "waiting" | "expired" | "error";
@@ -17,17 +18,25 @@ const deeplink = ref("");
 const errorMsg = ref("");
 const linkCopied = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+// Switching to the password form unmounts this page while a request may still
+// be in flight; without this its reply would schedule the next poll and keep
+// polling in the background.
+let disposed = false;
 
 onMounted(() => {
   startQr();
 });
-onUnmounted(() => { if (pollTimer) clearTimeout(pollTimer); });
+onUnmounted(() => {
+  disposed = true;
+  if (pollTimer) clearTimeout(pollTimer);
+});
 
 async function startQr() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   status.value = "loading"; qrImage.value = ""; deeplink.value = ""; errorMsg.value = "";
   try {
     const result = await invoke<{ bitmap_base64: string; deeplink?: string }>("qr_start");
+    if (disposed) return;
     qrImage.value = result.bitmap_base64;
     deeplink.value = result.deeplink ?? "";
     status.value = "waiting";
@@ -70,7 +79,11 @@ async function poll() {
   type R = { status: "waiting" } | { status: "expired" } | { status: "approved"; token: string; games: { sn: string; sid: string; sname: string }[] };
   try {
     const r = await invoke<R>("qr_check");
-    if (r.status === "approved") { emit("success", r.token, r.games); return; }
+    if (disposed) return;
+    if (r.status === "approved") {
+      emit("success", { token: r.token, games: r.games, method: "qr", account: null });
+      return;
+    }
     if (r.status === "expired") { status.value = "expired"; return; }
     status.value = "waiting"; schedulePoll();
   } catch (e) { status.value = "error"; errorMsg.value = String(e); }
@@ -119,7 +132,7 @@ async function poll() {
       </template>
     </div>
 
-    <div class="actions">
+    <div class="login-actions">
       <button v-if="status === 'waiting' && deeplink" class="btn-ghost" @click="copyDeeplink">
         {{ linkCopied ? "已複製 ✓" : "連結版本" }}
       </button>
@@ -194,21 +207,4 @@ async function poll() {
 .state-title { font-size: 14px; font-weight: 500; color: var(--text); }
 .state-sub { font-size: 12px; color: var(--text2); text-align: center; word-break: break-all; }
 
-.actions { display: flex; gap: 7px; width: 100%; }
-
-.btn-ghost {
-  flex: 1; background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 11px;
-  font-size: 13px; font-weight: 500; color: var(--text2);
-  transition: background 0.15s, color 0.15s;
-}
-.btn-ghost:hover { background: var(--surface2); color: var(--text); }
-
-.btn-solid {
-  flex: 1; background: var(--primary-bg); border: 1px solid var(--primary-border);
-  border-radius: 10px; padding: 11px;
-  font-size: 13px; font-weight: 600; color: var(--primary-color);
-  transition: background 0.15s;
-}
-.btn-solid:hover { background: var(--primary-bg-hover); }
 </style>
