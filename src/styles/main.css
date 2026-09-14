@@ -151,8 +151,15 @@ input {
 .wbtn:hover { background: var(--glass-hover); color: var(--text2); }
 .wbtn.close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
-/* ── 登入頁底部按鈕列 ── QR 與帳密兩種模式共用 */
-.login-actions { display: flex; gap: 7px; width: 100%; }
+/* ── 底部按鈕列 ── 主頁與兩種登入頁共用；登入頁的驗證區就夾在標題列與這條線之間 */
+.bottom-bar {
+  flex-shrink: 0;
+  display: flex;
+  gap: 7px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--border2);
+  background: var(--bg);
+}
 
 .btn-ghost {
   flex: 1; background: var(--surface); border: 1px solid var(--border);

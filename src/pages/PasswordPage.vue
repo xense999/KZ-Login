@@ -27,6 +27,7 @@ const notice = ref<{ kind: "error" | "info"; text: string } | null>(null);
 const accountInput = ref<HTMLInputElement | null>(null);
 const passwordInput = ref<HTMLInputElement | null>(null);
 const accountField = ref<HTMLElement | null>(null);
+const regionEl = ref<HTMLElement | null>(null);
 
 type Saved = { account: string; password: string };
 const store = useAccountsStore();
@@ -95,11 +96,22 @@ function readPalette() {
   const token = (name: string) => css.getPropertyValue(name).trim();
   return {
     bg: token("--bg"),
-    surface: token("--surface"),
     text: token("--text"),
-    border: token("--border"),
     dark: useTheme().theme.value === "dark",
   };
+}
+
+// Where the captcha window sits: the strip between the title bar and the
+// bottom bar, in CSS pixels of the main window.
+function readRegion() {
+  const r = regionEl.value!.getBoundingClientRect();
+  return { x: r.left, y: r.top, width: r.width, height: r.height };
+}
+
+// While the checkbox is up, the page's own cancel button closes it.
+function onCancel() {
+  if (phase.value === "captcha") invoke("captcha_cancel");
+  else emit("cancel");
 }
 
 async function submit() {
@@ -111,7 +123,7 @@ async function submit() {
     let reply = await invoke<Reply>("password_login_start", { account: typed, password: password.value });
     while (reply.status === "captcha") {
       setPhase("captcha");
-      const captcha = await invoke<string | null>("captcha_solve", { palette: readPalette() });
+      const captcha = await invoke<string | null>("captcha_solve", { palette: readPalette(), region: readRegion() });
       if (!captcha) {
         notice.value = { kind: "info", text: "驗證已取消或逾時，請再按一次登入" };
         return;
@@ -137,78 +149,81 @@ async function submit() {
 
 <template>
   <form class="pw-page" @submit.prevent="submit">
-    <div class="pw-hd">
-      <h2>帳號密碼登入</h2>
-      <p>輸入 beanfun 帳號與密碼</p>
+    <div ref="regionEl" class="pw-main">
+      <div class="pw-hd">
+        <h2>帳號密碼登入</h2>
+        <p>輸入 beanfun 帳號與密碼</p>
+      </div>
+
+      <div class="pw-body">
+        <div ref="accountField" class="pw-field">
+          <span class="pw-dot" :class="{ on: hasCard(account) }"></span>
+          <input
+            ref="accountInput"
+            v-model="account"
+            class="pw-input with-dot"
+            placeholder="帳號"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="busy"
+            @keydown.esc="menuOpen = false"
+          />
+          <button
+            type="button"
+            class="pw-icon"
+            :class="{ on: menuOpen }"
+            title="已儲存的帳號"
+            :disabled="busy || saved.length === 0"
+            @click="menuOpen = !menuOpen"
+          >
+            <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+              <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <ul v-if="menuOpen" class="pw-menu">
+            <li v-for="entry in saved" :key="entry.account" class="pw-row" @click="pick(entry)">
+              <span class="pw-dot" :class="{ on: hasCard(entry.account) }"></span>
+              <span class="pw-row-name">{{ entry.account }}</span>
+              <button type="button" class="pw-row-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
+            </li>
+          </ul>
+        </div>
+        <div class="pw-field">
+          <input
+            ref="passwordInput"
+            v-model="password"
+            class="pw-input"
+            :type="showPassword ? 'text' : 'password'"
+            placeholder="密碼"
+            autocomplete="current-password"
+            :disabled="busy"
+          />
+          <button
+            type="button"
+            class="pw-icon"
+            :class="{ on: showPassword }"
+            :title="showPassword ? '隱藏密碼' : '顯示密碼'"
+            :disabled="busy"
+            @click="showPassword = !showPassword"
+          >
+            <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+              <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/>
+              <path v-if="!showPassword" d="M4 20L20 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <div class="pw-notice" :class="notice?.kind">
+          <template v-if="phase === 'captcha'">請在驗證畫面勾選「我不是機器人」</template>
+          <template v-else-if="phase === 'submitting'">登入中…</template>
+          <template v-else-if="notice">{{ notice.text }}</template>
+        </div>
+      </div>
+
     </div>
 
-    <div class="pw-body">
-      <div ref="accountField" class="pw-field">
-        <span class="pw-dot" :class="{ on: hasCard(account) }"></span>
-        <input
-          ref="accountInput"
-          v-model="account"
-          class="pw-input with-dot"
-          placeholder="帳號"
-          autocomplete="off"
-          spellcheck="false"
-          :disabled="busy"
-          @keydown.esc="menuOpen = false"
-        />
-        <button
-          type="button"
-          class="pw-icon"
-          :class="{ on: menuOpen }"
-          title="已儲存的帳號"
-          :disabled="busy || saved.length === 0"
-          @click="menuOpen = !menuOpen"
-        >
-          <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
-            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        <ul v-if="menuOpen" class="pw-menu">
-          <li v-for="entry in saved" :key="entry.account" class="pw-row" @click="pick(entry)">
-            <span class="pw-dot" :class="{ on: hasCard(entry.account) }"></span>
-            <span class="pw-row-name">{{ entry.account }}</span>
-            <button type="button" class="pw-row-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
-          </li>
-        </ul>
-      </div>
-      <div class="pw-field">
-        <input
-          ref="passwordInput"
-          v-model="password"
-          class="pw-input"
-          :type="showPassword ? 'text' : 'password'"
-          placeholder="密碼"
-          autocomplete="current-password"
-          :disabled="busy"
-        />
-        <button
-          type="button"
-          class="pw-icon"
-          :class="{ on: showPassword }"
-          :title="showPassword ? '隱藏密碼' : '顯示密碼'"
-          :disabled="busy"
-          @click="showPassword = !showPassword"
-        >
-          <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
-            <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/>
-            <path v-if="!showPassword" d="M4 20L20 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-          </svg>
-        </button>
-      </div>
-      <div class="pw-notice" :class="notice?.kind">
-        <template v-if="phase === 'captcha'">請在驗證畫面勾選「我不是機器人」</template>
-        <template v-else-if="phase === 'submitting'">登入中…</template>
-        <template v-else-if="notice">{{ notice.text }}</template>
-      </div>
-    </div>
-
-    <div class="login-actions">
-      <button type="button" class="btn-ghost" :disabled="busy" @click="$emit('cancel')">取消</button>
+    <div class="bottom-bar">
+      <button type="button" class="btn-ghost" :disabled="phase === 'submitting'" @click="onCancel">取消</button>
       <button type="submit" class="btn-solid" :disabled="!canSubmit">
         <span v-if="busy" class="pw-spin"></span>
         <template v-else>登入</template>
@@ -218,9 +233,10 @@ async function submit() {
 </template>
 
 <style scoped>
-.pw-page {
+.pw-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pw-main {
   display: flex; flex-direction: column; align-items: center;
-  gap: 18px; padding: 22px 18px 18px; flex: 1;
+  gap: 18px; padding: 22px 18px 18px; flex: 1; min-height: 0;
 }
 
 .pw-hd { text-align: center; }

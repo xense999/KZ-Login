@@ -629,15 +629,6 @@ function cleanError(msg: string): string {
   flex: 1;
 }
 
-.bottom-bar {
-  flex-shrink: 0;
-  display: flex;
-  gap: 7px;
-  padding: 10px 14px 14px;
-  border-top: 1px solid var(--border2);
-  background: var(--bg);
-}
-
 /* Empty */
 .empty {
   display: flex; flex-direction: column; align-items: center;

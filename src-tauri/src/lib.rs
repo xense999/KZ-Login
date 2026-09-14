@@ -173,6 +173,7 @@ async fn captcha_solve<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     palette: captcha::Palette,
+    region: captcha::Region,
 ) -> Result<Option<String>, String> {
     let (page_url, site_key) = {
         let guard = state.pending_password.lock().await;
@@ -182,7 +183,13 @@ async fn captcha_solve<R: tauri::Runtime>(
     if site_key.is_empty() {
         return Err("beanfun 沒有提供驗證金鑰，請改用 QR 登入".into());
     }
-    captcha::solve(&app, &page_url, &site_key, &palette).await
+    captcha::solve(&app, &page_url, &site_key, &palette, region).await
+}
+
+/// The login page's cancel button while the checkbox is up.
+#[tauri::command]
+fn captcha_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    captcha::cancel(&app);
 }
 
 /// Walk the steps from wherever `session` stopped. A captcha demand parks the
@@ -1068,7 +1075,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, saved_logins, forget_saved_login, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,

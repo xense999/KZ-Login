@@ -92,47 +92,50 @@ async function poll() {
 
 <template>
   <div class="qr-page">
-    <div class="qr-hd">
-      <h2>掃描 QR Code</h2>
-      <p>請用手機 Gama Play APP 掃描</p>
+    <div class="qr-main">
+      <div class="qr-hd">
+        <h2>掃描 QR Code</h2>
+        <p>請用手機 Gama Play APP 掃描</p>
+      </div>
+
+      <div class="qr-body">
+        <template v-if="status === 'loading'">
+          <div class="spinner-lg"></div>
+          <span class="status-txt">取得 QR Code…</span>
+        </template>
+
+        <template v-else-if="status === 'waiting'">
+          <div class="qr-frame" @click="startQr" title="點擊刷新">
+            <img :src="qrImage" class="qr-img" alt="QR Code" />
+            <div class="qr-refresh">↺ 刷新</div>
+          </div>
+          <div class="pulse-row">
+            <div class="pulse-dot"></div>
+            <div class="pulse-dot" style="animation-delay:.25s"></div>
+            <div class="pulse-dot" style="animation-delay:.5s"></div>
+          </div>
+          <span class="status-txt">等待掃描</span>
+        </template>
+
+        <template v-else-if="status === 'expired'">
+          <div class="state-card">
+            <div class="state-icon">⏱</div>
+            <div class="state-title">QR Code 已過期</div>
+          </div>
+        </template>
+
+        <template v-else-if="status === 'error'">
+          <div class="state-card">
+            <div class="state-icon">⚠</div>
+            <div class="state-title">發生錯誤</div>
+            <div class="state-sub">{{ errorMsg }}</div>
+          </div>
+        </template>
+      </div>
+
     </div>
 
-    <div class="qr-body">
-      <template v-if="status === 'loading'">
-        <div class="spinner-lg"></div>
-        <span class="status-txt">取得 QR Code…</span>
-      </template>
-
-      <template v-else-if="status === 'waiting'">
-        <div class="qr-frame" @click="startQr" title="點擊刷新">
-          <img :src="qrImage" class="qr-img" alt="QR Code" />
-          <div class="qr-refresh">↺ 刷新</div>
-        </div>
-        <div class="pulse-row">
-          <div class="pulse-dot"></div>
-          <div class="pulse-dot" style="animation-delay:.25s"></div>
-          <div class="pulse-dot" style="animation-delay:.5s"></div>
-        </div>
-        <span class="status-txt">等待掃描</span>
-      </template>
-
-      <template v-else-if="status === 'expired'">
-        <div class="state-card">
-          <div class="state-icon">⏱</div>
-          <div class="state-title">QR Code 已過期</div>
-        </div>
-      </template>
-
-      <template v-else-if="status === 'error'">
-        <div class="state-card">
-          <div class="state-icon">⚠</div>
-          <div class="state-title">發生錯誤</div>
-          <div class="state-sub">{{ errorMsg }}</div>
-        </div>
-      </template>
-    </div>
-
-    <div class="login-actions">
+    <div class="bottom-bar">
       <button v-if="status === 'waiting' && deeplink" class="btn-ghost" @click="copyDeeplink">
         {{ linkCopied ? "已複製 ✓" : "連結版本" }}
       </button>
@@ -143,9 +146,10 @@ async function poll() {
 </template>
 
 <style scoped>
-.qr-page {
+.qr-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.qr-main {
   display: flex; flex-direction: column; align-items: center;
-  gap: 18px; padding: 22px 18px 18px; flex: 1;
+  gap: 18px; padding: 22px 18px 18px; flex: 1; min-height: 0;
 }
 
 .qr-hd { text-align: center; }

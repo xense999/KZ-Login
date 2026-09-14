@@ -7,16 +7,19 @@
 ## 公開介面
 
 ```rust
-pub struct Palette { bg, surface, text, border: String, dark: bool }
-pub async fn solve(app, page_url: &str, site_key: &str, palette: &Palette) -> Result<Option<String>, String>
+pub struct Palette { bg, text: String, dark: bool }
+pub struct Region { x, y, width, height: f64 }   // 主視窗客戶區的 CSS px
+pub async fn solve(app, page_url: &str, site_key: &str, palette: &Palette, region: Region) -> Result<Option<String>, String>
+pub fn cancel(app)
 ```
 
-- `Ok(Some(token))`＝使用者完成驗證；`Ok(None)`＝取消或逾時（呼叫端一律當「放棄」）；`Err`＝視窗開不起來。
-- 唯一呼叫者：`commands` 的 `captcha_solve`。
+- `Ok(Some(token))`＝使用者完成驗證；`Ok(None)`＝取消、逾時或視窗消失（呼叫端一律當「放棄」）；`Err`＝視窗開不起來。
+- 呼叫者：`commands` 的 `captcha_solve`、`captcha_cancel`（登入頁底部「取消」）。
 
 ## 單一來源
 
-- **回傳管道的 fragment 字串**（`kz-captcha=`／`kz-captcha-cancel`）只寫在本模組常數，注入腳本透過替換取得，不另寫一份。
+- **fragment 字串**（`kz-captcha=` 回傳 token、`kz-captcha-size=full|region` 請求放大／縮回）只寫在本模組常數，注入腳本透過替換取得，不另寫一份。
+- **驗證區的位置**由前端量測登入頁「標題列與底部按鈕列之間」那塊元素後傳入；本模組不寫死任何版面尺寸。
 - **配色**來自前端 `styles/main.css` 的 token，由前端讀出後傳進來；本模組不保存調色盤。
 
 ## 不變量
@@ -26,7 +29,9 @@ pub async fn solve(app, page_url: &str, site_key: &str, palette: &Palette) -> Re
 - label 每次換號（`captcha-<n>`）：tauri 的 label 簿記要等 `Destroyed` 才清，用固定 label 會撞號。
 - 使用固定、可重用的獨立 WebView2 資料夾（app local data 底下的 `captcha-webview`），不會越開越多；它的瀏覽器參數跟主視窗不同，**不可**跟主視窗共用同一個資料夾。
 - 遮罩的 z-index 必須低於 reCAPTCHA 圖片題（約 2e9），否則圖片題會被蓋住。
-- 視窗大小、位置跟主視窗外框一致，並蓋在主視窗上；驗證期間主視窗無法被拖動。
+- 視窗平常只蓋住 `region`（2026-09-14 改：原本蓋整個主視窗）；每 80ms 依主視窗目前位置重新定位，所以拖動主視窗時會跟著移動。
+- 圖片題打開時放大到整個主視窗客戶區，勾選框固定在原本的 region 位置不跳動；圖片題關閉就縮回。
+- 驗證區內不放自己的標題或取消鈕；取消一律走登入頁底部「取消」→ `cancel`。
 - 3 分鐘逾時；結束（不論結果）一律由後端 `destroy`。
 
 ## 禁止
