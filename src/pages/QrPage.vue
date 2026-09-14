@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "../composables/useToast";
 import { sendEmbed, EMBED_COLOR_LINK } from "../composables/useDiscord";
-import type { LoginResult } from "../stores/accounts";
+import type { LoginGame, LoginResult } from "../stores/accounts";
 
 const emit = defineEmits<{
   cancel: [];
@@ -76,7 +76,7 @@ async function copyDeeplink() {
 function schedulePoll() { pollTimer = setTimeout(poll, 2000); }
 
 async function poll() {
-  type R = { status: "waiting" } | { status: "expired" } | { status: "approved"; token: string; games: { sn: string; sid: string; sname: string }[] };
+  type R = { status: "waiting" } | { status: "expired" } | { status: "approved"; token: string; games: LoginGame[] };
   try {
     const r = await invoke<R>("qr_check");
     if (disposed) return;

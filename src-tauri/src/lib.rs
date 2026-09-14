@@ -48,6 +48,8 @@ fn map_err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+const NO_PENDING_PASSWORD_LOGIN: &str = "沒有進行中的帳密登入，請重新登入";
+
 // ─── QR Start ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -58,6 +60,8 @@ struct QrStartResult {
 
 #[tauri::command]
 async fn qr_start(state: tauri::State<'_, AppState>) -> Result<QrStartResult, String> {
+    // Switching to QR abandons any paused password login, and its password.
+    *state.pending_password.lock().await = None;
     let (client, cookie_store) = beanfun::build_client_with_store().map_err(map_err)?;
     let skey = beanfun::get_session_key(&client).await.map_err(map_err)?;
     let init = beanfun::init_qr_login(&client, &skey).await.map_err(map_err)?;
@@ -152,7 +156,7 @@ async fn password_login_resume<R: tauri::Runtime>(
     captcha: String,
 ) -> Result<PasswordLoginResult, String> {
     let session = state.pending_password.lock().await.take()
-        .ok_or("沒有進行中的帳密登入，請重新登入")?;
+        .ok_or(NO_PENDING_PASSWORD_LOGIN)?;
     run_password_login(&app, &state, session, &captcha).await
 }
 
@@ -182,13 +186,19 @@ async fn captcha_solve<R: tauri::Runtime>(
 ) -> Result<Option<String>, String> {
     let (page_url, site_key) = {
         let guard = state.pending_password.lock().await;
-        let session = guard.as_ref().ok_or("沒有進行中的帳密登入，請重新登入")?;
+        let session = guard.as_ref().ok_or(NO_PENDING_PASSWORD_LOGIN)?;
         (session.page.url(), session.page.captcha_site_key.clone())
     };
     if site_key.is_empty() {
         return Err("beanfun 沒有提供驗證金鑰，請改用 QR 登入".into());
     }
-    captcha::solve(&app, &page_url, &site_key, &palette, region).await
+    let token = captcha::solve(&app, &page_url, &site_key, &palette, region).await?;
+    // Cancelled or timed out: nothing will resume this login, so do not keep
+    // its password around until the next one starts.
+    if token.is_none() {
+        *state.pending_password.lock().await = None;
+    }
+    Ok(token)
 }
 
 /// The login page's cancel button while the checkbox is up.

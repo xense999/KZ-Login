@@ -19,7 +19,7 @@ pub fn forget(app, account) -> Result<(), String>
 ## 單一來源
 
 - 檔案位置（app local data 底下的 `credentials.dat`）與加解密只寫在本模組。
-- 「同一個帳號」的判定＝不分大小寫（`same_account`）。前端 `accounts store` 的 `findByLoginAccount` 用同一條規則，兩邊要一起改。
+- 「同一個帳號」的判定＝去掉前後空白後，英文字母不分大小寫（beanfun 帳號只有 ASCII）：Rust 端寫在 `same_account`，前端對應的是總表 `accounts store` 條的 `sameLoginAccount`；前端所有比對（`findByLoginAccount`、`PasswordPage` 找已存帳密）都只呼叫它。兩邊要一起改。
 
 ## 不變量
 

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useTheme } from "../composables/useTheme";
-import { useAccountsStore, type LoginResult } from "../stores/accounts";
+import { useAccountsStore, sameLoginAccount, type LoginGame, type LoginResult } from "../stores/accounts";
 
 const props = defineProps<{ initialAccount: string }>();
 const emit = defineEmits<{
@@ -11,9 +11,8 @@ const emit = defineEmits<{
   busy: [busy: boolean];
 }>();
 
-type Games = LoginResult["games"];
 type Reply =
-  | { status: "approved"; token: string; games: Games }
+  | { status: "approved"; token: string; games: LoginGame[] }
   | { status: "captcha" }
   | { status: "rejected"; message: string }
   | { status: "use_qr"; message: string };
@@ -58,8 +57,7 @@ onMounted(async () => {
 onUnmounted(() => document.removeEventListener("pointerdown", closeMenuOutside));
 
 function findSaved(name: string) {
-  const wanted = name.trim().toLowerCase();
-  return saved.value.find((s) => s.account.toLowerCase() === wanted);
+  return saved.value.find((s) => sameLoginAccount(s.account, name));
 }
 
 function closeMenuOutside(e: PointerEvent) {
@@ -276,7 +274,7 @@ async function submit() {
     <div class="bottom-bar">
       <button type="button" class="btn-ghost" :disabled="phase === 'submitting'" @click="onCancel">取消</button>
       <button type="submit" class="btn-solid" :disabled="!canSubmit">
-        <span v-if="busy" class="pw-spin"></span>
+        <span v-if="busy" class="spin"></span>
         <template v-else>登入</template>
       </button>
     </div>
@@ -379,11 +377,4 @@ async function submit() {
 }
 .pw-notice.error { color: var(--red); }
 
-.pw-spin {
-  width: 14px; height: 14px;
-  border: 2px solid var(--spin-track);
-  border-top-color: var(--primary-color);
-  border-radius: 50%; animation: pw-rot 0.8s linear infinite;
-}
-@keyframes pw-rot { to { transform: rotate(360deg); } }
 </style>

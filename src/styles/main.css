@@ -151,7 +151,8 @@ input {
 .wbtn:hover { background: var(--glass-hover); color: var(--text2); }
 .wbtn.close:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
-/* ── 底部按鈕列 ── 主頁與兩種登入頁共用；登入頁的驗證區就夾在標題列與這條線之間 */
+/* Bottom button bar shared by the main page and both login pages; the captcha
+   region on the login page is the space between the title bar and this line. */
 .bottom-bar {
   flex-shrink: 0;
   display: flex;
@@ -177,6 +178,16 @@ input {
 }
 .btn-solid:hover:not(:disabled) { background: var(--primary-bg-hover); }
 .btn-ghost:disabled, .btn-solid:disabled { opacity: 0.45; cursor: default; }
+
+/* Inline busy spinner, shared by every page that shows one. */
+.spin {
+  display: inline-block; width: 11px; height: 11px;
+  border: 1.5px solid var(--spin-track);
+  border-top-color: var(--text);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }

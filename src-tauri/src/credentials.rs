@@ -17,31 +17,29 @@ pub struct SavedLogin {
     pub password: String,
 }
 
-pub fn list<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedLogin>, String> {
-    load(app)
-}
-
 pub fn remember<R: Runtime>(app: &AppHandle<R>, account: &str, password: &str) -> Result<(), String> {
-    let mut logins = load(app)?;
+    let mut logins = list(app)?;
     upsert(&mut logins, account, password);
     store(app, &logins)
 }
 
 pub fn reorder<R: Runtime>(app: &AppHandle<R>, order: &[String]) -> Result<(), String> {
-    let mut logins = load(app)?;
+    let mut logins = list(app)?;
     arrange(&mut logins, order);
     store(app, &logins)
 }
 
 pub fn forget<R: Runtime>(app: &AppHandle<R>, account: &str) -> Result<(), String> {
-    let mut logins = load(app)?;
+    let mut logins = list(app)?;
     remove(&mut logins, account);
     store(app, &logins)
 }
 
-/// beanfun does not tell "Abc" from "abc", so neither does the list.
+/// beanfun does not tell "Abc" from "abc", so neither does the list. Account
+/// names are ASCII on beanfun, hence ASCII folding. The frontend's
+/// `sameLoginAccount` (accounts store) must apply the same rule.
 fn same_account(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b)
+    a.trim().eq_ignore_ascii_case(b.trim())
 }
 
 /// A known account keeps its place; a new one joins at the end.
@@ -76,7 +74,7 @@ fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 /// A missing file is an empty list. A file we cannot decrypt (copied from
 /// another account, corrupted) is also treated as empty rather than blocking
 /// the login page; the next save overwrites it.
-fn load<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedLogin>, String> {
+pub fn list<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedLogin>, String> {
     let path = file_path(app)?;
     let Ok(cipher) = std::fs::read(&path) else { return Ok(Vec::new()) };
     let logins = dpapi::unprotect(&cipher)
@@ -173,9 +171,9 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_ignores_case() {
+    fn forgetting_ignores_case_and_surrounding_spaces() {
         let mut logins = vec![saved("Alpha", "a"), saved("beta", "b")];
-        remove(&mut logins, "ALPHA");
+        remove(&mut logins, " ALPHA ");
         assert_eq!(logins, vec![saved("beta", "b")]);
     }
 

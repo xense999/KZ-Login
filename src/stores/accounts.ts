@@ -10,6 +10,17 @@ export interface GameAccount {
 
 export type LoginMethod = "qr" | "password";
 
+// A game account as a login returns it, before any local renaming.
+export type LoginGame = { sn: string; sid: string; sname: string };
+
+// beanfun ignores case in account names, which are ASCII. Mirrors
+// `same_account` in the Rust credentials module; change both together.
+const foldAscii = (s: string) => s.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+export function sameLoginAccount(a: string, b: string): boolean {
+  return foldAscii(a) !== "" && foldAscii(a) === foldAscii(b);
+}
+
 export interface BeanfunAccount {
   id: string;
   alias: string;
@@ -23,7 +34,7 @@ export interface BeanfunAccount {
 
 export interface LoginResult {
   token: string;
-  games: { sn: string; sid: string; sname: string }[];
+  games: LoginGame[];
   method: LoginMethod;
   account: string | null;
 }
@@ -32,11 +43,8 @@ export const useAccountsStore = defineStore("accounts", () => {
   const accounts = ref<BeanfunAccount[]>([]);
   const lastUsedSn = ref<string | null>(null);
 
-  // beanfun ignores case in account names, and the saved-login list does too.
   function findByLoginAccount(account: string): BeanfunAccount | undefined {
-    const wanted = account.trim().toLowerCase();
-    if (!wanted) return undefined;
-    return accounts.value.find((a) => a.loginAccount?.toLowerCase() === wanted);
+    return accounts.value.find((a) => a.loginAccount !== null && sameLoginAccount(a.loginAccount, account));
   }
 
   function markUsed(sn: string) {

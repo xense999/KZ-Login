@@ -385,17 +385,11 @@ struct LoginReply {
 fn read_login_reply(body: &str) -> Result<LoginReply, BeanfunError> {
     let v: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| BeanfunError::Parse(format!("Login reply parse failed: {}", clip(body, 200))))?;
-    // beanfun sends these as numbers today; accept numeric strings too.
-    let int = |key: &str| match &v[key] {
-        serde_json::Value::Number(n) => n.as_i64(),
-        serde_json::Value::String(s) => s.parse().ok(),
-        _ => None,
-    };
-    let code = int("ResultCode")
+    let code = v["ResultCode"].as_i64()
         .ok_or_else(|| BeanfunError::Parse(format!("Login reply has no ResultCode: {}", clip(body, 200))))?;
     Ok(LoginReply {
         code,
-        result: int("Result").unwrap_or(0),
+        result: v["Result"].as_i64().unwrap_or(0),
         message: v["ResultMessage"].as_str().unwrap_or_default().to_owned(),
         data: v["ResultData"].clone(),
     })
@@ -413,16 +407,23 @@ fn refusal(reply: &LoginReply) -> LoginStep {
     }
 }
 
+/// Our own description of why QR is needed, plus beanfun's message when it is
+/// something a person can read rather than a status word or a URL.
+fn use_qr(reason: &str, reply: &LoginReply) -> LoginStep {
+    let m = reply.message.trim();
+    let readable = !m.is_empty() && !m.is_ascii();
+    LoginStep::UseQr(if readable { format!("{reason}：{m}") } else { reason.to_owned() })
+}
+
+/// Unlike AccountLogin, this step has no third outcome code: beanfun's page
+/// treats every reply that is not 1 as a refusal to show.
 fn read_account_type(body: &str) -> Result<LoginStep, BeanfunError> {
     let reply = read_login_reply(body)?;
     match reply.code {
-        0 => Ok(refusal(&reply)),
-        1 if reply.data["IsGamaPass"].as_bool() == Some(true) => {
-            Ok(LoginStep::UseQr("此帳號是 GamaPass 帳號".into()))
-        }
-        1 if reply.result == 2 => Ok(LoginStep::UseQr("此帳號使用動態密碼（OTP）".into())),
+        1 if reply.data["IsGamaPass"].as_bool() == Some(true) => Ok(use_qr("此帳號是 GamaPass 帳號", &reply)),
+        1 if reply.result == 2 => Ok(use_qr("此帳號使用動態密碼（OTP）", &reply)),
         1 => Ok(LoginStep::Proceed),
-        _ => Err(BeanfunError::Parse(format!("Unknown account type reply: {}", clip(body, 200)))),
+        _ => Ok(refusal(&reply)),
     }
 }
 
@@ -433,8 +434,8 @@ fn read_account_login(body: &str) -> Result<LoginStep, BeanfunError> {
         1 => Ok(LoginStep::Proceed),
         // Either the lock notice or a URL to an advance check the user must
         // pass on beanfun's site; the URL itself means nothing to them.
-        2 if reply.message == "AccountLock" => Ok(LoginStep::UseQr("帳號已被鎖定".into())),
-        2 => Ok(LoginStep::UseQr("beanfun 要求進階驗證".into())),
+        2 if reply.message == "AccountLock" => Ok(use_qr("帳號已被鎖定", &reply)),
+        2 => Ok(use_qr("beanfun 要求進階驗證", &reply)),
         _ => Err(BeanfunError::Parse(format!("Unknown account login reply: {}", clip(body, 200)))),
     }
 }
@@ -1264,6 +1265,25 @@ mod tests {
             read_account_type(r#"{"ResultData":null,"Result":0,"ResultCode":0,"ResultMessage":"帳號格式錯誤"}"#).unwrap(),
             LoginStep::Rejected("帳號格式錯誤".into())
         );
+        // Any code other than 1 is a refusal on this step, not an unreadable reply.
+        assert_eq!(
+            read_account_type(r#"{"ResultData":null,"Result":0,"ResultCode":-1,"ResultMessage":"系統忙碌中"}"#).unwrap(),
+            LoginStep::Rejected("系統忙碌中".into())
+        );
+    }
+
+    /// beanfun's own words are kept when they say something; status words
+    /// like "Success" and "AccountLock" are not shown.
+    #[test]
+    fn use_qr_keeps_readable_beanfun_messages_only() {
+        assert_eq!(
+            read_account_type(r#"{"ResultData":{"IsGamaPass":false},"Result":2,"ResultCode":1,"ResultMessage":"請輸入動態密碼"}"#).unwrap(),
+            LoginStep::UseQr("此帳號使用動態密碼（OTP）：請輸入動態密碼".into())
+        );
+        assert_eq!(
+            read_account_login(r#"{"ResultData":null,"Result":0,"ResultCode":2,"ResultMessage":"AccountLock"}"#).unwrap(),
+            LoginStep::UseQr("帳號已被鎖定".into())
+        );
     }
 
     #[test]
@@ -1296,10 +1316,11 @@ mod tests {
     /// A page we cannot read is an error, never a wrong password.
     #[test]
     fn an_unreadable_login_reply_is_an_error() {
-        for body in ["", "<html>maintenance</html>", r#"{"ResultCode":9,"ResultMessage":"?"}"#] {
+        for body in ["", "<html>maintenance</html>", r#"{"ResultMessage":"no code"}"#] {
             assert!(read_account_type(body).is_err(), "{body}");
             assert!(read_account_login(body).is_err(), "{body}");
         }
+        assert!(read_account_login(r#"{"ResultCode":9,"ResultMessage":"?"}"#).is_err());
     }
 
     #[test]

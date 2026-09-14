@@ -9,7 +9,7 @@ import SuccessPage from "./pages/SuccessPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import ToastPop from "./components/ToastPop.vue";
 import { toast } from "./composables/useToast";
-import { useAccountsStore, type LoginMethod, type LoginResult } from "./stores/accounts";
+import { useAccountsStore, sameLoginAccount, type LoginMethod, type LoginResult } from "./stores/accounts";
 import { useTheme } from "./composables/useTheme";
 
 type Page = "main" | "login" | "success" | "settings";
@@ -144,10 +144,7 @@ async function forgetSession(token: string) {
 }
 
 async function onLoginSuccess(login: LoginResult) {
-  // Logging in an account that already has a card refreshes that card rather
-  // than adding a second one.
-  const targetId = reauthAccountId.value
-    ?? (login.account ? store.findByLoginAccount(login.account)?.id ?? null : null);
+  const targetId = loginTarget(login);
   reauthAccountId.value = null;
 
   if (targetId) {
@@ -160,6 +157,19 @@ async function onLoginSuccess(login: LoginResult) {
 
   pendingLogin.value = login;
   page.value = "success";
+}
+
+// Which card a login refreshes, or null for a new card. The account typed is
+// what counts: re-login from card A into account B refreshes B's card (or adds
+// one) and leaves A alone. A QR login, or a card that never recorded its
+// account, cannot be told apart, so a re-login keeps the card it came from.
+function loginTarget(login: LoginResult): string | null {
+  const reauth = reauthAccountId.value ? store.accounts.find((a) => a.id === reauthAccountId.value) : undefined;
+  if (!login.account) return reauth?.id ?? null;
+  if (reauth?.loginAccount && sameLoginAccount(reauth.loginAccount, login.account)) return reauth.id;
+  const owner = store.findByLoginAccount(login.account);
+  if (owner) return owner.id;
+  return reauth && reauth.loginAccount === null ? reauth.id : null;
 }
 
 function onAccountSaved() {

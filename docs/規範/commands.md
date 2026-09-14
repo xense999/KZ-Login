@@ -17,6 +17,6 @@
 
 ## 不變量
 
-- `pending_password` 只在「需要驗證」時保存；成功、被拒、改用 QR、錯誤，或開始新的帳密登入時都不保留。
+- `pending_password` 只在「需要驗證」時保存；成功、被拒、改用 QR、錯誤、開始新的帳密登入、驗證取消或逾時（`captcha_solve` 回傳 null）、切到 QR（`qr_start`）時都會清掉，裡面的明文密碼不會多留（2026-09-14 審查後補齊）。
 - 密碼只有在帳密登入成功時才交給 `credentials` 加密儲存；被拒、改用 QR、錯誤時都不存。
 - 兩種登入成功後都把 cookie jar 登記進 `session_stores`，OTP／啟動沿用。

@@ -810,14 +810,6 @@ function cleanError(msg: string): string {
 .btn-pill.done { color: var(--green); border-color: rgba(52,199,89,0.3); background: rgba(52,199,89,0.08); }
 .btn-pill.auto-btn { min-width: 32px; padding: 5px 8px; }
 
-.spin {
-  display: inline-block; width: 11px; height: 11px;
-  border: 1.5px solid var(--spin-track);
-  border-top-color: var(--text);
-  border-radius: 50%; animation: spin 0.7s linear infinite;
-  vertical-align: middle;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .err-row  { font-size: 11px; color: var(--warn);  padding: 5px 13px 7px 20px; }
 .sent-row { font-size: 11px; color: var(--text3); padding: 5px 13px 7px 20px; font-variant-numeric: tabular-nums; }

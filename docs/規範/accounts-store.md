@@ -6,8 +6,9 @@
 
 ## 公開介面
 
-- 型別：`BeanfunAccount`、`GameAccount`、`LoginMethod`（`"qr" | "password"`）、`LoginResult`（`token`、`games`、`method`、`account`）。
-- 動作：`addAccount`、`updateAlias`、`updateGameName`、`removeAccount`、`moveAccount`、`moveGameAccount`、`invalidateToken`、`findByLoginAccount(account)`（不分大小寫，規則與總表 `credentials` 條一致）、`updateToken(accountId, login)`、`markUsed`。
+- 型別：`BeanfunAccount`、`GameAccount`、`LoginGame`（登入回傳的遊戲帳號 `sn/sid/sname`）、`LoginMethod`（`"qr" | "password"`）、`LoginResult`（`token`、`games`、`method`、`account`）。
+- 函式：`sameLoginAccount(a, b)`——前端唯一的「同一個 beanfun 帳號」判定。
+- 動作：`addAccount`、`updateAlias`、`updateGameName`、`removeAccount`、`moveAccount`、`moveGameAccount`、`invalidateToken`、`findByLoginAccount(account)`（用 `sameLoginAccount`）、`updateToken(accountId, login)`、`markUsed`。
 
 ## 單一來源
 
