@@ -74,6 +74,40 @@ function pick(entry: Saved) {
   passwordInput.value?.focus();
 }
 
+// Drag by the dot. The list reorders live under the pointer and is saved once
+// on release.
+const draggingIdx = ref<number | null>(null);
+
+function onGripDown(e: PointerEvent, idx: number) {
+  e.preventDefault();
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  draggingIdx.value = idx;
+}
+
+function onGripMove(e: PointerEvent) {
+  if (draggingIdx.value === null) return;
+  const row = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-saved-idx]") as HTMLElement | null;
+  if (!row) return;
+  const to = Number(row.dataset.savedIdx);
+  const from = draggingIdx.value;
+  if (to === from) return;
+  const list = [...saved.value];
+  const [moved] = list.splice(from, 1);
+  list.splice(to, 0, moved);
+  saved.value = list;
+  draggingIdx.value = to;
+}
+
+async function onGripUp() {
+  if (draggingIdx.value === null) return;
+  draggingIdx.value = null;
+  try {
+    await invoke("reorder_saved_logins", { accounts: saved.value.map((s) => s.account) });
+  } catch (e) {
+    notice.value = { kind: "error", text: String(e) };
+  }
+}
+
 async function forget(entry: Saved) {
   try {
     await invoke("forget_saved_login", { account: entry.account });
@@ -181,8 +215,25 @@ async function submit() {
             </svg>
           </button>
           <ul v-if="menuOpen" class="pw-menu">
-            <li v-for="entry in saved" :key="entry.account" class="pw-row" @click="pick(entry)">
-              <span class="pw-dot" :class="{ on: hasCard(entry.account) }"></span>
+            <li
+              v-for="(entry, idx) in saved"
+              :key="entry.account"
+              :data-saved-idx="idx"
+              class="pw-row"
+              :class="{ dragging: draggingIdx === idx }"
+              @click="pick(entry)"
+            >
+              <span
+                class="pw-grip"
+                title="拖移排序"
+                @pointerdown="onGripDown($event, idx)"
+                @pointermove="onGripMove"
+                @pointerup="onGripUp"
+                @pointercancel="onGripUp"
+                @click.stop
+              >
+                <span class="pw-dot" :class="{ on: hasCard(entry.account) }"></span>
+              </span>
               <span class="pw-row-name">{{ entry.account }}</span>
               <button type="button" class="pw-row-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
             </li>
@@ -304,6 +355,15 @@ async function submit() {
   font-size: 13px; color: var(--text); cursor: pointer;
 }
 .pw-row:hover { background: var(--ctx-hover); }
+.pw-row.dragging { background: var(--ctx-hover); }
+
+.pw-grip {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 22px; margin: -4px -4px -4px -6px;
+  cursor: grab; touch-action: none; border-radius: 5px;
+}
+.pw-grip:hover { background: var(--glass-hover); }
+.pw-grip:active { cursor: grabbing; }
 .pw-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pw-row-del {
   width: 22px; height: 22px; border: none; border-radius: 6px;

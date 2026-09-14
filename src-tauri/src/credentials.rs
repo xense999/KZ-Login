@@ -10,24 +10,26 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const FILE_NAME: &str = "credentials.dat";
 
+/// The list order on disk is the order the user arranged in the dropdown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedLogin {
     pub account: String,
     pub password: String,
-    /// Unix seconds of the last successful login; orders the list.
-    pub last_used: i64,
 }
 
-/// Most recently used first.
 pub fn list<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedLogin>, String> {
-    let mut logins = load(app)?;
-    sort_recent_first(&mut logins);
-    Ok(logins)
+    load(app)
 }
 
 pub fn remember<R: Runtime>(app: &AppHandle<R>, account: &str, password: &str) -> Result<(), String> {
     let mut logins = load(app)?;
-    upsert(&mut logins, account, password, now());
+    upsert(&mut logins, account, password);
+    store(app, &logins)
+}
+
+pub fn reorder<R: Runtime>(app: &AppHandle<R>, order: &[String]) -> Result<(), String> {
+    let mut logins = load(app)?;
+    arrange(&mut logins, order);
     store(app, &logins)
 }
 
@@ -42,34 +44,26 @@ fn same_account(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-fn upsert(logins: &mut Vec<SavedLogin>, account: &str, password: &str, at: i64) {
+/// A known account keeps its place; a new one joins at the end.
+fn upsert(logins: &mut Vec<SavedLogin>, account: &str, password: &str) {
     match logins.iter_mut().find(|l| same_account(&l.account, account)) {
         Some(l) => {
             l.account = account.to_owned();
             l.password = password.to_owned();
-            l.last_used = at;
         }
-        None => logins.push(SavedLogin {
-            account: account.to_owned(),
-            password: password.to_owned(),
-            last_used: at,
-        }),
+        None => logins.push(SavedLogin { account: account.to_owned(), password: password.to_owned() }),
     }
+}
+
+/// Put the list in `order`. Anything `order` does not mention — saved by a
+/// login that finished while the dropdown was open — stays, after the rest.
+fn arrange(logins: &mut Vec<SavedLogin>, order: &[String]) {
+    let rank = |l: &SavedLogin| order.iter().position(|a| same_account(a, &l.account)).unwrap_or(usize::MAX);
+    logins.sort_by_key(rank);
 }
 
 fn remove(logins: &mut Vec<SavedLogin>, account: &str) {
     logins.retain(|l| !same_account(&l.account, account));
-}
-
-fn sort_recent_first(logins: &mut [SavedLogin]) {
-    logins.sort_by(|a, b| b.last_used.cmp(&a.last_used));
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -154,45 +148,57 @@ mod dpapi {
 mod tests {
     use super::*;
 
-    fn saved(account: &str, password: &str, at: i64) -> SavedLogin {
-        SavedLogin { account: account.into(), password: password.into(), last_used: at }
+    fn saved(account: &str, password: &str) -> SavedLogin {
+        SavedLogin { account: account.into(), password: password.into() }
+    }
+
+    fn names(logins: &[SavedLogin]) -> Vec<&str> {
+        logins.iter().map(|l| l.account.as_str()).collect()
     }
 
     #[test]
-    fn a_new_account_is_added() {
-        let mut logins = vec![saved("alpha", "a", 1)];
-        upsert(&mut logins, "beta", "b", 2);
-        assert_eq!(logins, vec![saved("alpha", "a", 1), saved("beta", "b", 2)]);
+    fn a_new_account_joins_at_the_end() {
+        let mut logins = vec![saved("alpha", "a")];
+        upsert(&mut logins, "beta", "b");
+        assert_eq!(logins, vec![saved("alpha", "a"), saved("beta", "b")]);
     }
 
-    /// Logging in again with a changed password replaces the old one instead of
-    /// leaving two rows for one account — whatever case it was typed in.
+    /// Logging in again with a changed password replaces the old one in place —
+    /// no second row, no jump to either end — whatever case it was typed in.
     #[test]
-    fn a_known_account_is_updated_not_duplicated() {
-        let mut logins = vec![saved("Alpha", "old", 1)];
-        upsert(&mut logins, "alpha", "new", 5);
-        assert_eq!(logins, vec![saved("alpha", "new", 5)]);
+    fn a_known_account_is_updated_where_it_stands() {
+        let mut logins = vec![saved("Alpha", "old"), saved("beta", "b")];
+        upsert(&mut logins, "alpha", "new");
+        assert_eq!(logins, vec![saved("alpha", "new"), saved("beta", "b")]);
     }
 
     #[test]
     fn forgetting_ignores_case() {
-        let mut logins = vec![saved("Alpha", "a", 1), saved("beta", "b", 2)];
+        let mut logins = vec![saved("Alpha", "a"), saved("beta", "b")];
         remove(&mut logins, "ALPHA");
-        assert_eq!(logins, vec![saved("beta", "b", 2)]);
+        assert_eq!(logins, vec![saved("beta", "b")]);
     }
 
     #[test]
-    fn most_recent_comes_first() {
-        let mut logins = vec![saved("a", "", 1), saved("b", "", 3), saved("c", "", 2)];
-        sort_recent_first(&mut logins);
-        let order: Vec<_> = logins.iter().map(|l| l.account.as_str()).collect();
-        assert_eq!(order, ["b", "c", "a"]);
+    fn arranging_follows_the_given_order() {
+        let mut logins = vec![saved("a", ""), saved("b", ""), saved("c", "")];
+        arrange(&mut logins, &["C".into(), "a".into(), "b".into()]);
+        assert_eq!(names(&logins), ["c", "a", "b"]);
+    }
+
+    /// An account saved after the dropdown was opened is not in the order the
+    /// dropdown sends back; it must survive, not vanish.
+    #[test]
+    fn arranging_keeps_accounts_the_order_left_out() {
+        let mut logins = vec![saved("a", ""), saved("new", ""), saved("b", "")];
+        arrange(&mut logins, &["b".into(), "a".into()]);
+        assert_eq!(names(&logins), ["b", "a", "new"]);
     }
 
     #[cfg(windows)]
     #[test]
     fn dpapi_round_trips_and_hides_the_plaintext() {
-        let plain = r#"[{"account":"alpha","password":"密碼123","last_used":1}]"#.as_bytes();
+        let plain = r#"[{"account":"alpha","password":"密碼123"}]"#.as_bytes();
         let cipher = dpapi::protect(plain).unwrap();
         assert!(!cipher.windows(5).any(|w| w == b"alpha"));
         assert_eq!(dpapi::unprotect(&cipher).unwrap(), plain);

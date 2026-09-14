@@ -167,6 +167,11 @@ fn forget_saved_login<R: tauri::Runtime>(app: tauri::AppHandle<R>, account: Stri
     credentials::forget(&app, &account)
 }
 
+#[tauri::command]
+fn reorder_saved_logins<R: tauri::Runtime>(app: tauri::AppHandle<R>, accounts: Vec<String>) -> Result<(), String> {
+    credentials::reorder(&app, &accounts)
+}
+
 /// Opens the checkbox for the paused login. `None` = the user gave up.
 #[tauri::command]
 async fn captcha_solve<R: tauri::Runtime>(
@@ -1075,7 +1080,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,

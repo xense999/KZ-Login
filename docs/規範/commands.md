@@ -8,7 +8,7 @@
 
 - `qr_start` / `qr_check`
 - `password_login_start(account, password)` / `password_login_resume(captcha)` → `{ status: "approved", token, games } | { status: "captcha" } | { status: "rejected", message } | { status: "use_qr", message }`；網路錯誤走 `Err(String)`。
-- `saved_logins() -> { account, password, last_used }[]`、`forget_saved_login(account)`：記住的帳密（見總表 `credentials` 條）。
+- `saved_logins() -> { account, password }[]`、`forget_saved_login(account)`、`reorder_saved_logins(accounts)`：記住的帳密（見總表 `credentials` 條）。
 - `captcha_solve(palette, region) -> string | null`、`captcha_cancel()`：替暫停中的帳密登入開驗證視窗（site key 與頁面網址從暫停狀態取，前端不經手）。
 
 ## 單一來源
