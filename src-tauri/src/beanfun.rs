@@ -591,8 +591,9 @@ pub async fn prime_game_zone(
     Ok(())
 }
 
-/// The per-account half: one request, on a session already primed above.
-pub async fn launch_uri_for(
+/// The per-account half. ★ Not public: priming is not optional per call —
+/// see the note on `otp_for`. A batch calls `build_launch_uri` per account.
+async fn launch_uri_for(
     cookie_store: &Arc<CookieStoreMutex>,
     account_sn: &str,
 ) -> Result<String, BeanfunError> {
@@ -728,9 +729,15 @@ pub async fn get_otp(
     otp_for(cookie_store, account_sn, account_sid).await
 }
 
-/// The per-account half of [`get_otp`], on a session `prime_game_zone` has
-/// already warmed. Two requests: the launch blob, then the v2 exchange.
-pub async fn otp_for(
+/// Shortest OTP treated as real. Observed ones are 10 characters; beanfun's
+/// rejection blob decrypted to 4.
+const OTP_MIN_LEN: usize = 8;
+
+/// The per-account half of [`get_otp`]. ★ Not public: warming the session is
+/// not optional here — a batch that primed once and then called this N times
+/// got beanfun's rejection blob back for some of the accounts (2026-09-15,
+/// confirmed against the single-account path, which primes every time).
+async fn otp_for(
     cookie_store: &Arc<CookieStoreMutex>,
     account_sn: &str,
     account_sid: &str,
@@ -761,6 +768,19 @@ pub async fn otp_for(
         Ok(v) => v,
         Err(e) => return Err(classify(&client, e).await),
     };
+
+    // beanfun answers a request it does not like with a short encrypted blob
+    // that decrypts cleanly — 2026-09-15 it was the literal "5381" — so a
+    // successful decrypt says nothing about whether this is a password. Real
+    // ones are 10 alphanumeric characters; anything shorter is that reply, and
+    // exporting it would put an unusable cell where a password should be.
+    if otp.len() < OTP_MIN_LEN || !otp.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(BeanfunError::Parse(format!(
+            "OTP 內容異常（{} 字）：{}",
+            otp.len(),
+            clip(&otp, 16)
+        )));
+    }
 
     Ok(OtpResult { sid: account_sid.to_owned(), otp })
 }
