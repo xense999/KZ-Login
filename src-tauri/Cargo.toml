@@ -11,8 +11,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-# 編譯期把隱藏功能密鑰換成雜湊（見 build.rs）
-sha2 = "0.10"
 
 [dependencies]
 # image-ico：執行期用 Image::from_path 讀 .ico 換視窗圖示（見 icon 模組）

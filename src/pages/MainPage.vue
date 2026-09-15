@@ -567,14 +567,13 @@ function cleanError(msg: string): string {
           </template>
         </div>
         <div class="acc-right">
-          <button v-if="exportUnlocked && acc.token" class="acc-export"
+          <button v-if="exportUnlocked && acc.token" class="btn-pill auto-btn acc-export"
             :disabled="exportState?.running" @click.stop="exportAccount(acc)"
             title="批次匯出子帳號清單">
-            <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
-              <rect x="1.8" y="1.8" width="12.4" height="8.4" rx="1.2" stroke="currentColor" stroke-width="1.2"/>
-              <path d="M1.8 5h12.4M6.6 5v5.2" stroke="currentColor" stroke-width="1.1"/>
-              <path d="M8 11.4v3.2M6.2 12.9 8 14.7l1.8-1.8" stroke="currentColor" stroke-width="1.3"
-                stroke-linecap="round" stroke-linejoin="round"/>
+            <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
+              <path d="M10.5 2.5H13.5V5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M13.5 2.5L8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <path d="M12 9.5v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
           <div v-if="acc.token" class="dot on" title="已連線"></div>
@@ -865,14 +864,9 @@ function cleanError(msg: string): string {
 .acc-browser-btn:hover:not(:disabled) { background: var(--glass-hover); color: var(--text2); }
 .acc-browser-btn:disabled { opacity: 0.3; cursor: default; }
 
-.acc-export {
-  background: none; border: none; padding: 2px;
-  color: var(--text3); border-radius: 5px;
-  display: flex; align-items: center;
-  transition: background 0.12s, color 0.12s;
-}
-.acc-export:hover:not(:disabled) { background: var(--glass-hover); color: var(--text2); }
-.acc-export:disabled { opacity: 0.35; cursor: default; }
+/* 往左 3px：這顆與子帳號列的「分享登入」同寬，右緣再差 3px 就切齊——
+   .acc-right 右邊是 dot(6)+chev(14)+兩個 gap(7) = 34，子帳號列那邊是 32+gap(5) = 37。 */
+.acc-export { margin-right: 3px; }
 
 .chev { color: var(--text3); transition: transform 0.2s ease; }
 .chev.open { transform: rotate(180deg); }

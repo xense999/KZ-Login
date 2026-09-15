@@ -30,9 +30,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 隱藏功能密鑰。沒設這個 secret 就 build 失敗（build.rs 會 panic）——
-          # 寧可 CI 紅燈，也不要發出一版密鑰永遠對不上的安裝檔。
-          KZ_HIDDEN_KEY_EXPORT: ${{ secrets.KZ_HIDDEN_KEY_EXPORT }}
 
       # productName 是中文，而 GitHub 上傳 asset 會砍掉非 ASCII 字元
       - name: Rename installer to ASCII
