@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "../composables/useToast";
-import { useAccountsStore, type BeanfunAccount } from "../stores/accounts";
+import { useAccountsStore, type BeanfunAccount, type GameAccount } from "../stores/accounts";
 import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useDiscord";
 import { useHidden } from "../composables/useHidden";
 import ExportProgress from "../components/ExportProgress.vue";
@@ -166,6 +166,26 @@ function tsvCell(text: string) {
   return text.replace(/[\t\r\n]+/g, " ").trim();
 }
 
+// beanfun 偶爾會對某幾筆回一包「解得開但不是密碼」的東西（實測是 5381，也出現過
+// 9 碼），隨機分佈、隔一下再要一次多半就正常。所以失敗的那一筆就地重試一次——
+// 但登入已失效不重試，那個重試幾次都一樣，只是白燒八分鐘。
+const RETRY_DELAY_MS = 500;
+
+async function fetchCell(kind: ExportKind, token: string, game: GameAccount): Promise<string> {
+  const once = () =>
+    kind === "link"
+      ? invoke<string>("launch_uri_of", { token, accountSn: game.sn })
+      : invoke<string>("otp_of", { token, accountSn: game.sn, accountSid: game.sid });
+  try {
+    return await once();
+  } catch (e) {
+    const msg = cleanError(e instanceof Error ? e.message : String(e));
+    if (msg === "SESSION_EXPIRED") throw e;
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    return await once();
+  }
+}
+
 async function runExport(account: BeanfunAccount, kind: ExportKind) {
   // token 抓一次就固定：批次要跑幾十秒，中間會撞上 App.vue 每八分鐘的 checkSessions，
   // 它一把 token 清成 null，後面每一筆就變成 Tauri 反序列化失敗而不是 SESSION_EXPIRED。
@@ -216,17 +236,7 @@ async function runExport(account: BeanfunAccount, kind: ExportKind) {
       continue;
     }
     try {
-      // 密碼走每次都 prime 的 get_otp：整批只暖一次時，beanfun 會對其中幾個子帳號
-      // 回一包「解得開但不是密碼」的東西（2026-09-15 實測）。連結版維持暖一次就好，
-      // 使用者實測那批連結可用。
-      const value = kind === "link"
-        ? await invoke<string>("launch_uri_of", { token, accountSn: game.sn })
-        : (await invoke<{ otp: string }>("get_otp", {
-            token,
-            accountSn: game.sn,
-            accountSid: game.sid,
-            accountSname: game.sname,
-          })).otp;
+      const value = await fetchCell(kind, token, game);
       if (st.firstAt === null) st.firstAt = Date.now();
       rows.push(row(value));
       st.ok += 1;
