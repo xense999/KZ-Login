@@ -249,7 +249,9 @@ async function runExport(account: BeanfunAccount, kind: ExportKind) {
         store.invalidateToken(account.id);
         rows.push(row("取得失敗：登入已失效"));
       } else {
-        rows.push(row("取得失敗"));
+        // 帶上原因：beanfun 拒絕兌換時會附一段回應，那是目前唯一能看到它為什麼
+        // 拒絕的地方。訊息本身也要過 tsvCell，裡面有換行就會把表切壞。
+        rows.push(row(`取得失敗：${tsvCell(msg).slice(0, 120)}`));
       }
     }
     st.done += 1;

@@ -768,20 +768,6 @@ pub async fn otp_for(
         Err(e) => return Err(classify(&client, e).await),
     };
 
-    // beanfun answers a request it does not like with a short blob that decrypts
-    // cleanly, so a successful decrypt says nothing about whether this is a
-    // password. The length is the only thing that separates the two, and it has
-    // to be exact: the bad replies include 9-character ones, and a caller that
-    // accepted those would hand the user an unusable cell looking like a
-    // password. Callers retry once on this error.
-    if otp.len() != OTP_LEN || !otp.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(BeanfunError::Parse(format!(
-            "OTP 內容異常（{} 字）：{}",
-            otp.len(),
-            clip(&otp, 16)
-        )));
-    }
-
     Ok(OtpResult { sid: account_sid.to_owned(), otp })
 }
 
@@ -821,7 +807,23 @@ async fn v2_exchange(client: &Client, body: &serde_json::Value) -> Result<String
 
     // The v2 `data` is `{key8}{cipher_hex}` (no alphabet step) — DES-ECB/NoPadding
     // with the 8-char prefix as the key, i.e. the classic envelope minus "1;".
-    decrypt_envelope(&format!("1;{enc}"))
+    let otp = decrypt_envelope(&format!("1;{enc}"))?;
+
+    // A rejection decrypts just as cleanly as a password, so the length is the
+    // only thing telling them apart, and it has to be exact — the bad replies
+    // seen include 9-character ones as well as the literal "5381". Report what
+    // beanfun actually sent alongside it: the reply is a JSON object and we
+    // only ever read `data`, so whatever it says about the refusal has been
+    // going straight in the bin. Callers retry once on this error.
+    if otp.len() != OTP_LEN || !otp.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(BeanfunError::Parse(format!(
+            "OTP 內容異常（{} 字：{}）beanfun 回應：{}",
+            otp.len(),
+            clip(&otp, 16),
+            clip(&resp_text, 200)
+        )));
+    }
+    Ok(otp)
 }
 
 /// Recover `(service_account, otp)` straight from a shared
