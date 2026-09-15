@@ -216,11 +216,11 @@ async function runExport(account: BeanfunAccount, kind: ExportKind) {
       continue;
     }
     try {
-      // 兩種都走每次 prime 的單筆指令。原本整批只暖一次，結果 beanfun 會對其中
-      // 幾個子帳號回一包「解得開但不是密碼」的東西（2026-09-15 實測）。連結版拿到
-      // 同樣的拒絕回應只會靜默變成一條沒用的連結——看不出來，所以更該一起改。
+      // 密碼走每次都 prime 的 get_otp：整批只暖一次時，beanfun 會對其中幾個子帳號
+      // 回一包「解得開但不是密碼」的東西（2026-09-15 實測）。連結版維持暖一次就好，
+      // 使用者實測那批連結可用。
       const value = kind === "link"
-        ? await invoke<string>("get_launch_uri", { token, accountSn: game.sn })
+        ? await invoke<string>("launch_uri_of", { token, accountSn: game.sn })
         : (await invoke<{ otp: string }>("get_otp", {
             token,
             accountSn: game.sn,

@@ -591,9 +591,10 @@ pub async fn prime_game_zone(
     Ok(())
 }
 
-/// The per-account half. ★ Not public: priming is not optional per call —
-/// see the note on `otp_for`. A batch calls `build_launch_uri` per account.
-async fn launch_uri_for(
+/// The per-account half, on a session already primed above. Unlike the OTP
+/// path, one prime does cover a batch of these — verified against links the
+/// batch produced (2026-09-15).
+pub async fn launch_uri_for(
     cookie_store: &Arc<CookieStoreMutex>,
     account_sn: &str,
 ) -> Result<String, BeanfunError> {
