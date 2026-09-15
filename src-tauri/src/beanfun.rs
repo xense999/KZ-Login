@@ -724,14 +724,20 @@ pub async fn get_otp(
     account_sid: &str,
     _account_sname: &str,
 ) -> Result<OtpResult, BeanfunError> {
+    prime_game_zone(cookie_store, token).await?;
+    otp_for(cookie_store, account_sn, account_sid).await
+}
+
+/// The per-account half of [`get_otp`], on a session `prime_game_zone` has
+/// already warmed. Two requests: the launch blob, then the v2 exchange.
+pub async fn otp_for(
+    cookie_store: &Arc<CookieStoreMutex>,
+    account_sn: &str,
+    account_sid: &str,
+) -> Result<OtpResult, BeanfunError> {
     let client = build_client_from_store(cookie_store)?;
 
     // 1. game_start_step2 → m_objData (sn + encrypted launch blob).
-    let inner = format!("game_start.aspx?service_code_and_region={}_{}", SERVICE_CODE, SERVICE_REGION);
-    let _ = client
-        .get(&format!("{}beanfun_block/auth.aspx", PORTAL_BASE))
-        .query(&[("channel", "game_zone"), ("page_and_query", inner.as_str()), ("web_token", token)])
-        .send().await;
     let body = client
         .get(&format!("{}beanfun_block/game_zone/game_start_step2.aspx", PORTAL_BASE))
         .query(&[

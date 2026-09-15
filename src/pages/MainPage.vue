@@ -127,13 +127,22 @@ async function proxyLaunch() {
 // ─── 隱藏功能：批次匯出子帳號清單 ──────────────────────────────────────────────
 
 const { isUnlocked } = useHidden();
-const exportUnlocked = computed(() => isUnlocked("export"));
+const linkExportUnlocked = computed(() => isUnlocked("export"));
+const otpExportUnlocked = computed(() => isUnlocked("export_otp"));
 
-// 連結是 beanfun 當場產的，八分鐘後就失效。到期時間用「第一筆」起算：第一筆最早
-// 死，用最後一筆會給出過度樂觀的死線。
+// 兩個隱藏功能走同一條批次路徑，差別只在每一列拿什麼、怎麼排。
+type ExportKind = "link" | "otp";
+const EXPORT_TITLE: Record<ExportKind, string> = {
+  link: "批次匯出連結",
+  otp: "批次匯出密碼",
+};
+
+// 連結和密碼都是 beanfun 當場產的，八分鐘後就失效。到期時間用「第一筆」起算：
+// 第一筆最早死，用最後一筆會給出過度樂觀的死線。
 const LINK_TTL_MS = 8 * 60 * 1000;
 
 type ExportState = {
+  kind: ExportKind;
   total: number;
   done: number;
   ok: number;
@@ -157,13 +166,14 @@ function tsvCell(text: string) {
   return text.replace(/[\t\r\n]+/g, " ").trim();
 }
 
-async function exportAccount(account: BeanfunAccount) {
+async function runExport(account: BeanfunAccount, kind: ExportKind) {
   // token 抓一次就固定：批次要跑幾十秒，中間會撞上 App.vue 每八分鐘的 checkSessions，
   // 它一把 token 清成 null，後面每一筆就變成 Tauri 反序列化失敗而不是 SESSION_EXPIRED。
   const token = account.token;
   if (!token || exportState.value?.running) return;
   stopRequested = false;
   exportState.value = {
+    kind,
     total: account.gameAccounts.length,
     done: 0, ok: 0,
     running: true, stopped: false,
@@ -198,15 +208,19 @@ async function exportAccount(account: BeanfunAccount) {
       break;
     }
     const name = tsvCell(displayName(game));
+    // 密碼版只有一欄，所以失敗也要佔一列——行數一旦少一列，後面整排就跟名字錯開了。
+    const row = (cell: string) => (kind === "link" ? `${name}\t${cell}` : cell);
     if (sessionDead) {
-      rows.push(`${name}\t取得失敗：登入已失效`);
+      rows.push(row("取得失敗：登入已失效"));
       st.done += 1;
       continue;
     }
     try {
-      const uri = await invoke<string>("launch_uri_of", { token, accountSn: game.sn });
+      const value = kind === "link"
+        ? await invoke<string>("launch_uri_of", { token, accountSn: game.sn })
+        : await invoke<string>("otp_of", { token, accountSn: game.sn, accountSid: game.sid });
       if (st.firstAt === null) st.firstAt = Date.now();
-      rows.push(`${name}\t${uri}`);
+      rows.push(row(value));
       st.ok += 1;
     } catch (e) {
       // 失敗照樣佔一列，貼進 Excel 一眼看得出要重抓哪幾個。
@@ -215,9 +229,9 @@ async function exportAccount(account: BeanfunAccount) {
         // 綠燈得跟著滅：不然表上一整排失敗，卡片還寫著「已連線」。
         sessionDead = true;
         store.invalidateToken(account.id);
-        rows.push(`${name}\t取得失敗：登入已失效`);
+        rows.push(row("取得失敗：登入已失效"));
       } else {
-        rows.push(`${name}\t取得失敗`);
+        rows.push(row("取得失敗"));
       }
     }
     st.done += 1;
@@ -598,8 +612,17 @@ function cleanError(msg: string): string {
           </template>
         </div>
         <div class="acc-right">
-          <button v-if="exportUnlocked && acc.token" class="btn-pill auto-btn acc-export"
-            :disabled="exportState?.running" @click.stop="exportAccount(acc)"
+          <button v-if="otpExportUnlocked && acc.token" class="btn-pill auto-btn"
+            :disabled="exportState?.running" @click.stop="runExport(acc, 'otp')"
+            title="批次匯出子帳號密碼">
+            <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
+              <circle cx="5.6" cy="10.4" r="3.1" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M7.9 8.1L13.5 2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <path d="M11.4 4.6l1.7 1.7M13.1 2.9l1.4 1.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <button v-if="linkExportUnlocked && acc.token" class="btn-pill auto-btn acc-export"
+            :disabled="exportState?.running" @click.stop="runExport(acc, 'link')"
             title="批次匯出子帳號清單">
             <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
               <path d="M10.5 2.5H13.5V5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -739,6 +762,7 @@ function cleanError(msg: string): string {
 
   <ExportProgress
     v-if="exportState"
+    :title="EXPORT_TITLE[exportState.kind]"
     :total="exportState.total"
     :done="exportState.done"
     :ok="exportState.ok"

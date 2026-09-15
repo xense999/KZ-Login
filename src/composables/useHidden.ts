@@ -5,6 +5,7 @@ const KEY = "kusei:hidden_features";
 // 功能 id → 顯示名稱。加隱藏功能時這裡與 Rust 端 hidden.rs 的對照表各補一列。
 export const FEATURE_NAMES: Record<string, string> = {
   export: "批次匯出子帳號清單",
+  export_otp: "批次匯出子帳號密碼",
 };
 
 function load(): string[] {

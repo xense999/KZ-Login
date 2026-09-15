@@ -705,6 +705,26 @@ async fn launch_uri_of(
         .map_err(map_err)
 }
 
+/// One account's OTP, on a session `prime_game_zone` has already warmed. The
+/// batch counterpart of `get_otp`, which primes on every call.
+#[tauri::command]
+async fn otp_of(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    account_sn: String,
+    account_sid: String,
+) -> Result<String, String> {
+    let cookie_store = {
+        let stores = state.session_stores.lock().await;
+        stores.get(&token).cloned()
+            .ok_or_else(|| "SESSION_EXPIRED".to_string())?
+    };
+    beanfun::otp_for(&cookie_store, &account_sn, &account_sid)
+        .await
+        .map(|r| r.otp)
+        .map_err(map_err)
+}
+
 // ─── Hidden features ──────────────────────────────────────────────────────────
 
 /// Check a hidden-feature key, returning the feature id it unlocks. Lives in
@@ -1138,7 +1158,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
-            prime_game_zone, launch_uri_of, verify_hidden_key,
+            prime_game_zone, launch_uri_of, otp_of, verify_hidden_key,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
             check_app_update, update_app, update_app_inplace,

@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 const props = defineProps<{
+  title: string;
   total: number;
   done: number;
   ok: number;
@@ -34,7 +35,7 @@ const percent = computed(() =>
   <Teleport to=".page-container">
   <div class="overlay">
     <div class="card">
-      <div class="title">批次匯出</div>
+      <div class="title">{{ title }}</div>
 
       <template v-if="error">
         <div class="err">{{ error }}</div>

@@ -11,10 +11,16 @@ use sha2::{Digest, Sha256};
 const HIDDEN_SALT: &str = "kz-login/hidden/v1";
 
 /// (digest of salt + key, feature id). A second hidden feature is one more row.
-const KEYS: &[(&str, &str)] = &[(
-    "95ba010597ff68b5f715145bb3acfcfd06d27984e86070ee49dc5a7c082b374e",
-    "export",
-)];
+const KEYS: &[(&str, &str)] = &[
+    (
+        "95ba010597ff68b5f715145bb3acfcfd06d27984e86070ee49dc5a7c082b374e",
+        "export",
+    ),
+    (
+        "f33224fdf5e6b168c2fa15c06c0851c066737530df68aebff92060ac7d3df66e",
+        "export_otp",
+    ),
+];
 
 /// The feature id a key unlocks, or `None` when nothing matches.
 pub fn verify(input: &str) -> Option<&'static str> {
