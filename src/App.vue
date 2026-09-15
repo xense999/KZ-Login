@@ -281,6 +281,9 @@ function onAccountSaved() {
 }
 
 .page-container {
+  /* 應用內遮罩（隱藏功能密鑰、批次匯出）貼著這裡：上緣是標題列那條槓，下緣是
+     視窗底部，超出圓角的部分由 .app-window 的 overflow 裁掉。 */
+  position: relative;
   flex: 1;
   overflow: hidden;
   display: flex;

@@ -265,6 +265,8 @@ async function supportAuthor() {
       </div>
     </div>
 
+    <HiddenKeyDialog v-if="showHiddenKey" @close="showHiddenKey = false" />
+
     <div class="bottom-bar">
       <button class="btn-save" :class="{ done: saved }" @click="save">
         {{ saved ? "已儲存 ✓" : "儲存" }}
@@ -335,7 +337,6 @@ async function supportAuthor() {
       </div>
     </div>
 
-    <HiddenKeyDialog v-if="showHiddenKey" @close="showHiddenKey = false" />
 
   </div>
 </template>

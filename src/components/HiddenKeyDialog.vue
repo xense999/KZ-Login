@@ -10,6 +10,7 @@ const { toggle } = useHidden();
 const value = ref("");
 const error = ref("");
 const checking = ref(false);
+
 const input = ref<HTMLInputElement | null>(null);
 
 onMounted(() => input.value?.focus());
@@ -38,6 +39,7 @@ async function submit() {
 </script>
 
 <template>
+  <Teleport to=".page-container">
   <div class="overlay" @click.self="emit('close')">
     <div class="card">
       <div class="title">隱藏功能密鑰</div>
@@ -45,7 +47,7 @@ async function submit() {
         ref="input"
         v-model="value"
         class="field"
-        type="password"
+        type="text"
         autocomplete="off"
         spellcheck="false"
         @keydown.enter="submit"
@@ -59,11 +61,14 @@ async function submit() {
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .overlay {
-  position: fixed;
+  /* absolute 不是 fixed：Teleport 到 .page-container，所以蓋的是標題列以下的
+     整個程式範圍，圓角由視窗外框裁切。 */
+  position: absolute;
   inset: 0;
   z-index: 2100;
   display: flex;

@@ -29,6 +29,7 @@ const percent = computed(() =>
 </script>
 
 <template>
+  <Teleport to=".page-container">
   <div class="overlay">
     <div class="card">
       <div class="title">批次匯出</div>
@@ -67,11 +68,14 @@ const percent = computed(() =>
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .overlay {
-  position: fixed;
+  /* absolute 不是 fixed：Teleport 到 .page-container，所以蓋的是標題列以下的
+     整個程式範圍，圓角由視窗外框裁切。 */
+  position: absolute;
   inset: 0;
   z-index: 2100;
   display: flex;

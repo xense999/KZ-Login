@@ -707,6 +707,21 @@ function cleanError(msg: string): string {
     </template>
   </div>
 
+  <ExportProgress
+    v-if="exportState"
+    :total="exportState.total"
+    :done="exportState.done"
+    :ok="exportState.ok"
+    :running="exportState.running"
+    :stopped="exportState.stopped"
+    :error="exportState.error"
+    :expires-at="exportExpiresAt"
+    :copied="exportState.copied"
+    @stop="stopExport"
+    @recopy="recopyExport"
+    @close="closeExport"
+  />
+
   <div class="bottom-bar">
     <button class="btn-add" @click="$emit('addAccount')">
       <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
@@ -726,20 +741,6 @@ function cleanError(msg: string): string {
     </button>
   </div>
 
-  <ExportProgress
-    v-if="exportState"
-    :total="exportState.total"
-    :done="exportState.done"
-    :ok="exportState.ok"
-    :running="exportState.running"
-    :stopped="exportState.stopped"
-    :error="exportState.error"
-    :expires-at="exportExpiresAt"
-    :copied="exportState.copied"
-    @stop="stopExport"
-    @recopy="recopyExport"
-    @close="closeExport"
-  />
 
   </div>
 </template>
