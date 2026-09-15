@@ -8,6 +8,8 @@ const props = defineProps<{
   running: boolean;
   stopped: boolean;
   error: string;
+  copyError: string;
+  hasData: boolean;
   expiresAt: number | null;
   copied: boolean;
 }>();
@@ -49,10 +51,12 @@ const percent = computed(() =>
           <template v-if="running">取得中，請稍候…</template>
           <template v-else>
             <template v-if="copied">已複製到剪貼簿</template>
+            <template v-else-if="copyError">複製到剪貼簿失敗，資料還在，可按「再複製一次」</template>
             <template v-else>沒有可複製的資料</template>
             <template v-if="stopped">（已停止）</template>
             <template v-if="expiry"> · 約 {{ expiry }} 前有效</template>
             <div v-if="failed > 0" class="failed">{{ failed }} 筆取得失敗，那幾列已標註在表上</div>
+            <div v-if="copyError" class="failed">{{ copyError }}</div>
           </template>
         </div>
       </template>
@@ -62,7 +66,7 @@ const percent = computed(() =>
           <button class="btn" @click="emit('stop')">停止</button>
         </template>
         <template v-else>
-          <button v-if="copied" class="btn" @click="emit('recopy')">再複製一次</button>
+          <button v-if="hasData" class="btn" @click="emit('recopy')">再複製一次</button>
           <button class="btn primary" @click="emit('close')">關閉</button>
         </template>
       </div>

@@ -140,6 +140,7 @@ type ExportState = {
   running: boolean;
   stopped: boolean;
   error: string;
+  copyError: string;
   firstAt: number | null;
   tsv: string;
   copied: boolean;
@@ -157,20 +158,23 @@ function tsvCell(text: string) {
 }
 
 async function exportAccount(account: BeanfunAccount) {
-  if (!account.token || exportState.value?.running) return;
+  // token 抓一次就固定：批次要跑幾十秒，中間會撞上 App.vue 每八分鐘的 checkSessions，
+  // 它一把 token 清成 null，後面每一筆就變成 Tauri 反序列化失敗而不是 SESSION_EXPIRED。
+  const token = account.token;
+  if (!token || exportState.value?.running) return;
   stopRequested = false;
   exportState.value = {
     total: account.gameAccounts.length,
     done: 0, ok: 0,
     running: true, stopped: false,
-    error: "", firstAt: null, tsv: "", copied: false,
+    error: "", copyError: "", firstAt: null, tsv: "", copied: false,
   };
   // 取 ref 內的 proxy 來改，直接改原物件不會觸發畫面更新。
   const st = exportState.value;
 
   try {
     // 整批只暖一次：這個請求暖的是 session 的 game_zone 狀態，不是單一子帳號。
-    await invoke("prime_game_zone", { token: account.token });
+    await invoke("prime_game_zone", { token });
   } catch (e) {
     const msg = cleanError(e instanceof Error ? e.message : String(e));
     if (msg === "SESSION_EXPIRED") {
@@ -184,6 +188,9 @@ async function exportAccount(account: BeanfunAccount) {
   }
 
   const rows: string[] = [];
+  // session 一死，後面每一筆都注定失敗。照樣給它一列（行數要等於子帳號數，貼進
+  // Excel 才看得出少了誰），但不再白打一次 API。
+  let sessionDead = false;
   // 照畫面上排好的順序輸出——那個順序是使用者自己拖出來的。
   for (const game of account.gameAccounts) {
     if (stopRequested) {
@@ -191,28 +198,44 @@ async function exportAccount(account: BeanfunAccount) {
       break;
     }
     const name = tsvCell(displayName(game));
+    if (sessionDead) {
+      rows.push(`${name}\t取得失敗：登入已失效`);
+      st.done += 1;
+      continue;
+    }
     try {
-      const uri = await invoke<string>("launch_uri_of", {
-        token: account.token,
-        accountSn: game.sn,
-      });
+      const uri = await invoke<string>("launch_uri_of", { token, accountSn: game.sn });
       if (st.firstAt === null) st.firstAt = Date.now();
       rows.push(`${name}\t${uri}`);
       st.ok += 1;
     } catch (e) {
-      // 失敗照樣佔一列：行數等於子帳號數，貼進 Excel 一眼看得出要重抓哪幾個。
+      // 失敗照樣佔一列，貼進 Excel 一眼看得出要重抓哪幾個。
       const msg = cleanError(e instanceof Error ? e.message : String(e));
-      rows.push(`${name}\t${msg === "SESSION_EXPIRED" ? "取得失敗：登入已失效" : "取得失敗"}`);
+      if (msg === "SESSION_EXPIRED") {
+        // 綠燈得跟著滅：不然表上一整排失敗，卡片還寫著「已連線」。
+        sessionDead = true;
+        store.invalidateToken(account.id);
+        rows.push(`${name}\t取得失敗：登入已失效`);
+      } else {
+        rows.push(`${name}\t取得失敗`);
+      }
     }
     st.done += 1;
   }
 
   st.tsv = rows.join("\r\n");
-  st.running = false;
   if (st.tsv) {
-    await writeText(st.tsv);
-    st.copied = true;
+    // 剪貼簿會被別的程式鎖住。沒接住的話這幾十筆連結就跟著這個函式一起消失，
+    // 而八分鐘還在跑——所以失敗也要留著資料，讓「再複製一次」還按得到。
+    try {
+      await writeText(st.tsv);
+      st.copied = true;
+    } catch (e) {
+      st.copyError = cleanError(e instanceof Error ? e.message : String(e));
+    }
   }
+  // 最後才收工：早一步放行「關閉」，使用者按下去會把還在寫的剪貼簿資料丟掉。
+  st.running = false;
 }
 
 function stopExport() {
@@ -220,9 +243,17 @@ function stopExport() {
 }
 
 async function recopyExport() {
-  if (!exportState.value?.tsv) return;
-  await writeText(exportState.value.tsv);
-  toast("已再複製一次");
+  const st = exportState.value;
+  if (!st?.tsv) return;
+  try {
+    await writeText(st.tsv);
+    st.copied = true;
+    st.copyError = "";
+    toast("已再複製一次");
+  } catch (e) {
+    st.copyError = cleanError(e instanceof Error ? e.message : String(e));
+    toast("複製失敗，請先關掉可能佔用剪貼簿的程式", { kind: "error" });
+  }
 }
 
 function closeExport() {
@@ -714,6 +745,8 @@ function cleanError(msg: string): string {
     :running="exportState.running"
     :stopped="exportState.stopped"
     :error="exportState.error"
+    :copy-error="exportState.copyError"
+    :has-data="exportState.tsv.length > 0"
     :expires-at="exportExpiresAt"
     :copied="exportState.copied"
     @stop="stopExport"
