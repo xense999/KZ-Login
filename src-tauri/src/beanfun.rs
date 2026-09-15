@@ -572,14 +572,31 @@ pub async fn build_launch_uri(
     token: &str,
     account_sn: &str,
 ) -> Result<String, BeanfunError> {
-    let client = build_client_from_store(cookie_store)?;
+    prime_game_zone(cookie_store, token).await?;
+    launch_uri_for(cookie_store, account_sn).await
+}
 
-    // Prime the game_zone session the way the website navigates before step 2.
+/// Prime the game_zone session the way the website navigates before step 2.
+/// This warms the session, not a single account, so a batch only needs it once.
+pub async fn prime_game_zone(
+    cookie_store: &Arc<CookieStoreMutex>,
+    token: &str,
+) -> Result<(), BeanfunError> {
+    let client = build_client_from_store(cookie_store)?;
     let inner = format!("game_start.aspx?service_code_and_region={}_{}", SERVICE_CODE, SERVICE_REGION);
     let _ = client
         .get(&format!("{}beanfun_block/auth.aspx", PORTAL_BASE))
         .query(&[("channel", "game_zone"), ("page_and_query", inner.as_str()), ("web_token", token)])
         .send().await;
+    Ok(())
+}
+
+/// The per-account half: one request, on a session already primed above.
+pub async fn launch_uri_for(
+    cookie_store: &Arc<CookieStoreMutex>,
+    account_sn: &str,
+) -> Result<String, BeanfunError> {
+    let client = build_client_from_store(cookie_store)?;
 
     let body = client
         .get(&format!("{}beanfun_block/game_zone/game_start_step2.aspx", PORTAL_BASE))

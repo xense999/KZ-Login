@@ -1,4 +1,42 @@
+use sha2::{Digest, Sha256};
+
+/// Hidden-feature keys never reach the binary in the clear: the plaintext lives
+/// only in `.env` (local) or a CI secret, and only its digest is compiled in.
+/// A missing key fails the build on purpose — a release whose hidden feature
+/// silently accepts nothing is worse than a red CI run.
+fn inject_hidden_hash(var: &str, out: &str) {
+    println!("cargo:rerun-if-env-changed={var}");
+    let plain = std::env::var(var)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| dotenv_value(var))
+        .unwrap_or_else(|| {
+            panic!("{var} is not set. Put it in .env for local builds, or add a repository secret of the same name for CI.")
+        });
+    let digest = Sha256::digest(format!("{HIDDEN_SALT}{plain}").as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    println!("cargo:rustc-env={out}={hex}");
+}
+
+/// Kept in sync with `hidden.rs` by hand — it is not a secret, it only keeps the
+/// digest off public rainbow tables.
+const HIDDEN_SALT: &str = "kz-login/hidden/v1";
+
+/// Read one `KEY=value` line out of the project-root `.env`. Deliberately tiny:
+/// no quoting, no interpolation, no extra dependency.
+fn dotenv_value(var: &str) -> Option<String> {
+    let text = std::fs::read_to_string("../.env").ok()?;
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == var))
+        .map(|(_, v)| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+}
+
 fn main() {
+    println!("cargo:rerun-if-changed=../.env");
+    inject_hidden_hash("KZ_HIDDEN_KEY_EXPORT", "KZ_HIDDEN_HASH_EXPORT");
+
     let mut attributes = tauri_build::Attributes::new();
 
     // Require administrator privileges, but only for release builds.

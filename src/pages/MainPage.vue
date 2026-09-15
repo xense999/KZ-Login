@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "../composables/useToast";
 import { useAccountsStore, type BeanfunAccount } from "../stores/accounts";
 import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useDiscord";
+import { useHidden } from "../composables/useHidden";
+import ExportProgress from "../components/ExportProgress.vue";
 
 const HUES = [210, 150, 270, 35, 0, 190];
 function hue(id: string) {
@@ -120,6 +122,111 @@ async function proxyLaunch() {
   } finally {
     proxyLaunching.value = false;
   }
+}
+
+// ─── 隱藏功能：批次匯出子帳號清單 ──────────────────────────────────────────────
+
+const { isUnlocked } = useHidden();
+const exportUnlocked = computed(() => isUnlocked("export"));
+
+// 連結是 beanfun 當場產的，八分鐘後就失效。到期時間用「第一筆」起算：第一筆最早
+// 死，用最後一筆會給出過度樂觀的死線。
+const LINK_TTL_MS = 8 * 60 * 1000;
+
+type ExportState = {
+  total: number;
+  done: number;
+  ok: number;
+  running: boolean;
+  stopped: boolean;
+  error: string;
+  firstAt: number | null;
+  tsv: string;
+  copied: boolean;
+};
+
+const exportState = ref<ExportState | null>(null);
+const exportExpiresAt = computed(() =>
+  exportState.value?.firstAt ? exportState.value.firstAt + LINK_TTL_MS : null
+);
+let stopRequested = false;
+
+// 名稱裡有 Tab 或換行會把 Excel 的欄位切壞。來源理論上不會有，但破一次整張表就錯位。
+function tsvCell(text: string) {
+  return text.replace(/[\t\r\n]+/g, " ").trim();
+}
+
+async function exportAccount(account: BeanfunAccount) {
+  if (!account.token || exportState.value?.running) return;
+  stopRequested = false;
+  exportState.value = {
+    total: account.gameAccounts.length,
+    done: 0, ok: 0,
+    running: true, stopped: false,
+    error: "", firstAt: null, tsv: "", copied: false,
+  };
+  // 取 ref 內的 proxy 來改，直接改原物件不會觸發畫面更新。
+  const st = exportState.value;
+
+  try {
+    // 整批只暖一次：這個請求暖的是 session 的 game_zone 狀態，不是單一子帳號。
+    await invoke("prime_game_zone", { token: account.token });
+  } catch (e) {
+    const msg = cleanError(e instanceof Error ? e.message : String(e));
+    if (msg === "SESSION_EXPIRED") {
+      store.invalidateToken(account.id);
+      st.error = "登入已失效，請重新登入後再試";
+    } else {
+      st.error = msg;
+    }
+    st.running = false;
+    return;
+  }
+
+  const rows: string[] = [];
+  // 照畫面上排好的順序輸出——那個順序是使用者自己拖出來的。
+  for (const game of account.gameAccounts) {
+    if (stopRequested) {
+      st.stopped = true;
+      break;
+    }
+    const name = tsvCell(displayName(game));
+    try {
+      const uri = await invoke<string>("launch_uri_of", {
+        token: account.token,
+        accountSn: game.sn,
+      });
+      if (st.firstAt === null) st.firstAt = Date.now();
+      rows.push(`${name}\t${uri}`);
+      st.ok += 1;
+    } catch (e) {
+      // 失敗照樣佔一列：行數等於子帳號數，貼進 Excel 一眼看得出要重抓哪幾個。
+      const msg = cleanError(e instanceof Error ? e.message : String(e));
+      rows.push(`${name}\t${msg === "SESSION_EXPIRED" ? "取得失敗：登入已失效" : "取得失敗"}`);
+    }
+    st.done += 1;
+  }
+
+  st.tsv = rows.join("\r\n");
+  st.running = false;
+  if (st.tsv) {
+    await writeText(st.tsv);
+    st.copied = true;
+  }
+}
+
+function stopExport() {
+  stopRequested = true;
+}
+
+async function recopyExport() {
+  if (!exportState.value?.tsv) return;
+  await writeText(exportState.value.tsv);
+  toast("已再複製一次");
+}
+
+function closeExport() {
+  exportState.value = null;
 }
 
 // Account-level drag (whole row, threshold-based)
@@ -460,7 +567,17 @@ function cleanError(msg: string): string {
           </template>
         </div>
         <div class="acc-right">
-<div v-if="acc.token" class="dot on" title="已連線"></div>
+          <button v-if="exportUnlocked && acc.token" class="acc-export"
+            :disabled="exportState?.running" @click.stop="exportAccount(acc)"
+            title="批次匯出子帳號清單">
+            <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
+              <rect x="1.8" y="1.8" width="12.4" height="8.4" rx="1.2" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M1.8 5h12.4M6.6 5v5.2" stroke="currentColor" stroke-width="1.1"/>
+              <path d="M8 11.4v3.2M6.2 12.9 8 14.7l1.8-1.8" stroke="currentColor" stroke-width="1.3"
+                stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <div v-if="acc.token" class="dot on" title="已連線"></div>
           <template v-else>
             <div class="dot off" title="已斷線，請重新登入"></div>
             <button class="qr-rescan" @click.stop="$emit('reauth', acc.id)" title="重新登入">
@@ -609,6 +726,21 @@ function cleanError(msg: string): string {
     </button>
   </div>
 
+  <ExportProgress
+    v-if="exportState"
+    :total="exportState.total"
+    :done="exportState.done"
+    :ok="exportState.ok"
+    :running="exportState.running"
+    :stopped="exportState.stopped"
+    :error="exportState.error"
+    :expires-at="exportExpiresAt"
+    :copied="exportState.copied"
+    @stop="stopExport"
+    @recopy="recopyExport"
+    @close="closeExport"
+  />
+
   </div>
 </template>
 
@@ -731,6 +863,15 @@ function cleanError(msg: string): string {
 }
 .acc-browser-btn:hover:not(:disabled) { background: var(--glass-hover); color: var(--text2); }
 .acc-browser-btn:disabled { opacity: 0.3; cursor: default; }
+
+.acc-export {
+  background: none; border: none; padding: 2px;
+  color: var(--text3); border-radius: 5px;
+  display: flex; align-items: center;
+  transition: background 0.12s, color 0.12s;
+}
+.acc-export:hover:not(:disabled) { background: var(--glass-hover); color: var(--text2); }
+.acc-export:disabled { opacity: 0.35; cursor: default; }
 
 .chev { color: var(--text3); transition: transform 0.2s ease; }
 .chev.open { transform: rotate(180deg); }

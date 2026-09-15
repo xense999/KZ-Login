@@ -8,6 +8,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "../composables/useToast";
 import { useTheme } from "../composables/useTheme";
 import { useDiscordShare } from "../composables/useDiscord";
+import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
 
 const AUTHOR_DISCORD = "xense999";
 const GITHUB_URL = "https://github.com/xense999";
@@ -26,13 +27,26 @@ const showAbout = ref(false);
 const appVersion = ref("");
 const discordCopied = ref(false);
 
-// 「通知設定」標題連點五下才顯示金鑰同步開關。限時是為了讓「隔幾天各點一下」
-// 不會累積成解鎖——只有刻意的連點才算。
+// 標題連點五下才顯示的暗門。限時是為了讓「隔幾天各點一下」不會累積成解鎖——
+// 只有刻意的連點才算。兩個暗門各自計數，交叉亂點不會互相湊數。
 const TAP_WINDOW_MS = 1500;
 const TAP_TARGET = 5;
 const { unlocked, shareKeyToDiscord, unlockAdvanced, lockAdvanced, setShareKeyToDiscord } = useDiscordShare();
-let tapCount = 0;
-let tapTimer: ReturnType<typeof setTimeout> | undefined;
+
+function tapGate(onReach: () => void) {
+  let count = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return () => {
+    count += 1;
+    clearTimeout(timer);
+    if (count >= TAP_TARGET) {
+      count = 0;
+      onReach();
+      return;
+    }
+    timer = setTimeout(() => { count = 0; }, TAP_WINDOW_MS);
+  };
+}
 
 const shareKeyDisabled = computed(() => !webhookUrl.value.trim());
 const shareKeyHint = computed(() =>
@@ -41,22 +55,19 @@ const shareKeyHint = computed(() =>
     : "開啟後，按子帳號的「分享登入金鑰」時會同步把金鑰傳到上方設定的 Discord 頻道。"
 );
 
-function onNotifyTitleTap() {
-  tapCount += 1;
-  clearTimeout(tapTimer);
-  if (tapCount >= TAP_TARGET) {
-    tapCount = 0;
-    if (unlocked.value) {
-      lockAdvanced();
-      toast("已隱藏進階選項");
-    } else {
-      unlockAdvanced();
-      toast("已開啟進階選項");
-    }
-    return;
+const onNotifyTitleTap = tapGate(() => {
+  if (unlocked.value) {
+    lockAdvanced();
+    toast("已隱藏進階選項");
+  } else {
+    unlockAdvanced();
+    toast("已開啟進階選項");
   }
-  tapTimer = setTimeout(() => { tapCount = 0; }, TAP_WINDOW_MS);
-}
+});
+
+// 「主題」標籤連點五下＝隱藏功能密鑰。跟上面那個暗門各管各的。
+const showHiddenKey = ref(false);
+const onThemeTitleTap = tapGate(() => { showHiddenKey.value = true; });
 
 function toggleShareKey() {
   if (shareKeyDisabled.value) return;
@@ -203,7 +214,7 @@ async function supportAuthor() {
     <div class="scroll-area">
       <div class="card">
         <div class="row">
-          <span class="row-title">主題</span>
+          <span class="row-title tappable" @click="onThemeTitleTap">主題</span>
           <div class="seg">
             <button :class="{ active: theme === 'neutral' }" @click="setTheme('neutral')">亮色</button>
             <button :class="{ active: theme === 'dark' }" @click="setTheme('dark')">暗色</button>
@@ -324,6 +335,8 @@ async function supportAuthor() {
       </div>
     </div>
 
+    <HiddenKeyDialog v-if="showHiddenKey" @close="showHiddenKey = false" />
+
   </div>
 </template>
 
@@ -378,7 +391,8 @@ async function supportAuthor() {
   justify-content: space-between;
 }
 /* 連點解鎖時不要把標題反白選起來 */
-.switch-row .row-title {
+.switch-row .row-title,
+.row-title.tappable {
   user-select: none;
 }
 
