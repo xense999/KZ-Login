@@ -327,6 +327,31 @@ pub async fn complete_login(
     token.ok_or_else(|| BeanfunError::Parse("bfWebToken not found in any cookie after finalize".into()))
 }
 
+/// Put cookies harvested from a webview into `store`, as if our own requests
+/// had received them. Used by the GamaPass login, where the sign-in happens in
+/// a window of its own and its session is the only one that counts afterwards.
+pub fn adopt_cookies(
+    store: &Arc<CookieStoreMutex>,
+    cookies: &[(String, String)],
+) -> Result<(), BeanfunError> {
+    // The domain is not recorded per cookie on the way out; attaching them to
+    // the portal host is what the later requests need, and a cookie the portal
+    // did not set is harmless there.
+    let url: reqwest::Url = PORTAL_BASE
+        .parse()
+        .map_err(|e| BeanfunError::Parse(format!("portal 網址錯誤：{e}")))?;
+    let mut jar = store
+        .lock()
+        .map_err(|_| BeanfunError::Parse("Cookie store mutex poisoned".into()))?;
+    for (name, value) in cookies {
+        let raw = format!("{name}={value}; Path=/");
+        if let Err(e) = jar.parse(&raw, &url) {
+            eprintln!("[beanfun] 收不下 cookie {name}：{e}");
+        }
+    }
+    Ok(())
+}
+
 // ─── Password Login ───────────────────────────────────────────────────────────
 
 /// What one step of the password login concluded.

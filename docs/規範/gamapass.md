@@ -8,13 +8,13 @@
 
 ```rust
 pub struct Fill { account: String, password: Option<String> }
-pub enum Outcome { Completed, Cancelled }
+pub enum Outcome { Completed { token, cookies }, Cancelled }
 pub async fn wait_for_login(app, skey: &str, jar, fill: Fill) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
 - 呼叫者：`commands` 的 `gamapass_login`、`gamapass_cancel`（登入頁的「取消」）。
-- `Completed` 只代表「頁面已經回到 portal」，token 由呼叫端用 `beanfun::complete_login` 取得。
+- `Completed` 代表視窗的 cookie 裡出現了 `bfWebToken`，token 與整批 cookie 一起帶回來；呼叫端用 `beanfun::adopt_cookies` 收進自己的 jar。
 - 視窗開在 beanfun 的登入頁（`Login/Index?pSKey=…`），GamaPass 的入口網址由**那個頁面自己**去要，本模組不認得它長什麼樣。
 - `password: None` ＝ passkey：帳號照填、那一步照過，然後把視窗交給使用者。
 
@@ -30,17 +30,17 @@ pub fn cancel(app)
 
 1. `gamapass_login`：建一個新的 client + cookie jar，`get_session_key` 拿 `pSKey`，`open_login_page` 建立那把 key 的登入頁。
 2. 開一個隱藏的 WebView 視窗，**先停在 `about:blank`、把 client 的 cookie 注入進去（`browser::seed_and_navigate`，注入前會先清空）**，再導向 beanfun 的登入頁。注入的腳本在那裡按下「使用 gamapass」，到了對方網域再把帳密填進欄位並送出。
-3. 輪詢那個視窗的網址：
-   - 回到 beanfun portal ＝ 登入完成 → `complete_login(client, store, skey)` 拿 `bfWebToken`，接著 `get_game_accounts`，登記進 `session_stores`。
+3. 每一輪去讀那個視窗的 cookie（三個 beanfun 網域）：
+   - 出現 `bfWebToken` ＝ 登入完成 → 整批 cookie 收進我們的 jar，接著 `get_game_accounts`，登記進 `session_stores`。
    - fragment 出現 `kz-gamapass=user` ＝ 腳本請求把畫面交給人 → 顯示成獨立視窗。
    - 視窗被關掉或 10 分鐘沒結果 ＝ 取消。
 
-**為什麼不用去 WebView 裡撈 cookie**：登入態綁在 `pSKey` 上而不是某一方的 cookie。QR 登入就是這樣——登入動作發生在手機上，我們的 client 全程沒送過帳密，`complete_login` 照樣拿得到 token。GamaPass 只是把「手機」換成「同一台電腦上的另一個視窗」。
+**為什麼要去 webview 裡撈 cookie**（2026-09-17 實機推翻先前的設計）：QR 登入可以由我們的 client 收尾，因為那條的登入態綁在 `pSKey` 上；**GamaPass 不是**——它把 `bfWebToken` 發給「執行登入的那個瀏覽器」，`complete_login` 在我們的 client 上跑只會得到「任何 cookie 裡都找不到 bfWebToken」。那顆 cookie 同時也是唯一可靠的成功信號：登入成不成功，頁面都會回到 beanfun。
 
 ## 單一來源
 
 - **入口網址一律由那個視窗自己去要**（按下 beanfun 登入頁的「使用 gamapass」，由頁面呼叫 `Login/GoGamaPass`）。beanfun 把 OAuth 的 nonce 綁在「提出請求的那條 session」上，我們用 Rust 的 client 代打、再把網址交給視窗，繞回來就是 `AUCB001 參數(nonce)驗證失敗`——即使 cookie 已經複製過去也一樣。要那個網址、跳到對方網域、繞回來，必須是同一個 browser context。寫死 `accounts.gamania.com/login` 更不行：那樣登完會停在橘子那邊，沒有東西回到 portal。
-- **登入完成的判定**只寫在本模組的 `PORTAL_HOSTS`：網址的 host 落在 beanfun portal 才算完成。
+- **登入完成的判定**只寫在本模組的 `harvest`：視窗的 cookie 裡有 `bfWebToken` 才算完成。看網址不算數——失敗也會回到 beanfun。
 - **視窗什麼時候現身**只寫在本模組：腳本用 fragment 求救時才現身。前端不控制這件事。
 
 ## 不變量
@@ -58,5 +58,4 @@ pub fn cancel(app)
 ## 禁止
 
 - 自己實作 GamaPass 的登入 API 或 passkey —— 正面做法：登入請求要帶對方頁面才產得出的 reCAPTCHA v3 token，passkey 的憑證又綁在對方網域（WebAuthn 的 RP ID），兩者都只能在他們的頁面上完成；我們負責的是把畫面與輸入接過來。
-- 從視窗裡把 cookie 撈出來當登入結果 —— 正面做法：登入態綁在 `pSKey` 上，用當初鑄出這把 key 的 client 走 `complete_login`，跟 QR 收尾同一條路。
-- 反覆呼叫 `complete_login` 來試探有沒有登入成功 —— 它會 POST `return.aspx`，不是唯讀；只在判定完成後呼叫一次。
+- 拿 `complete_login` 來收尾這條登入 —— 正面做法：token 在那個視窗的 cookie 裡，撈出來收進 jar。`complete_login` 是 QR 那條的收尾，在這裡只會失敗（而且它會 POST `return.aspx`，不是唯讀）。

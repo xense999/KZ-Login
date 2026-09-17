@@ -271,13 +271,11 @@ async fn gamapass_login<R: tauri::Runtime>(
 
     match gamapass::wait_for_login(&app, &skey, &cookie_store, fill).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
-        gamapass::Outcome::Completed => {
-            let token = beanfun::complete_login(&client, &cookie_store, &skey)
-                .await
-                .map_err(|e| {
-                    // 收尾失敗時把視窗留著：那個畫面上就寫著對方為什麼不讓過。
-                    map_err(e)
-                })?;
+        gamapass::Outcome::Completed { token, cookies } => {
+            // The sign-in happened in that window, so its cookies are the live
+            // session — ours has to carry them from here on, or the very next
+            // request is an anonymous one.
+            beanfun::adopt_cookies(&cookie_store, &cookies).map_err(map_err)?;
             gamapass::cancel(&app);
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
             state.session_stores.lock().await.insert(token.clone(), cookie_store);

@@ -1178,6 +1178,84 @@ fn urlencode(s: &str) -> String {
         .collect()
 }
 
+// ─── Cookie 讀取（WebView2） ──────────────────────────────────────────────────
+
+/// 從某顆 webview 讀出 `url` 適用的 cookie，回傳 `(名稱, 值)`。
+///
+/// 給 `gamapass` 用：那條登入的結果只會落在那顆 webview 的 cookie 儲存區裡，
+/// 我們自己的 HTTP client 拿不到，只能過來撈。
+///
+/// WebView2 的讀取是非同步的、回呼跑在主執行緒，所以這裡用一個 channel 等它；
+/// 等不到就當作沒有，呼叫端會再試下一輪。
+#[cfg(windows)]
+pub(crate) fn read_cookies<R: Runtime>(
+    window: &WebviewWindow<R>,
+    url: &str,
+) -> Result<Vec<(String, String)>, String> {
+    use std::sync::mpsc;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
+    use webview2_com::GetCookiesCompletedHandler;
+    use windows_core::{Interface, HSTRING, PCWSTR};
+
+    let (tx, rx) = mpsc::sync_channel::<Vec<(String, String)>>(1);
+    let uri = HSTRING::from(url);
+    window
+        .with_webview(move |platform| unsafe {
+            let manager: ICoreWebView2CookieManager = match platform
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_2>())
+                .and_then(|core2| core2.CookieManager())
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("[browser] 取不到 cookie manager：{e}");
+                    let _ = tx.send(Vec::new());
+                    return;
+                }
+            };
+
+            let tx = tx.clone();
+            let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
+                let mut out = Vec::new();
+                if let Some(list) = list {
+                    let mut count = 0u32;
+                    let _ = list.Count(&mut count);
+                    for i in 0..count {
+                        let Ok(cookie) = list.GetValueAtIndex(i) else { continue };
+                        let mut name = windows_core::PWSTR::null();
+                        let mut value = windows_core::PWSTR::null();
+                        if cookie.Name(&mut name).is_err() || cookie.Value(&mut value).is_err() {
+                            continue;
+                        }
+                        out.push((
+                            webview2_com::take_pwstr(name),
+                            webview2_com::take_pwstr(value),
+                        ));
+                    }
+                }
+                let _ = tx.send(out);
+                Ok(())
+            }));
+            if let Err(e) = manager.GetCookies(PCWSTR(uri.as_ptr()), &handler) {
+                eprintln!("[browser] 讀 cookie 失敗：{e}");
+            }
+        })
+        .map_err(|e| format!("讀取 cookie 失敗：{e}"))?;
+
+    Ok(rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap_or_default())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn read_cookies<R: Runtime>(
+    _window: &WebviewWindow<R>,
+    _url: &str,
+) -> Result<Vec<(String, String)>, String> {
+    Ok(Vec::new())
+}
+
 // ─── Cookie 注入（WebView2） ──────────────────────────────────────────────────
 
 /// 把 cookie 寫進這顆 webview 的 WebView2 cookie 儲存區。回傳成功寫入的顆數；

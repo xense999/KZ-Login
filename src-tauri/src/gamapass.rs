@@ -21,11 +21,12 @@
 //! fills in the account, gets past that step and then stands aside. (A passkey
 //! also needs a real window for the system's own prompt to sit on.)
 //!
-//! What comes back is not a token. The login is tied to the `pSKey` the window
-//! was opened with, so once the portal takes over the page, the caller finishes
-//! the same way a QR login does — with `beanfun::complete_login` on the client
-//! that minted that key. Reading cookies out of the webview is therefore
-//! unnecessary.
+//! The login's result stays in that window. Unlike QR — where the sign-in
+//! happens on a phone and our own client can still finish on the session key —
+//! GamaPass hands `bfWebToken` to the browser that performed it and to nobody
+//! else, so the token is read out of the window's cookies and written into our
+//! jar. That cookie is also the only sound signal that it worked: the page
+//! returns to beanfun whether the sign-in succeeded or failed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -45,17 +46,23 @@ const POLL_INTERVAL: Duration = Duration::from_millis(80);
 const TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The script asks for a person by putting this in the address; the same poll
-/// that watches for the portal picks it up. beanfun's CSP keeps app IPC out of
+/// that watches the window picks it up. beanfun's CSP keeps app IPC out of
 /// these windows, and this one has no capability anyway.
 const NEEDS_USER_FRAGMENT: &str = "kz-gamapass=user";
 
 /// Size of the window once it has to be shown, in CSS pixels.
 const WINDOW_SIZE: (f64, f64) = (480.0, 720.0);
 
-/// Hosts that mean the login is done. The sign-in itself wanders off to
-/// Gamania's own domains, so anything that is not the login page cannot be the
-/// signal — only arriving at the portal can.
-const PORTAL_HOSTS: &[&str] = &["tw.beanfun.com", "tw.newlogin.beanfun.com"];
+/// Where the finished login leaves its cookies. Read in this order; the token
+/// is normally on the portal itself.
+const HARVEST_URLS: &[&str] = &[
+    "https://tw.beanfun.com/",
+    "https://login.beanfun.com/",
+    "https://tw.newlogin.beanfun.com/",
+];
+
+/// The cookie that *is* the login.
+const TOKEN_COOKIE: &str = "bfWebToken";
 
 /// A fixed label would collide: tauri only forgets a label once the old
 /// window's `Destroyed` event has gone through the event loop.
@@ -74,8 +81,9 @@ pub struct Fill {
 
 /// How a [`wait_for_login`] ended.
 pub enum Outcome {
-    /// The portal took over the page — the caller should finish the login.
-    Completed,
+    /// Signed in. Carries every cookie the window ended up with, the token
+    /// among them — the caller writes them into its own jar.
+    Completed { token: String, cookies: Vec<(String, String)> },
     /// The window was closed, or nothing happened for [`TIMEOUT`].
     Cancelled,
 }
@@ -133,10 +141,10 @@ pub async fn wait_for_login<R: Runtime>(
         let Some(window) = app.get_webview_window(&label) else {
             break Outcome::Cancelled;
         };
-        let Ok(url) = window.url() else { continue };
-        if at_portal(&url) {
-            break Outcome::Completed;
+        if let Some(done) = harvest(&window) {
+            break done;
         }
+        let Ok(url) = window.url() else { continue };
         // The script gave up on doing it silently — hand the page over.
         if url.fragment().is_some_and(|f| f.contains(NEEDS_USER_FRAGMENT)) && !window.is_visible().unwrap_or(false) {
             let _ = window.set_skip_taskbar(false);
@@ -372,35 +380,23 @@ fn show_window<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>) {
     let _ = window.set_focus();
 }
 
-fn at_portal(url: &Url) -> bool {
-    url.host_str()
-        .is_some_and(|h| PORTAL_HOSTS.iter().any(|p| h.eq_ignore_ascii_case(p)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::at_portal;
-    use tauri::Url;
-
-    fn url(s: &str) -> Url {
-        s.parse().unwrap()
+/// The token, once the window has it. Everything the beanfun domains hold comes
+/// back with it: the session those cookies belong to is the one that just
+/// signed in, and our own requests have to look like it from here on.
+fn harvest<R: Runtime>(window: &WebviewWindow<R>) -> Option<Outcome> {
+    let mut all: Vec<(String, String)> = Vec::new();
+    for url in HARVEST_URLS {
+        let Ok(cookies) = browser::read_cookies(window, url) else { continue };
+        for (name, value) in cookies {
+            if !all.iter().any(|(n, _)| n == &name) {
+                all.push((name, value));
+            }
+        }
     }
-
-    #[test]
-    fn the_login_page_itself_is_not_the_signal() {
-        assert!(!at_portal(&url("https://login.beanfun.com/Login/Index?pSKey=abc")));
-    }
-
-    #[test]
-    fn gamania_sign_in_detours_are_not_the_signal() {
-        // The sign-in leaves beanfun entirely on the way through; treating any
-        // departure from the login page as success would finish far too early.
-        assert!(!at_portal(&url("https://tw.gamania.com/login")));
-    }
-
-    #[test]
-    fn arriving_at_the_portal_is_the_signal() {
-        assert!(at_portal(&url("https://tw.newlogin.beanfun.com/checkin_step2.aspx?skey=abc")));
-        assert!(at_portal(&url("https://tw.beanfun.com/beanfun_block/bflogin/default.aspx")));
-    }
+    let token = all
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(TOKEN_COOKIE))
+        .map(|(_, v)| v.clone())
+        .filter(|v| !v.is_empty())?;
+    Some(Outcome::Completed { token, cookies: all })
 }
