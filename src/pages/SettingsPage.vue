@@ -227,7 +227,7 @@ async function supportAuthor() {
       <div class="card">
         <div class="row">
           <span class="row-title">偏好設定</span>
-          <div class="seg">
+          <div class="seg seg-wide">
             <button :class="{ active: mainAction === 'proxy' }" @click="setMainAction('proxy')"
               title="主畫面按鈕＝讀取剪貼簿裡對方分享的登入連結並啟動遊戲">代理登入</button>
             <button :class="{ active: mainAction === 'game' }" @click="setMainAction('game')"
@@ -692,6 +692,7 @@ async function supportAuthor() {
 }
 .seg button {
   padding: 6px 18px;
+  white-space: nowrap;
   border-radius: 6px;
   border: none;
   background: none;
@@ -705,6 +706,9 @@ async function supportAuthor() {
   color: var(--text);
 }
 .seg button:not(.active):hover { color: var(--text); }
+/* 四個字的選項用窄一點的內距：視窗一窄，18px 內距會讓文字折行，那張卡片就比
+   主題那張高一截。 */
+.seg-wide button { padding: 6px 12px; }
 
 /* ── 底部按鈕 ── */
 .bottom-bar {
