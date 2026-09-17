@@ -274,7 +274,11 @@ async fn gamapass_login<R: tauri::Runtime>(
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)
                 .await
-                .map_err(map_err)?;
+                .map_err(|e| {
+                    // 收尾失敗時把視窗留著：那個畫面上就寫著對方為什麼不讓過。
+                    map_err(e)
+                })?;
+            gamapass::cancel(&app);
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
             state.session_stores.lock().await.insert(token.clone(), cookie_store);
             // Saving is a convenience; failing to save must not undo a good

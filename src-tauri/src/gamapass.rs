@@ -144,8 +144,13 @@ pub async fn wait_for_login<R: Runtime>(
         }
     };
 
-    if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.destroy();
+    // 只有「使用者自己放棄」才在這裡收掉視窗。判定完成之後還有收尾要做，收尾
+    // 失敗時那個畫面就是唯一的線索——先關掉等於把現場清乾淨了。成功的那條路由
+    // 呼叫端關（`cancel`）。
+    if matches!(outcome, Outcome::Cancelled) {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.destroy();
+        }
     }
     Ok(outcome)
 }
