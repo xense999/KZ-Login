@@ -5,6 +5,14 @@
 //! Gamania's own page and only work on their origin. So the page is loaded in a
 //! window of its own; what we control is whether anyone has to look at it.
 //!
+//! The window starts on **beanfun's** login page and the script presses 「使用
+//! gamapass」 there, exactly as a person would. Asking for the entry address
+//! ourselves and sending the window straight to Gamania does not work: beanfun
+//! ties the OAuth nonce to the session that asked, so the round trip comes back
+//! with a nonce it does not recognise (`AUCB001`). Everything — the request for
+//! the address, the hop to Gamania, the hop back — has to happen in one browser
+//! context.
+//!
 //! The window is never shown while the script is working: what the user typed
 //! into our own form is put into Gamania's fields, and with a password the
 //! whole login can finish without their site ever appearing. It surfaces — as a
@@ -72,16 +80,16 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// Open the GamaPass entry point (see `beanfun::go_gamapass`) and wait until
-/// the portal takes over.
+/// Open beanfun's login page for `skey` and wait until the portal takes over
+/// again with the user signed in.
 pub async fn wait_for_login<R: Runtime>(
     app: &AppHandle<R>,
-    entry_url: &str,
+    skey: &str,
     jar: &Arc<CookieStoreMutex>,
     fill: Fill,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
-    let url: Url = entry_url
+    let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
         .parse()
         .map_err(|e| format!("登入頁網址錯誤：{e}"))?;
     let data_dir = app
@@ -172,7 +180,10 @@ fn init_script(fill: &Fill) -> String {
 /// asks for a second factor, or anything at all that we did not expect, it asks
 /// for the window to be shown and the page is handed to the user as it is.
 const AUTOFILL_JS: &str = r##"(() => {
-  if (location.hostname !== "accounts.gamania.com") return;
+  const ON_BEANFUN = location.hostname === "login.beanfun.com";
+  const ON_GAMANIA = location.hostname === "accounts.gamania.com";
+  if (!ON_BEANFUN && !ON_GAMANIA) return;
+
   const ACC = __ACCOUNT__;
   const PW = __PASSWORD__;   // 空的＝passkey：帳號照填，密碼那一步交給使用者
   if (!ACC) return;
@@ -208,8 +219,9 @@ const AUTOFILL_JS: &str = r##"(() => {
   };
 
   const clickLabelled = (text) => {
+    const want = text.toLowerCase();
     const hit = [...document.querySelectorAll("button, [role=button]")].find(
-      (b) => visible(b) && (b.textContent || "").trim().includes(text));
+      (b) => visible(b) && (b.textContent || "").trim().toLowerCase().includes(want));
     if (hit) { hit.click(); return true; }
     return false;
   };
@@ -218,6 +230,14 @@ const AUTOFILL_JS: &str = r##"(() => {
   const timer = setInterval(() => {
     // 卡住就不要再等了：交給使用者，讓他看到頁面到底停在哪。
     if (Date.now() - started > 20000) { clearInterval(timer); askForUser(); return; }
+
+    // beanfun 的登入頁：按下它自己的「使用 gamapass」，讓它用自己的 session 去
+    // 要跳轉網址。我們代打的話，回程的 nonce 會對不起來。
+    if (ON_BEANFUN) {
+      // 按一次就好：多按幾次等於多跟它要幾組跳轉網址。沒跳成就等逾時交給使用者。
+      if (!step("__kz_goto") && clickLabelled("gamapass")) mark("__kz_goto");
+      return;
+    }
 
     if (!step("__kz_acc")) {
       const acc = accountField();

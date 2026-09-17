@@ -327,49 +327,6 @@ pub async fn complete_login(
     token.ok_or_else(|| BeanfunError::Parse("bfWebToken not found in any cookie after finalize".into()))
 }
 
-/// Ask for the GamaPass entry point. beanfun mints it per session — it carries
-/// the way back to this `pSKey`, which is why the address cannot be hardcoded:
-/// a bare `accounts.gamania.com/login` would sign the user in and leave them
-/// there, with nothing returning to the portal for `complete_login` to finish.
-///
-/// Mirrors what the login page's own 「使用 gamapass」 button does.
-pub async fn go_gamapass(client: &Client, page: &LoginPage) -> Result<String, BeanfunError> {
-    let mut req = client
-        .get(&format!("{}Login/GoGamaPass", LOGIN_BASE))
-        .header(header::ACCEPT, "application/json, text/plain, */*")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::REFERER, page.url())
-        .header("X-Requested-With", "XMLHttpRequest")
-        .header("Origin", "https://login.beanfun.com");
-    // The anti-forgery token is checked on this one too — without it beanfun
-    // answers 「參數驗證失敗」. Their page sends it on every call from a
-    // request interceptor, so it is easy to miss that a GET needs it as well.
-    if !page.verification_token.is_empty() {
-        req = req.header("RequestVerificationToken", &page.verification_token);
-    }
-
-    let body = req.send().await?.text().await?;
-    read_gamapass_url(&body)
-}
-
-fn read_gamapass_url(body: &str) -> Result<String, BeanfunError> {
-    let reply = read_login_reply(body)?;
-    if reply.code != 1 {
-        let m = reply.message.trim();
-        return Err(BeanfunError::Parse(if m.is_empty() {
-            "beanfun 沒有給 GamaPass 登入網址".to_owned()
-        } else {
-            m.to_owned()
-        }));
-    }
-    reply
-        .data
-        .as_str()
-        .filter(|u| u.starts_with("https://"))
-        .map(str::to_owned)
-        .ok_or_else(|| BeanfunError::Parse("GamaPass 登入網址格式不對".into()))
-}
-
 // ─── Password Login ───────────────────────────────────────────────────────────
 
 /// What one step of the password login concluded.
@@ -1287,7 +1244,7 @@ async fn probe_with_session(cookie_store: &Arc<CookieStoreMutex>) -> SessionStat
 
 #[cfg(test)]
 mod tests {
-    use super::{clip, read_account_login, read_account_type, read_gamapass_url, read_token_check, LoginStep, SessionState};
+    use super::{clip, read_account_login, read_account_type, read_token_check, LoginStep, SessionState};
 
     /// The three replies the live endpoint actually returns. The two zero cases
     /// were captured from beanfun on 2026-08-30: no cookie answers "Token value
@@ -1346,26 +1303,6 @@ mod tests {
     // Captured from beanfun on 2026-09-14 with an unknown account and no captcha:
     // both steps refuse with the same "tick I'm not a robot" message, and only
     // AccountLogin also raises the flag.
-    #[test]
-    fn the_gamapass_url_comes_from_the_reply() {
-        assert_eq!(
-            read_gamapass_url(r#"{"ResultData":"https://accounts.gamania.com/login?x=1","ResultCode":1,"ResultMessage":""}"#).unwrap(),
-            "https://accounts.gamania.com/login?x=1"
-        );
-    }
-
-    #[test]
-    fn a_refusal_carries_beanfuns_own_words() {
-        let err = read_gamapass_url(r#"{"ResultData":null,"ResultCode":0,"ResultMessage":"暫停服務"}"#).unwrap_err();
-        assert!(err.to_string().contains("暫停服務"), "{err}");
-    }
-
-    #[test]
-    fn anything_that_is_not_an_https_address_is_refused() {
-        // 回的若是物件、空字串或 javascript: 之類，都不能拿去 navigate。
-        assert!(read_gamapass_url(r#"{"ResultData":{"url":"x"},"ResultCode":1,"ResultMessage":""}"#).is_err());
-        assert!(read_gamapass_url(r#"{"ResultData":"javascript:alert(1)","ResultCode":1,"ResultMessage":""}"#).is_err());
-    }
 
     const ACCOUNT_TYPE_NEEDS_CAPTCHA: &str = r#"{"ResultData":{"IsGamaPass":false,"GamaPassUrl":null},"Result":0,"ResultCode":0,"ResultMessage":"請點選「我不是機器人」！"}"#;
     const ACCOUNT_LOGIN_NEEDS_CAPTCHA: &str = r#"{"ResultData":{"IsRecaptcha":true},"Result":0,"ResultCode":0,"ResultMessage":"請點選「我不是機器人」！"}"#;
