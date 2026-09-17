@@ -363,6 +363,7 @@ mod win {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows,
+        AllowSetForegroundWindow,
         GetClientRect, GetSystemMetrics, GetWindowRect, GetWindowTextW,
         IsWindowVisible, PostMessageW,
         SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -535,6 +536,19 @@ mod win {
     /// True when a MapleStory client window is currently open.
     pub fn is_game_running() -> bool {
         unsafe { !find_game_window().is_null() }
+    }
+
+    /// Let any other process put a window in front, for as long as this process
+    /// keeps the foreground privilege.
+    ///
+    /// Windows normally only lets the process the user is working in raise a
+    /// window. The passkey prompt is drawn by the system's own credential UI —
+    /// a different process — so without this it can only blink in the taskbar
+    /// and wait to be clicked.
+    pub fn allow_foreground_for_any() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+        // ASFW_ANY: any process may take the foreground.
+        unsafe { AllowSetForegroundWindow(u32::MAX) };
     }
 
     /// Executable name of the game client, as Task Manager lists it. Also what

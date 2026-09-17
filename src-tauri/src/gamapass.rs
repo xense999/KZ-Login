@@ -148,6 +148,7 @@ pub async fn wait_for_login<R: Runtime>(
     // 焦點要給網頁那顆，不是外殼：Windows 的安全性驗證（指紋／PIN）跳出來時會
     // 掛在發起它的視窗上，那顆沒有焦點的話，框就冒在別人後面。
     let _ = view.set_focus();
+    allow_foreground();
 
     let started = Instant::now();
     let outcome = loop {
@@ -167,6 +168,9 @@ pub async fn wait_for_login<R: Runtime>(
         }
         // 每個 tick 都貼一次，外殼被拖動時才跟得上。
         place_view(&shell, &view);
+        // 授權會隨著使用者去點別的東西而失效，所以每一輪都補一次——PIN 框可能在
+        // 這中間任何一刻才跳出來。
+        allow_foreground();
     };
 
     // 只有「使用者自己放棄」才在這裡收掉視窗。判定完成之後還有收尾要做，收尾
@@ -185,6 +189,13 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
             let _ = window.destroy();
         }
     }
+}
+
+/// 讓系統的憑證介面（PIN／指紋那個框）有權把自己帶到最前面。少了這一步它只能
+/// 在工作列閃，要使用者自己點才看得到。
+fn allow_foreground() {
+    #[cfg(windows)]
+    crate::win::allow_foreground_for_any();
 }
 
 /// 把網頁那顆視窗貼進外殼畫出來的框裡（邊框內、標題列下方）。外殼的標題列是自己

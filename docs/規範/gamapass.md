@@ -57,6 +57,7 @@ pub fn cancel(app)
 - label 每次換號（`gamapass-shell-<n>`／`gamapass-view-<n>`）：tauri 的 label 簿記要等 `Destroyed` 才清，用固定 label 會撞號。
 - **只有外殼掛 capability**（拖曳與關閉），網頁那顆零 IPC。
 - **焦點給網頁那顆，不是外殼**：Windows 的安全性驗證（指紋／PIN）會掛在發起它的視窗上，那顆沒有焦點的話，框會冒在別人後面。
+- **每一輪都呼叫 `AllowSetForegroundWindow(ASFW_ANY)`**：那個框是系統自己的程序畫的，Windows 的前景鎖不讓別的程序搶到最前面，少了這個授權它只會在工作列閃、要使用者自己點。★**不要用置頂代替**：那個框不是掛在我們視窗底下的東西，置頂只會蓋住它（2026-09-17 實機踩過）。
 - 關掉視窗就是取消；10 分鐘逾時。
 
 ## 禁止
