@@ -120,7 +120,7 @@ function onCancel() {
         </div>
 
         <div class="extras">
-          <button class="btn-passkey" :disabled="!hasAccount" @click="run(false)">使用 passkey</button>
+          <button class="btn-passkey" :disabled="!hasAccount" @click="run(false)">改用 passkey（不用密碼）</button>
           <button v-if="remembered" class="link" @click="forget">忘記這組帳密</button>
         </div>
       </template>
