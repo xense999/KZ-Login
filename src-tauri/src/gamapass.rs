@@ -115,9 +115,8 @@ pub async fn wait_for_login<R: Runtime>(
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(false)
-        // 目前一律顯示：整條流程還沒跑通過，看不見就只能用猜的。調通之後再改回
-        // 「只有需要人接手時才現身」。
+        .skip_taskbar(true)
+        // 腳本開得動的時候沒人需要看到這個視窗；要人接手時才現身（見 `show_window`）。
         .visible(false)
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
@@ -129,7 +128,6 @@ pub async fn wait_for_login<R: Runtime>(
 
     overlay::disable_tracking_prevention(&window);
     browser::seed_and_navigate(&window, jar, url)?;
-    show_window(&window, &main);
 
     let started = Instant::now();
     let outcome = loop {
@@ -290,8 +288,8 @@ const AUTOFILL_JS: &str = r##"(() => {
     return true;
   };
 
-  // 調通之前讓使用者看得到程式走到哪一步，不然只能用猜的。整條流程穩定之後
-  // 連同視窗一起收回幕後。
+  // 視窗平常是藏著的，這行字只有在「交給使用者」時才會被看到——那正是最需要
+  // 知道「程式走到哪一步、為什麼停下來」的時候。
   const say = (text) => {
     let tag = document.getElementById("__kz_tag");
     if (!tag) {
