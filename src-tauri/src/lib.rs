@@ -221,16 +221,20 @@ enum GamapassLoginResult {
     Cancelled,
 }
 
-/// Sign in with a GamaPass account: open Gamania's own login page in its own
-/// window, wait until the portal takes over, then finish on the session key we
-/// minted — the same tail the QR login uses, because the login is tied to that
-/// key rather than to whoever's cookie jar performed it. The password never
-/// passes through us, so nothing is remembered for this account.
+/// Sign in with a GamaPass account. The account and password are the ones typed
+/// into our own form; they are handed to the window to put into Gamania's
+/// fields and are never stored — a GamaPass login remembers nothing. Passing
+/// neither shows that page as it is, which is the only way a passkey can work.
+///
+/// The tail is the QR login's: the login is tied to the session key we minted
+/// rather than to whoever's cookie jar performed it.
 #[tauri::command]
 async fn gamapass_login<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     region: overlay::Region,
+    account: Option<String>,
+    password: Option<String>,
 ) -> Result<GamapassLoginResult, String> {
     // Starting this abandons a paused password login, and its password.
     *state.pending_password.lock().await = None;
@@ -243,7 +247,14 @@ async fn gamapass_login<R: tauri::Runtime>(
     let page = beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
     let entry = beanfun::go_gamapass(&client, &page).await.map_err(map_err)?;
 
-    match gamapass::wait_for_login(&app, &entry, region).await? {
+    let mode = match (account, password) {
+        (Some(account), Some(password)) if !account.is_empty() && !password.is_empty() => {
+            gamapass::Mode::Autofill { account, password }
+        }
+        _ => gamapass::Mode::Manual,
+    };
+
+    match gamapass::wait_for_login(&app, &entry, region, mode).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)

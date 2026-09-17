@@ -8,7 +8,8 @@
 
 ```rust
 pub enum Outcome { Completed, Cancelled }
-pub async fn wait_for_login(app, entry_url: &str, region: overlay::Region) -> Result<Outcome, String>
+pub enum Mode { Autofill { account, password }, Manual }
+pub async fn wait_for_login(app, entry_url: &str, region: overlay::Region, mode: Mode) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
@@ -27,7 +28,10 @@ pub fn cancel(app)
 
 ## 不變量
 
-- 帳密與二階段驗證都在遊戲橘子自己的頁面上，本程式不經手、不儲存，卡片的 `loginAccount` 是 null。
+- 密碼只在這一次登入的過程中存在：前端送出後就清掉，後端只轉交給視窗，**不寫進 `credentials`**，卡片的 `loginAccount` 也是 null。
+- 注入的腳本**只在 `accounts.gamania.com` 上作用**——帳密不能交給剛好載入這個視窗的任何其他頁面。
+- 腳本只做「填欄位、按下一步、按登入」。不偽裝自動化痕跡、不碰任何驗證挑戰；對方要驗就讓它跳出來給使用者做。
+- 欄位靠 `input` 的 type 找、按鈕靠文字找，不用對方的 class：那是框架產生的名字，改版就會變。
 - 視窗**不掛任何 capability**（零 IPC），同 `captcha`：載入的是外部網站，給它 IPC 等於把 app 的指令開放給那個頁面。結果一律靠輪詢視窗網址取得。
 - 使用固定、可重用的獨立 WebView2 資料夾（app local data 底下的 `gamapass-webview`），不可與主視窗或 captcha 視窗共用。
 - 視窗無邊框、不進工作列、owner 是主視窗，每 80ms 依主視窗目前位置重新定位，所以拖動主視窗時會跟著移動。
@@ -37,5 +41,6 @@ pub fn cancel(app)
 
 ## 禁止
 
+- 自己實作 GamaPass 的登入 API 或 passkey —— 正面做法：登入請求要帶對方頁面才產得出的 reCAPTCHA v3 token，passkey 的憑證又綁在對方網域，兩者都只能在他們的頁面上完成；我們負責的是把畫面與輸入接過來。
 - 從視窗裡把 cookie 撈出來當登入結果 —— 正面做法：登入態綁在 `pSKey` 上，用當初鑄出這把 key 的 client 走 `complete_login`，跟 QR 收尾同一條路。
 - 反覆呼叫 `complete_login` 來試探有沒有登入成功 —— 它會 POST `return.aspx`，不是唯讀；只在判定完成後呼叫一次。
