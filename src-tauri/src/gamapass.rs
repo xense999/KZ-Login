@@ -11,6 +11,11 @@
 //! — the user does in that same window, because it is already on screen. There
 //! is nothing hidden to surface and no cover to lift.
 //!
+//! The window is two windows, the way the account browser is: a shell that
+//! draws the frame and title bar, and the page itself pinned inside it. Their
+//! page cannot host a title bar of ours, and a native frame would make this
+//! read as some other program that just appeared.
+//!
 //! The login's result stays in that window. Unlike QR — where the sign-in
 //! happens on a phone and our own client can still finish on the session key —
 //! GamaPass hands `bfWebToken` to the browser that performed it and to nobody
@@ -29,14 +34,18 @@ use tauri::{
 
 use crate::{browser, overlay};
 
-const LABEL_PREFIX: &str = "gamapass-";
+const SHELL_LABEL_PREFIX: &str = "gamapass-shell-";
+const VIEW_LABEL_PREFIX: &str = "gamapass-view-";
 /// Short enough that the window keeps up when the main window is dragged.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// Long enough to read a mail or open an authenticator app on the way through.
 const TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Size of the window once it has to be shown, in CSS pixels.
-const WINDOW_SIZE: (f64, f64) = (480.0, 720.0);
+/// Window size in CSS pixels, and the shell's own furniture — kept in step with
+/// `GamaPassShell.vue`, which draws them.
+const WINDOW_SIZE: (f64, f64) = (480.0, 760.0);
+const TITLEBAR_H: f64 = 42.0;
+const EDGE: f64 = 3.0;
 
 /// Where the finished login leaves its cookies. Read in this order; the token
 /// is normally on the portal itself.
@@ -92,17 +101,33 @@ pub async fn wait_for_login<R: Runtime>(
         .join("gamapass-webview");
 
     cancel(app);
-    let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let shell_label = format!("{SHELL_LABEL_PREFIX}{id}");
+    let view_label = format!("{VIEW_LABEL_PREFIX}{id}");
+
+    let shell = WebviewWindowBuilder::new(app, &shell_label, WebviewUrl::App("gamapass.html".into()))
+        .title("GamaPass 登入")
+        .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("登入視窗開不起來：{e}"))?;
+    center_on_main(&shell, &main);
+
     // 先開空白頁再導過去：cookie 要在第一個真正的請求之前就位，不然 beanfun 綁在
     // 這條 session 上的 nonce 對不起來。
     let blank: Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
-        .title("GamaPass 登入")
-        .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
+    let view = WebviewWindowBuilder::new(app, &view_label, WebviewUrl::External(blank))
+        .decorations(false)
+        .shadow(false)
         .resizable(false)
-        // 開起來就給看：腳本是在使用者面前填的，而它填不動的那些（二階段、
-        // passkey）本來就要在這個視窗裡自己來。
+        .skip_taskbar(true)
         .visible(false)
+        .owner(&shell)
+        .map_err(|e| e.to_string())?
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
         .data_directory(data_dir)
@@ -111,9 +136,12 @@ pub async fn wait_for_login<R: Runtime>(
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
-    overlay::disable_tracking_prevention(&window);
-    browser::seed_and_navigate(&window, jar, url)?;
-    show_window(&window, &main);
+    overlay::disable_tracking_prevention(&view);
+    browser::seed_and_navigate(&view, jar, url)?;
+    place_view(&shell, &view);
+    let _ = shell.show();
+    let _ = view.show();
+    let _ = shell.set_focus();
 
     let started = Instant::now();
     let outcome = loop {
@@ -121,22 +149,25 @@ pub async fn wait_for_login<R: Runtime>(
             break Outcome::Cancelled;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
-        // The user closing the window is the cancel gesture; there is no other.
-        let Some(window) = app.get_webview_window(&label) else {
+        // 使用者關掉外殼就是取消，沒有第二種取消方式。
+        let (Some(shell), Some(view)) = (
+            app.get_webview_window(&shell_label),
+            app.get_webview_window(&view_label),
+        ) else {
             break Outcome::Cancelled;
         };
-        if let Some(done) = harvest(&window) {
+        if let Some(done) = harvest(&view) {
             break done;
         }
+        // 每個 tick 都貼一次，外殼被拖動時才跟得上。
+        place_view(&shell, &view);
     };
 
     // 只有「使用者自己放棄」才在這裡收掉視窗。判定完成之後還有收尾要做，收尾
     // 失敗時那個畫面就是唯一的線索——先關掉等於把現場清乾淨了。成功的那條路由
     // 呼叫端關（`cancel`）。
     if matches!(outcome, Outcome::Cancelled) {
-        if let Some(w) = app.get_webview_window(&label) {
-            let _ = w.destroy();
-        }
+        cancel(app);
     }
     Ok(outcome)
 }
@@ -144,10 +175,34 @@ pub async fn wait_for_login<R: Runtime>(
 /// Close an open GamaPass window; a pending [`wait_for_login`] then cancels.
 pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
     for (label, window) in app.webview_windows() {
-        if label.starts_with(LABEL_PREFIX) {
+        if label.starts_with(SHELL_LABEL_PREFIX) || label.starts_with(VIEW_LABEL_PREFIX) {
             let _ = window.destroy();
         }
     }
+}
+
+/// 把網頁那顆視窗貼進外殼畫出來的框裡（邊框內、標題列下方）。外殼的標題列是自己
+/// 畫的，所以系統文字倍率放大的是它的內容——換算要跟著（同帳號瀏覽器）。
+fn place_view<R: Runtime>(shell: &WebviewWindow<R>, view: &WebviewWindow<R>) {
+    let (Ok(pos), Ok(size), Ok(scale)) =
+        (shell.outer_position(), shell.inner_size(), shell.scale_factor())
+    else {
+        return;
+    };
+    #[cfg(windows)]
+    let px_per_css = scale * crate::win::text_scale_factor();
+    #[cfg(not(windows))]
+    let px_per_css = scale;
+
+    let edge = (EDGE * px_per_css).round() as i32;
+    let top = (TITLEBAR_H * px_per_css).round() as i32;
+    let w = size.width as i32 - edge * 2;
+    let h = size.height as i32 - top - edge;
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let _ = view.set_position(PhysicalPosition::new(pos.x + edge, pos.y + top));
+    let _ = view.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
 }
 
 /// The script the window runs on every document it loads. It only acts on
@@ -330,10 +385,8 @@ const AUTOFILL_JS: &str = r##"(() => {
   }, 300);
 })();"##;
 
-/// Show it as an ordinary window, centred on the app — the app sits in the
-/// bottom-right corner, and a window that opens across the screen from it reads
-/// as something else entirely.
-fn show_window<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>) {
+/// 開在主視窗上面——主視窗待在右下角，登入視窗跑到螢幕另一頭會像是別的程式。
+fn center_on_main<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>) {
     let _ = window.set_size(LogicalSize::new(WINDOW_SIZE.0, WINDOW_SIZE.1));
     if let (Ok(main_pos), Ok(main_size), Ok(size)) =
         (main.outer_position(), main.outer_size(), window.outer_size())
@@ -342,8 +395,6 @@ fn show_window<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>) {
         let y = main_pos.y + (main_size.height as i32 - size.height as i32) / 2;
         let _ = window.set_position(PhysicalPosition::new(x, y));
     }
-    let _ = window.show();
-    let _ = window.set_focus();
 }
 
 /// The token, once the window has it. Everything the beanfun domains hold comes
