@@ -6,6 +6,7 @@ import type { LoginGame, LoginResult } from "../stores/accounts";
 const emit = defineEmits<{
   cancel: [];
   success: [login: LoginResult];
+  busy: [value: boolean];
 }>();
 
 type Result =
@@ -14,10 +15,15 @@ type Result =
 
 type Saved = { account: string; password: string };
 
+// 上次用哪一組要自己記：`credentials` 的清單順序是使用者排的，已存在的帳號再次
+// 登入不會移位，拿最後一筆當「最近用的」會挑到別人（連密碼一起）。
+const LAST_KEY = "kusei:gamapass_last";
+
 const account = ref("");
 const password = ref("");
 const saved = ref<Saved[]>([]);
 const menuOpen = ref(false);
+const accountField = ref<HTMLElement | null>(null);
 const running = ref(false);
 const errorMsg = ref("");
 // 切走時這一頁會被卸載，但視窗可能還開著；那時候的回覆不該再動這一頁。
@@ -25,16 +31,25 @@ let disposed = false;
 
 // 記住的帳密：最後用的那組直接填好，其他的收在下拉裡（同帳密登入頁）。
 onMounted(async () => {
+  document.addEventListener("pointerdown", closeMenuOutside);
   try {
     saved.value = await invoke<Saved[]>("saved_gamapass");
     if (disposed) return;
-    const last = saved.value[saved.value.length - 1];
+    const wanted = localStorage.getItem(LAST_KEY);
+    const last = saved.value.find((s) => s.account === wanted) ?? saved.value[saved.value.length - 1];
     if (last) pick(last);
   } catch { /* 沒記住就空著 */ }
 });
 
+// 3：點到別處就收起來。選單蓋在密碼欄上，不收的話「點密碼欄」會點到選單的某一列，
+// 帳密就被無聲換掉。
+function closeMenuOutside(e: PointerEvent) {
+  if (menuOpen.value && !accountField.value?.contains(e.target as Node)) menuOpen.value = false;
+}
+
 onUnmounted(() => {
   disposed = true;
+  document.removeEventListener("pointerdown", closeMenuOutside);
   invoke("gamapass_cancel").catch(() => { /* 視窗早就關了 */ });
 });
 
@@ -48,7 +63,14 @@ function pick(entry: Saved) {
 }
 
 async function forget(entry: Saved) {
-  try { await invoke("forget_gamapass", { account: entry.account }); } catch { /* 沒存過也無妨 */ }
+  try {
+    // 真的刪掉了才從畫面上拿掉：刪失敗卻讓它消失，下次進來又冒出來，使用者
+    // 會以為自己刪的沒生效——事實上它從來就沒被刪掉。
+    await invoke("forget_gamapass", { account: entry.account });
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+    return;
+  }
   saved.value = saved.value.filter((s) => s !== entry);
   if (saved.value.length === 0) menuOpen.value = false;
   // 刪掉的正是欄位裡那組，就把欄位也清掉——留著會讓人以為它還記著。
@@ -66,6 +88,7 @@ async function run(withPassword: boolean) {
   errorMsg.value = "";
   menuOpen.value = false;
   running.value = true;
+  emit("busy", true);
   try {
     const result = await invoke<Result>("gamapass_login", {
       account: account.value.trim(),
@@ -73,6 +96,7 @@ async function run(withPassword: boolean) {
     });
     if (disposed) return;
     if (result.status === "approved") {
+      try { localStorage.setItem(LAST_KEY, account.value.trim()); } catch { /* 記不住就算了 */ }
       emit("success", {
         token: result.token,
         games: result.games,
@@ -85,7 +109,10 @@ async function run(withPassword: boolean) {
   } catch (e: unknown) {
     if (!disposed) errorMsg.value = e instanceof Error ? e.message : String(e);
   } finally {
-    if (!disposed) running.value = false;
+    if (!disposed) {
+      running.value = false;
+      emit("busy", false);
+    }
   }
 }
 
@@ -111,7 +138,7 @@ function onCancel() {
         </div>
 
         <div class="form">
-          <div class="field-wrap">
+          <div ref="accountField" class="field-wrap">
             <input
               v-model="account"
               class="field"

@@ -234,9 +234,9 @@ enum GamapassLoginResult {
 
 /// Sign in with a GamaPass account. The account and password are the ones typed
 /// into our own form; they are handed to the window to put into Gamania's
-/// fields and are never stored — a GamaPass login remembers nothing. Without a
+/// fields, and remembered once the login works (see `credentials`). Without a
 /// password the account still goes in, and the window is then handed to the
-/// user for a passkey.
+/// user for a passkey — that path stores nothing, having no password to store.
 ///
 /// The tail is the QR login's: the login is tied to the session key we minted
 /// rather than to whoever's cookie jar performed it.
@@ -363,7 +363,6 @@ mod win {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows,
-        AllowSetForegroundWindow,
         GetClientRect, GetSystemMetrics, GetWindowRect, GetWindowTextW,
         IsWindowVisible, PostMessageW,
         SetForegroundWindow, ShowWindow, SW_RESTORE,

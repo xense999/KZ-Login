@@ -22,4 +22,4 @@
 - `pending_password` 只在「需要驗證」時保存；成功、被拒、改用 QR、錯誤、開始新的帳密登入、驗證取消或逾時（`captcha_solve` 回傳 null）、切到 QR（`qr_start`）時都會清掉，裡面的明文密碼不會多留（2026-09-14 審查後補齊）。
 - 密碼只有在帳密登入成功時才交給 `credentials` 加密儲存；被拒、改用 QR、錯誤時都不存。
 - 三種登入成功後都把 cookie jar 登記進 `session_stores`，OTP／啟動沿用。
-- **GamaPass 的收尾**與 QR 同一條：`complete_login(client, store, skey)`。登入態綁在 `pSKey` 上而不是誰的 cookie jar，所以在別的視窗登入也拿得到 token。
+- **GamaPass 的收尾不走 `complete_login`**：token 只發給執行登入的那個 webview，要從它的 cookie 撈出來再 `adopt_cookies` 收進 jar（見總表 `gamapass` 條）。QR 那條才是綁在 `pSKey` 上、我們的 client 收得了尾。

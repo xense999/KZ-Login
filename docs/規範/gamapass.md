@@ -43,12 +43,12 @@ pub fn cancel(app)
 
 - **入口網址一律由那個視窗自己去要**（按下 beanfun 登入頁的「使用 gamapass」，由頁面呼叫 `Login/GoGamaPass`）。beanfun 把 OAuth 的 nonce 綁在「提出請求的那條 session」上，我們用 Rust 的 client 代打、再把網址交給視窗，繞回來就是 `AUCB001 參數(nonce)驗證失敗`——即使 cookie 已經複製過去也一樣。要那個網址、跳到對方網域、繞回來，必須是同一個 browser context。寫死 `accounts.gamania.com/login` 更不行：那樣登完會停在橘子那邊，沒有東西回到 portal。
 - **登入完成的判定**只寫在本模組的 `harvest`：視窗的 cookie 裡有 `bfWebToken` 才算完成。看網址不算數——失敗也會回到 beanfun。
-- **視窗的樣子與位置**只寫在本模組（480×720、置中於主視窗），前端不傳尺寸也不傳配色。
+- **視窗的樣子與位置**只寫在本模組（480×760、置中於螢幕；版面常數 `TITLEBAR_H`／`EDGE` 與 `GamaPassShell.vue` 各一份，改了要一起改），前端不傳尺寸也不傳配色。
 
 ## 不變量
 
 - 密碼只在這一次登入的過程中存在：後端只轉交給視窗，成功時才交給 `credentials` 記住（kind = gamapass），卡片的 `loginAccount` 是 null。
-- 注入的腳本**只在 `accounts.gamania.com` 上作用**——帳密不能交給剛好載入這個視窗的任何其他頁面。
+- 注入的腳本在 `login.beanfun.com` 與 `accounts.gamania.com` 兩個 host 上跑（前者只按那顆「使用 gamapass」），**但帳密只會填進 `accounts.gamania.com`**——別的頁面碰巧載進這個視窗時，一個字都不會被打出去。
 - 腳本只做「按 beanfun 頁上的 gamapass、填欄位、按下一步、按登入」。不偽裝自動化痕跡、不碰任何驗證挑戰；對方要驗就讓它跳出來給使用者做。
 - 欄位靠 `input` 的 type 找、按鈕靠文字找，不用對方的 class：那是框架產生的名字，改版就會變。
 - 網頁那顆視窗**不掛任何 capability**（零 IPC），同 `captcha`：載入的是外部網站，給它 IPC 等於把 app 的指令開放給那個頁面。

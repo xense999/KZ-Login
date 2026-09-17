@@ -36,8 +36,11 @@ use crate::{browser, overlay};
 
 const SHELL_LABEL_PREFIX: &str = "gamapass-shell-";
 const VIEW_LABEL_PREFIX: &str = "gamapass-view-";
-/// Short enough that the window keeps up when the main window is dragged.
+/// Short enough that the page keeps up when the shell is dragged.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
+/// How often the cookies are read. Far rarer than the poll: each read waits on
+/// a callback that runs on the main thread, and a login takes seconds at best.
+const HARVEST_EVERY: Duration = Duration::from_millis(600);
 /// Long enough to read a mail or open an authenticator app on the way through.
 const TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -151,6 +154,7 @@ pub async fn wait_for_login<R: Runtime>(
     allow_foreground();
 
     let started = Instant::now();
+    let mut last_harvest = Instant::now();
     let outcome = loop {
         if started.elapsed() >= TIMEOUT {
             break Outcome::Cancelled;
@@ -163,8 +167,11 @@ pub async fn wait_for_login<R: Runtime>(
         ) else {
             break Outcome::Cancelled;
         };
-        if let Some(done) = harvest(&view) {
-            break done;
+        if last_harvest.elapsed() >= HARVEST_EVERY {
+            last_harvest = Instant::now();
+            if let Some(done) = harvest(&view) {
+                break done;
+            }
         }
         // 每個 tick 都貼一次，外殼被拖動時才跟得上。
         place_view(&shell, &view);
@@ -218,20 +225,34 @@ fn place_view<R: Runtime>(shell: &WebviewWindow<R>, view: &WebviewWindow<R>) {
     if w <= 0 || h <= 0 {
         return;
     }
-    let _ = view.set_position(PhysicalPosition::new(pos.x + edge, pos.y + top));
-    let _ = view.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
+    // 沒變就不要動：這個函式每 80ms 跑一次，最長跑十分鐘，而它動的正是使用者
+    // 正在打字、系統驗證框也掛在上面的那顆視窗。
+    let want_pos = PhysicalPosition::new(pos.x + edge, pos.y + top);
+    let want_size = tauri::PhysicalSize::new(w as u32, h as u32);
+    if view.outer_position().ok() != Some(want_pos) {
+        let _ = view.set_position(want_pos);
+    }
+    if view.inner_size().ok() != Some(want_size) {
+        let _ = view.set_size(want_size);
+    }
 }
 
-/// The script the window runs on every document it loads. It only acts on
-/// Gamania's own host — the credentials must never be handed to a page that
-/// merely happens to load in this window.
+/// The script the window runs on every document it loads. It runs on two hosts:
+/// beanfun's login page, where it only presses the GamaPass button, and
+/// Gamania's own, where the credentials go. Anywhere else it returns at once —
+/// what was typed must never reach a page that merely happens to load here.
 fn init_script(fill: &Fill) -> String {
     let account = fill.account.as_str();
     let password = fill.password.as_deref().unwrap_or("");
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
+    // 一次掃完：分兩次 replace 的話，第二次會掃到第一次剛填進去的內容——帳號裡
+    // 只要出現 `__PASSWORD__` 這串字，整段腳本就壞在語法上、而且是無聲的。
+    let (account, password) = (json(account), json(password));
     AUTOFILL_JS
-        .replace("__ACCOUNT__", &json(account))
-        .replace("__PASSWORD__", &json(password))
+        .split("__ACCOUNT__")
+        .map(|part| part.replace("__PASSWORD__", &password))
+        .collect::<Vec<_>>()
+        .join(&account)
 }
 
 /// Fills Gamania's own form with what the user typed into ours, and submits.
@@ -406,8 +427,17 @@ const AUTOFILL_JS: &str = r##"(() => {
 /// back with it: the session those cookies belong to is the one that just
 /// signed in, and our own requests have to look like it from here on.
 fn harvest<R: Runtime>(window: &WebviewWindow<R>) -> Option<Outcome> {
-    let mut all: Vec<(String, String)> = Vec::new();
-    for url in HARVEST_URLS {
+    // 讀 cookie 是同步等一個跑在主執行緒的回呼，所以第一個網域沒有 token 就先
+    // 收手——token 幾乎都在 portal 上，其餘兩個只在真的成功時才需要一起帶走。
+    let first = browser::read_cookies(window, HARVEST_URLS[0]).ok()?;
+    let token = first
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(TOKEN_COOKIE))
+        .map(|(_, v)| v.clone())
+        .filter(|v| !v.is_empty())?;
+
+    let mut all = first;
+    for url in &HARVEST_URLS[1..] {
         let Ok(cookies) = browser::read_cookies(window, url) else { continue };
         for (name, value) in cookies {
             if !all.iter().any(|(n, _)| n == &name) {
@@ -415,10 +445,5 @@ fn harvest<R: Runtime>(window: &WebviewWindow<R>) -> Option<Outcome> {
             }
         }
     }
-    let token = all
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case(TOKEN_COOKIE))
-        .map(|(_, v)| v.clone())
-        .filter(|v| !v.is_empty())?;
     Some(Outcome::Completed { token, cookies: all })
 }
