@@ -112,9 +112,13 @@ const proxyLaunching = ref(false);
 async function proxyLaunch() {
   proxyLaunching.value = true;
   try {
-    const clip = ((await readText()) ?? "").trim();
+    // 剪貼簿是空的、或裡面不是文字時，readText 是丟錯而不是回空字串——那跟
+    // 「複製到別的東西」是同一件事，接住它才能講中文，不然使用者看到的是
+    // 剪貼簿元件的英文訊息。
+    let clip = "";
+    try { clip = (await readText()).trim(); } catch { /* 當成沒複製 */ }
     if (!clip.startsWith("gamaniagames://")) {
-      toast("請複製金鑰", { kind: "error" });
+      toast("剪貼簿沒有有效的登入金鑰，請先複製對方傳來的資料", { kind: "error" });
       return;
     }
     await invoke<string>("proxy_launch", { uri: clip });
