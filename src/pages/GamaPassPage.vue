@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useTheme } from "../composables/useTheme";
 import type { LoginGame, LoginResult } from "../stores/accounts";
 
 const emit = defineEmits<{
@@ -13,7 +12,6 @@ type Result =
   | { status: "approved"; token: string; games: LoginGame[] }
   | { status: "cancelled" };
 
-const regionEl = ref<HTMLElement | null>(null);
 const account = ref("");
 const password = ref("");
 const remembered = ref(false);
@@ -52,22 +50,6 @@ async function forget() {
 // passkey 一樣帶帳號過去（不然使用者要在對方頁面重打一次），只是不帶密碼：
 // 帳號填完、過了那一步就把視窗交給他，因為 passkey 的憑證綁在對方網域上，
 // 只有他們自己的頁面問得到。
-// passkey 那條的登入視窗會貼在這一頁的內容區上，所以要把位置和配色交給它——
-// 它蓋的是對方的頁面，配色得跟我們一致，不然一眼就看得出是外來的東西。
-function readPalette() {
-  const css = getComputedStyle(document.documentElement);
-  return {
-    bg: css.getPropertyValue("--bg").trim(),
-    text: css.getPropertyValue("--text").trim(),
-    dark: useTheme().theme.value === "dark",
-  };
-}
-
-function readRegion() {
-  const r = regionEl.value!.getBoundingClientRect();
-  return { x: r.left, y: r.top, width: r.width, height: r.height };
-}
-
 async function run(withPassword: boolean) {
   if (withPassword ? !canLogin.value : !hasAccount.value) return;
   errorMsg.value = "";
@@ -77,8 +59,6 @@ async function run(withPassword: boolean) {
     const result = await invoke<Result>("gamapass_login", {
       account: account.value.trim(),
       password: withPassword ? password.value : null,
-      palette: readPalette(),
-      region: readRegion(),
     });
     if (disposed) return;
     if (result.status === "approved") {
@@ -106,11 +86,11 @@ function onCancel() {
 
 <template>
   <div class="gp-page">
-    <div ref="regionEl" class="gp-main">
+    <div class="gp-main">
       <template v-if="running">
         <div class="spinner-lg"></div>
         <span class="status-txt">登入中…</span>
-        <span class="hint">需要你確認的時候會跳出來。</span>
+        <span class="hint">登入視窗會跳出來，可以看著它把你填的東西打進去。</span>
       </template>
 
       <template v-else>

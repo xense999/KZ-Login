@@ -9,7 +9,7 @@
 ```rust
 pub struct Fill { account: String, password: Option<String> }
 pub enum Outcome { Completed { token, cookies }, Cancelled }
-pub async fn wait_for_login(app, skey: &str, jar, fill: Fill, palette, region) -> Result<Outcome, String>
+pub async fn wait_for_login(app, skey: &str, jar, fill: Fill) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
@@ -24,8 +24,9 @@ pub fn cancel(app)
 
 - 上次成功登入記住的那組（見總表 `credentials` 條）進來就填好，按登入即可；「忘記這組帳密」只在有記住時出現。
 - 「改用 passkey（不用密碼）」要填了帳號才能按——不然沒有東西帶得進去，使用者得在對方頁面重打一次。
-- **主視窗裡從頭到尾不放對方的頁面。** 帶密碼那條的視窗全程隱藏；需要人接手時才變成一個獨立視窗（480×720、置中於主視窗、進工作列）。
-- **passkey 例外**：Windows 只肯替「在最前面的視窗」跳出指紋／PIN 的框，藏著就不會出現。所以那條的視窗無邊框、貼在這一頁的內容區上（同 `captcha`），並由注入的腳本用我們的配色蓋掉整頁——看得到的是我們的畫面和系統的框，不是對方的網站。遮罩上留一個「沒有跳出視窗？點這裡再試一次」的出路。
+- **我們的表單只是預先打**：按下登入後，登入視窗會跳出來（480×720、置中於主視窗），腳本在使用者眼前把填的東西打進對方的欄位。兩條路都一樣。
+- 腳本填不動的（二階段、passkey、密碼錯了）就在同一個視窗裡自己接手——它本來就開著，沒有東西要現身、也沒有蓋子要掀。視窗上方那行字會說程式走到哪一步、為什麼停下來。
+  - ★ 2026-09-17 試過「藏起來只在需要時現身」與「貼在主視窗內容區＋蓋住對方頁面」，都有頁面問題；passkey 更麻煩：Windows 只肯替在最前面的視窗跳出指紋／PIN 的框。定案就是單純開一個看得見的視窗。
 
 ## 流程
 
@@ -33,7 +34,6 @@ pub fn cancel(app)
 2. 開一個隱藏的 WebView 視窗，**先停在 `about:blank`、把 client 的 cookie 注入進去（`browser::seed_and_navigate`，注入前會先清空）**，再導向 beanfun 的登入頁。注入的腳本在那裡按下「使用 gamapass」，到了對方網域再把帳密填進欄位並送出。
 3. 每一輪去讀那個視窗的 cookie（三個 beanfun 網域）：
    - 出現 `bfWebToken` ＝ 登入完成 → 整批 cookie 收進我們的 jar，接著 `get_game_accounts`，登記進 `session_stores`。
-   - fragment 出現 `kz-gamapass=user` ＝ 腳本請求把畫面交給人 → 顯示成獨立視窗。
    - 視窗被關掉或 10 分鐘沒結果 ＝ 取消。
 
 **為什麼要去 webview 裡撈 cookie**（2026-09-17 實機推翻先前的設計）：QR 登入可以由我們的 client 收尾，因為那條的登入態綁在 `pSKey` 上；**GamaPass 不是**——它把 `bfWebToken` 發給「執行登入的那個瀏覽器」，`complete_login` 在我們的 client 上跑只會得到「任何 cookie 裡都找不到 bfWebToken」。那顆 cookie 同時也是唯一可靠的成功信號：登入成不成功，頁面都會回到 beanfun。
@@ -42,7 +42,7 @@ pub fn cancel(app)
 
 - **入口網址一律由那個視窗自己去要**（按下 beanfun 登入頁的「使用 gamapass」，由頁面呼叫 `Login/GoGamaPass`）。beanfun 把 OAuth 的 nonce 綁在「提出請求的那條 session」上，我們用 Rust 的 client 代打、再把網址交給視窗，繞回來就是 `AUCB001 參數(nonce)驗證失敗`——即使 cookie 已經複製過去也一樣。要那個網址、跳到對方網域、繞回來，必須是同一個 browser context。寫死 `accounts.gamania.com/login` 更不行：那樣登完會停在橘子那邊，沒有東西回到 portal。
 - **登入完成的判定**只寫在本模組的 `harvest`：視窗的 cookie 裡有 `bfWebToken` 才算完成。看網址不算數——失敗也會回到 beanfun。
-- **視窗什麼時候現身**只寫在本模組：腳本用 fragment 求救時才現身。前端不控制這件事。
+- **視窗的樣子與位置**只寫在本模組（480×720、置中於主視窗），前端不傳尺寸也不傳配色。
 
 ## 不變量
 

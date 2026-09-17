@@ -2,24 +2,14 @@
 //!
 //! A GamaPass account cannot be signed in over HTTP the way a beanfun account
 //! can — the password check, the reCAPTCHA token and the passkey all belong to
-//! Gamania's own page and only work on their origin. So the page is loaded in a
-//! window of its own; what we control is whether anyone has to look at it.
+//! Gamania's own page and only work on their origin. So the page is opened in a
+//! window of its own and an injected script fills it in: what the user typed
+//! into our form is typed into theirs, in front of them. Our form is where the
+//! typing happens; this window is where it lands.
 //!
-//! The window starts on **beanfun's** login page and the script presses 「使用
-//! gamapass」 there, exactly as a person would. Asking for the entry address
-//! ourselves and sending the window straight to Gamania does not work: beanfun
-//! ties the OAuth nonce to the session that asked, so the round trip comes back
-//! with a nonce it does not recognise (`AUCB001`). Everything — the request for
-//! the address, the hop to Gamania, the hop back — has to happen in one browser
-//! context.
-//!
-//! The window is never shown while the script is working: what the user typed
-//! into our own form is put into Gamania's fields, and with a password the
-//! whole login can finish without their site ever appearing. It surfaces — as a
-//! separate, ordinary window — only when a person is actually needed: a second
-//! factor, a wrong password, anything unexpected, and passkey, where the script
-//! fills in the account, gets past that step and then stands aside. (A passkey
-//! also needs a real window for the system's own prompt to sit on.)
+//! Whatever the script cannot do — a second factor, a passkey, a wrong password
+//! — the user does in that same window, because it is already on screen. There
+//! is nothing hidden to surface and no cover to lift.
 //!
 //! The login's result stays in that window. Unlike QR — where the sign-in
 //! happens on a phone and our own client can still finish on the session key —
@@ -28,28 +18,22 @@
 //! jar. That cookie is also the only sound signal that it worked: the page
 //! returns to beanfun whether the sign-in succeeded or failed.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 use reqwest_cookie_store::CookieStoreMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, LogicalSize, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
-use crate::browser;
-use crate::overlay::{self, Palette, Region};
+use crate::{browser, overlay};
 
 const LABEL_PREFIX: &str = "gamapass-";
 /// Short enough that the window keeps up when the main window is dragged.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// Long enough to read a mail or open an authenticator app on the way through.
 const TIMEOUT: Duration = Duration::from_secs(600);
-
-/// The script asks for a person by putting this in the address; the same poll
-/// that watches the window picks it up. beanfun's CSP keeps app IPC out of
-/// these windows, and this one has no capability anyway.
-const NEEDS_USER_FRAGMENT: &str = "kz-gamapass=user";
 
 /// Size of the window once it has to be shown, in CSS pixels.
 const WINDOW_SIZE: (f64, f64) = (480.0, 720.0);
@@ -96,8 +80,6 @@ pub async fn wait_for_login<R: Runtime>(
     skey: &str,
     jar: &Arc<CookieStoreMutex>,
     fill: Fill,
-    palette: Palette,
-    region: Region,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
     let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
@@ -114,34 +96,24 @@ pub async fn wait_for_login<R: Runtime>(
     // 先開空白頁再導過去：cookie 要在第一個真正的請求之前就位，不然 beanfun 綁在
     // 這條 session 上的 nonce 對不起來。
     let blank: Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
-    // passkey 要蓋在主視窗上（見模組說明），所以連視窗的樣子都不一樣。
-    let passkey = fill.password.is_none();
-    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(true)
-        // 腳本開得動的時候沒人需要看到這個視窗；要人接手時才現身（見 `show_window`）。
-        .visible(false);
-    if passkey {
-        builder = builder.decorations(false).shadow(false).owner(&main).map_err(|e| e.to_string())?;
-    }
-    let window = builder
+        // 開起來就給看：腳本是在使用者面前填的，而它填不動的那些（二階段、
+        // passkey）本來就要在這個視窗裡自己來。
+        .visible(false)
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
         .data_directory(data_dir)
         .additional_browser_args(overlay::BROWSER_ARGS)
-        .initialization_script(&init_script(&fill, &palette))
+        .initialization_script(&init_script(&fill))
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
     overlay::disable_tracking_prevention(&window);
     browser::seed_and_navigate(&window, jar, url)?;
-    if passkey {
-        overlay::place(&window, &main, region);
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+    show_window(&window, &main);
 
     let started = Instant::now();
     let outcome = loop {
@@ -155,16 +127,6 @@ pub async fn wait_for_login<R: Runtime>(
         };
         if let Some(done) = harvest(&window) {
             break done;
-        }
-        // 每個 tick 都貼一次，主視窗被拖動時才跟得上。
-        if passkey {
-            overlay::place(&window, &main, region);
-        }
-        let Ok(url) = window.url() else { continue };
-        // The script gave up on doing it silently — hand the page over.
-        if url.fragment().is_some_and(|f| f.contains(NEEDS_USER_FRAGMENT)) && !window.is_visible().unwrap_or(false) {
-            let _ = window.set_skip_taskbar(false);
-            show_window(&window, &main);
         }
     };
 
@@ -191,16 +153,13 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
 /// The script the window runs on every document it loads. It only acts on
 /// Gamania's own host — the credentials must never be handed to a page that
 /// merely happens to load in this window.
-fn init_script(fill: &Fill, palette: &Palette) -> String {
+fn init_script(fill: &Fill) -> String {
     let account = fill.account.as_str();
     let password = fill.password.as_deref().unwrap_or("");
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     AUTOFILL_JS
         .replace("__ACCOUNT__", &json(account))
         .replace("__PASSWORD__", &json(password))
-        .replace("__FRAGMENT__", &json(NEEDS_USER_FRAGMENT))
-        .replace("__BG__", &json(&palette.bg))
-        .replace("__TEXT__", &json(&palette.text))
 }
 
 /// Fills Gamania's own form with what the user typed into ours, and submits.
@@ -221,20 +180,8 @@ const AUTOFILL_JS: &str = r##"(() => {
   const PW = __PASSWORD__;   // 空的＝passkey：帳號照填，密碼那一步交給使用者
   if (!ACC) return;
 
-  const FRAGMENT = __FRAGMENT__;
-  const BG = __BG__;
-  const TEXT = __TEXT__;
   const step = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
   const mark = (k) => { try { sessionStorage.setItem(k, "1"); } catch (e) {} };
-
-  // 這個視窗是隱藏的，所以「交給使用者」＝請後端把它顯示出來。改的是 fragment，
-  // 不動路徑，對方的路由不會因此跳頁。
-  let asked = false;
-  const askForUser = () => {
-    if (asked) return;
-    asked = true;
-    try { location.hash = FRAGMENT; } catch (e) {}
-  };
 
   // offsetParent 對 fixed 定位的元素一律是 null，改看有沒有實際畫出來的方框。
   const visible = (el) => !!el && !el.disabled && el.getClientRects().length > 0;
@@ -310,32 +257,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     return true;
   };
 
-  // passkey 那條的視窗是貼在主視窗上、看得見的，所以要把對方的頁面蓋掉——
-  // 使用者要看的是系統那個指紋／PIN 的框，不是這個網站。蓋子擋不住系統的框，
-  // 那是作業系統自己畫的，永遠在最上面。
-  const cover = () => {
-    if (PW || !document.body || document.getElementById("__kz_cover")) return;
-    const el = document.createElement("div");
-    el.id = "__kz_cover";
-    el.setAttribute("style",
-      "position:fixed;inset:0;z-index:2147483000;background:" + BG + ";color:" + TEXT + ";" +
-      "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;" +
-      "font:14px/1.7 system-ui,sans-serif;text-align:center;padding:24px");
-    const title = document.createElement("div");
-    title.textContent = "請用指紋、PIN 或安全金鑰完成登入";
-    const again = document.createElement("button");
-    again.textContent = "沒有跳出視窗？點這裡再試一次";
-    again.setAttribute("style",
-      "border:none;background:none;color:inherit;opacity:.55;font:12px system-ui,sans-serif;" +
-      "text-decoration:underline;cursor:pointer");
-    again.addEventListener("click", () => { clickLabelled("passkey"); });
-    el.appendChild(title);
-    el.appendChild(again);
-    document.body.appendChild(el);
-  };
-
-  // 視窗平常是藏著的，這行字只有在「交給使用者」時才會被看到——那正是最需要
-  // 知道「程式走到哪一步、為什麼停下來」的時候。
+  // 使用者看著這個視窗，所以直接告訴他程式在做什麼、停在哪一步。
   const say = (text) => {
     let tag = document.getElementById("__kz_tag");
     if (!tag) {
@@ -353,9 +275,8 @@ const AUTOFILL_JS: &str = r##"(() => {
 
   const started = Date.now();
   const timer = setInterval(() => {
-    cover();
-    // 卡住就不要再等了：交給使用者，讓他看到頁面到底停在哪。
-    if (Date.now() - started > 20000) { clearInterval(timer); say("等太久了，交給你"); askForUser(); return; }
+    // 卡住就不要再等了：手縮回來，讓使用者自己接著操作這一頁。
+    if (Date.now() - started > 20000) { clearInterval(timer); say("這一步請你自己來"); return; }
 
     // beanfun 的登入頁：按下它自己的「使用 gamapass」，讓它用自己的 session 去
     // 要跳轉網址。我們代打的話，回程的 nonce 會對不起來。
@@ -365,7 +286,7 @@ const AUTOFILL_JS: &str = r##"(() => {
       const at = Number(step("__kz_goto_at") || 0);
       if (at && Date.now() - at < 3500) { say("已按下使用 gamapass，等它跳轉"); return; }
       const tries = Number(step("__kz_goto_n") || 0);
-      if (tries >= 3) { clearInterval(timer); say("按不動「使用 gamapass」，交給你"); askForUser(); return; }
+      if (tries >= 3) { clearInterval(timer); say("按不動「使用 gamapass」，請你自己點"); return; }
       say(tries ? `再試一次「使用 gamapass」（第 ${tries + 1} 次）` : "找「使用 gamapass」按鈕");
       if (clickLabelled("gamapass", ".use-gama-pass")) {
         try {
@@ -384,7 +305,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     }
     // passkey：帳號帶進去就收手。游標一進帳號欄，那頁就會問要不要用金鑰，系統的
     // 詢問框蓋上來之後頁面是動不了的——再去按「下一步」只會空等到逾時。
-    if (!PW) { clearInterval(timer); cover(); askForUser(); return; }
+    if (!PW) { clearInterval(timer); say("帳號填好了，請用 passkey 登入"); return; }
     if (!step("__kz_next")) {
       if (passwordField()) { mark("__kz_next"); return; }
       say("按下一步");
@@ -406,7 +327,6 @@ const AUTOFILL_JS: &str = r##"(() => {
     // 真的成功的話，頁面會離開這個網域，這支腳本也就不再跑了。
     clearInterval(timer);
     say("已送出，等它回應");
-    setTimeout(askForUser, 2500);
   }, 300);
 })();"##;
 
