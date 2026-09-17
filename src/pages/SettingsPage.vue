@@ -226,7 +226,7 @@ async function supportAuthor() {
 
       <div class="card">
         <div class="row">
-          <span class="row-title">按鈕偏好設定</span>
+          <span class="row-title">按鈕設定</span>
           <div class="seg">
             <button :class="{ active: mainAction === 'proxy' }" @click="setMainAction('proxy')"
               title="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
