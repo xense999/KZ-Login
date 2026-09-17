@@ -7,7 +7,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "../composables/useToast";
 import { useTheme } from "../composables/useTheme";
-import { useMainAction } from "../composables/useMainAction";
+import { useMainAction, type MainAction } from "../composables/useMainAction";
 import { useDiscordShare } from "../composables/useDiscord";
 import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
 
@@ -18,6 +18,18 @@ const emit = defineEmits<{ back: [] }>();
 
 const { theme, setTheme } = useTheme();
 const { mainAction, setMainAction } = useMainAction();
+
+// 主畫面在另一頁，切換的結果當下看不到，所以就地說一聲那顆按鈕變成什麼了。
+const MAIN_ACTION_LABEL: Record<MainAction, string> = {
+  proxy: "代理登入",
+  game: "啟動遊戲",
+};
+
+function chooseMainAction(a: MainAction) {
+  if (mainAction.value === a) return;
+  setMainAction(a);
+  toast(`右下角按鈕已切換成 ${MAIN_ACTION_LABEL[a]}`);
+}
 
 const WEBHOOK_KEY = "kusei:discord_webhook";
 
@@ -228,9 +240,9 @@ async function supportAuthor() {
         <div class="row">
           <span class="row-title">按鈕設定</span>
           <div class="seg">
-            <button :class="{ active: mainAction === 'proxy' }" @click="setMainAction('proxy')"
+            <button :class="{ active: mainAction === 'proxy' }" @click="chooseMainAction('proxy')"
               title="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
-            <button :class="{ active: mainAction === 'game' }" @click="setMainAction('game')"
+            <button :class="{ active: mainAction === 'game' }" @click="chooseMainAction('game')"
               title="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
           </div>
         </div>
