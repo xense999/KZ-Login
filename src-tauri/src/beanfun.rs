@@ -334,14 +334,21 @@ pub async fn complete_login(
 ///
 /// Mirrors what the login page's own 「使用 gamapass」 button does.
 pub async fn go_gamapass(client: &Client, page: &LoginPage) -> Result<String, BeanfunError> {
-    let body = client
+    let mut req = client
         .get(&format!("{}Login/GoGamaPass", LOGIN_BASE))
         .header(header::ACCEPT, "application/json, text/plain, */*")
+        .header(header::CONTENT_TYPE, "application/json")
         .header(header::REFERER, page.url())
         .header("X-Requested-With", "XMLHttpRequest")
-        .header("Origin", "https://login.beanfun.com")
-        .send().await?.text().await?;
+        .header("Origin", "https://login.beanfun.com");
+    // The anti-forgery token is checked on this one too — without it beanfun
+    // answers 「參數驗證失敗」. Their page sends it on every call from a
+    // request interceptor, so it is easy to miss that a GET needs it as well.
+    if !page.verification_token.is_empty() {
+        req = req.header("RequestVerificationToken", &page.verification_token);
+    }
 
+    let body = req.send().await?.text().await?;
     read_gamapass_url(&body)
 }
 
