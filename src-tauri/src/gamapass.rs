@@ -340,14 +340,15 @@ const AUTOFILL_JS: &str = r##"(() => {
       if (acc && !passwordField() && fill(acc, ACC)) mark("__kz_acc");
       return;
     }
+    // passkey：帳號帶進去就收手。游標一進帳號欄，那頁就會問要不要用金鑰，系統的
+    // 詢問框蓋上來之後頁面是動不了的——再去按「下一步」只會空等到逾時。
+    if (!PW) { clearInterval(timer); say("請用 passkey 登入"); askForUser(); return; }
     if (!step("__kz_next")) {
       if (passwordField()) { mark("__kz_next"); return; }
       say("按下一步");
       clickLabelled("下一步");
       return;
     }
-    // passkey：帳號已經帶進去、也過了這一步，剩下的是使用者的事。
-    if (!PW) { clearInterval(timer); say("帳號已填好，請用 passkey 登入"); askForUser(); return; }
     if (!step("__kz_pw")) {
       say("填密碼");
       const pw = passwordField();
