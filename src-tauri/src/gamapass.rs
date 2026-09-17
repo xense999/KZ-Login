@@ -1,17 +1,17 @@
 //! GamaPass login window.
 //!
 //! A GamaPass account cannot be signed in over HTTP the way a beanfun account
-//! can — the password, and whatever second factor the account carries, belong
-//! to Gamania's own page. So this opens that page in a window of its own and
-//! lets the user sign in there; we never see the credentials.
+//! can — the password check, the reCAPTCHA token and the passkey all belong to
+//! Gamania's own page and only work on their origin. So the page is loaded in a
+//! window of its own; what we control is whether anyone has to look at it.
 //!
-//! The window is borderless and pinned over the login page's own content area
-//! (see `overlay`), so signing in reads as part of the app rather than as a
-//! browser that appeared out of nowhere. In [`Mode::Autofill`] it also starts
-//! out covered: the account and password were already typed into our own form,
-//! so an injected script puts them into Gamania's fields and submits, and the
-//! cover only lifts when a person is actually needed — a second factor, a
-//! wrong password, anything unexpected.
+//! In [`Mode::Autofill`] that window is never shown: the account and password
+//! were typed into our own form, an injected script puts them into Gamania's
+//! fields and submits, and the whole login can finish without their site ever
+//! appearing. It surfaces — as a separate, ordinary window — only when a person
+//! is actually needed: a second factor, a wrong password, anything unexpected.
+//! [`Mode::Manual`] (passkey) shows that window from the start, because the
+//! system's own passkey prompt has to have a real window to sit on.
 //!
 //! What comes back is not a token. The login is tied to the `pSKey` the window
 //! was opened with, so once the portal takes over the page, the caller finishes
@@ -21,15 +21,26 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, LogicalSize, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
-use crate::overlay::{self, Region};
+use crate::overlay;
 
 const LABEL_PREFIX: &str = "gamapass-";
 /// Short enough that the window keeps up when the main window is dragged.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// Long enough to read a mail or open an authenticator app on the way through.
 const TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The script asks for a person by putting this in the address; the same poll
+/// that watches for the portal picks it up. beanfun's CSP keeps app IPC out of
+/// these windows, and this one has no capability anyway.
+const NEEDS_USER_FRAGMENT: &str = "kz-gamapass=user";
+
+/// Size of the window once it has to be shown, in CSS pixels.
+const WINDOW_SIZE: (f64, f64) = (480.0, 720.0);
 
 /// Hosts that mean the login is done. The sign-in itself wanders off to
 /// Gamania's own domains, so anything that is not the login page cannot be the
@@ -64,7 +75,6 @@ pub enum Outcome {
 pub async fn wait_for_login<R: Runtime>(
     app: &AppHandle<R>,
     entry_url: &str,
-    region: Region,
     mode: Mode,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
@@ -79,14 +89,15 @@ pub async fn wait_for_login<R: Runtime>(
 
     cancel(app);
     let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
+    let autofilling = matches!(mode, Mode::Autofill { .. });
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .decorations(false)
-        .shadow(false)
+        .title("GamaPass 登入")
+        .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(true)
+        .skip_taskbar(autofilling)
+        // Hidden while the script drives it; shown the moment a person is
+        // needed. A passkey needs it up from the start.
         .visible(false)
-        .owner(&main)
-        .map_err(|e| e.to_string())?
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
         .data_directory(data_dir)
@@ -95,10 +106,10 @@ pub async fn wait_for_login<R: Runtime>(
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
-    overlay::place(&window, &main, region);
     overlay::disable_tracking_prevention(&window);
-    let _ = window.show();
-    let _ = window.set_focus();
+    if !autofilling {
+        show_window(&window, &main);
+    }
 
     let started = Instant::now();
     let outcome = loop {
@@ -110,10 +121,15 @@ pub async fn wait_for_login<R: Runtime>(
         let Some(window) = app.get_webview_window(&label) else {
             break Outcome::Cancelled;
         };
-        if window.url().ok().is_some_and(|u| at_portal(&u)) {
+        let Ok(url) = window.url() else { continue };
+        if at_portal(&url) {
             break Outcome::Completed;
         }
-        overlay::place(&window, &main, region);
+        // The script gave up on doing it silently — hand the page over.
+        if url.fragment().is_some_and(|f| f.contains(NEEDS_USER_FRAGMENT)) && !window.is_visible().unwrap_or(false) {
+            let _ = window.set_skip_taskbar(false);
+            show_window(&window, &main);
+        }
     };
 
     if let Some(w) = app.get_webview_window(&label) {
@@ -145,6 +161,7 @@ fn init_script(mode: &Mode) -> String {
     AUTOFILL_JS
         .replace("__ACCOUNT__", &json(account))
         .replace("__PASSWORD__", &json(password))
+        .replace("__FRAGMENT__", &json(NEEDS_USER_FRAGMENT))
 }
 
 /// Fills Gamania's own form with what the user typed into ours, and submits.
@@ -154,40 +171,25 @@ fn init_script(mode: &Mode) -> String {
 /// are generated, so anything more precise would break on their next deploy.
 ///
 /// Nothing here tries to look like a human or to get past a check. If Gamania
-/// asks for a second factor, or anything at all that we did not expect, the
-/// cover comes off and the page is handed to the user as it is.
+/// asks for a second factor, or anything at all that we did not expect, it asks
+/// for the window to be shown and the page is handed to the user as it is.
 const AUTOFILL_JS: &str = r##"(() => {
   if (location.hostname !== "accounts.gamania.com") return;
   const ACC = __ACCOUNT__;
   const PW = __PASSWORD__;
   if (!ACC || !PW) return;
 
-  const COVER_ID = "__kz_cover";
-  const DONE = "__kz_autofill_done";
+  const FRAGMENT = __FRAGMENT__;
   const step = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
   const mark = (k) => { try { sessionStorage.setItem(k, "1"); } catch (e) {} };
 
-  // 蓋住頁面，直到真的需要人接手為止。第一次繪製就要蓋上，否則會閃一下對方的版面。
-  const cover = () => {
-    if (document.getElementById(COVER_ID) || !document.body) return;
-    const el = document.createElement("div");
-    el.id = COVER_ID;
-    el.setAttribute("style",
-      "position:fixed;inset:0;z-index:2147483000;background:#131924;" +
-      "display:flex;align-items:center;justify-content:center");
-    const spin = document.createElement("div");
-    spin.setAttribute("style",
-      "width:32px;height:32px;border-radius:50%;border:2px solid rgba(255,255,255,0.07);" +
-      "border-top-color:rgba(255,255,255,0.5);animation:__kzspin .8s linear infinite");
-    const style = document.createElement("style");
-    style.textContent = "@keyframes __kzspin{to{transform:rotate(360deg)}}";
-    el.appendChild(spin);
-    document.documentElement.appendChild(style);
-    document.body.appendChild(el);
-  };
-  const uncover = () => {
-    const el = document.getElementById(COVER_ID);
-    if (el) el.remove();
+  // 這個視窗是隱藏的，所以「交給使用者」＝請後端把它顯示出來。改的是 fragment，
+  // 不動路徑，對方的路由不會因此跳頁。
+  let asked = false;
+  const askForUser = () => {
+    if (asked) return;
+    asked = true;
+    try { location.hash = FRAGMENT; } catch (e) {}
   };
 
   const visible = (el) => el && el.offsetParent !== null && !el.disabled;
@@ -200,8 +202,7 @@ const AUTOFILL_JS: &str = r##"(() => {
 
   // 框架綁的是 input 事件，直接指定 value 不會更新它的狀態，送出去會是空的。
   const fill = (el, value) => {
-    const proto = Object.getPrototypeOf(el);
-    const setter = Object.getOwnPropertyDescriptor(proto, "value");
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
     if (setter && setter.set) setter.set.call(el, value);
     else el.value = value;
     el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -215,12 +216,10 @@ const AUTOFILL_JS: &str = r##"(() => {
     return false;
   };
 
-  cover();
   const started = Date.now();
   const timer = setInterval(() => {
-    cover();
-    // 卡住就不要再等了：把畫面交給使用者，讓他看到頁面到底停在哪。
-    if (Date.now() - started > 20000) { clearInterval(timer); uncover(); return; }
+    // 卡住就不要再等了：交給使用者，讓他看到頁面到底停在哪。
+    if (Date.now() - started > 20000) { clearInterval(timer); askForUser(); return; }
 
     if (!step("__kz_acc")) {
       const acc = accountField();
@@ -237,15 +236,32 @@ const AUTOFILL_JS: &str = r##"(() => {
       if (pw) { fill(pw, PW); mark("__kz_pw"); }
       return;
     }
-    if (!step(DONE)) {
-      if (clickLabelled("登入")) mark(DONE);
+    if (!step("__kz_login")) {
+      if (clickLabelled("登入")) mark("__kz_login");
       return;
     }
-    // 送出了。剩下的一律是人的事：二階段、密碼錯了、或是我們沒想到的畫面。
+    // 送出了。再往下一律是人的事：二階段、密碼錯了、或是我們沒想到的畫面。
+    // 真的成功的話，頁面會離開這個網域，這支腳本也就不再跑了。
     clearInterval(timer);
-    setTimeout(uncover, 1200);
+    setTimeout(askForUser, 2500);
   }, 300);
 })();"##;
+
+/// Show it as an ordinary window, centred on the app — the app sits in the
+/// bottom-right corner, and a window that opens across the screen from it reads
+/// as something else entirely.
+fn show_window<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>) {
+    let _ = window.set_size(LogicalSize::new(WINDOW_SIZE.0, WINDOW_SIZE.1));
+    if let (Ok(main_pos), Ok(main_size), Ok(size)) =
+        (main.outer_position(), main.outer_size(), window.outer_size())
+    {
+        let x = main_pos.x + (main_size.width as i32 - size.width as i32) / 2;
+        let y = main_pos.y + (main_size.height as i32 - size.height as i32) / 2;
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+}
 
 fn at_portal(url: &Url) -> bool {
     url.host_str()

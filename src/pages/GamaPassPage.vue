@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted, nextTick } from "vue";
+import { ref, computed, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { LoginGame, LoginResult } from "../stores/accounts";
 
@@ -15,7 +15,6 @@ type Result =
 // 帳號、密碼、登入中。帳號與密碼分兩步問，跟 GamaPass 自己的順序一致。
 type Step = "account" | "password" | "running";
 
-const regionEl = ref<HTMLElement | null>(null);
 const step = ref<Step>("account");
 const account = ref("");
 const password = ref("");
@@ -31,11 +30,6 @@ onUnmounted(() => {
 const canNext = computed(() => account.value.trim().length > 0);
 const canLogin = computed(() => password.value.length > 0);
 
-function readRegion() {
-  const r = regionEl.value!.getBoundingClientRect();
-  return { x: r.left, y: r.top, width: r.width, height: r.height };
-}
-
 function toPassword() {
   if (!canNext.value) return;
   errorMsg.value = "";
@@ -48,10 +42,8 @@ async function run(withCredentials: boolean) {
   if (withCredentials && !canLogin.value) return;
   errorMsg.value = "";
   step.value = "running";
-  await nextTick();   // 要先有版面才量得到
   try {
     const result = await invoke<Result>("gamapass_login", {
-      region: readRegion(),
       account: withCredentials ? account.value.trim() : null,
       password: withCredentials ? password.value : null,
     });
@@ -87,10 +79,11 @@ function onCancel() {
 
 <template>
   <div class="gp-page">
-    <div ref="regionEl" class="gp-main">
+    <div class="gp-main">
       <template v-if="step === 'running'">
-        <!-- 登入頁蓋在這塊上面，這裡只是它還沒畫出來時的底 -->
         <div class="spinner-lg"></div>
+        <span class="status-txt">登入中…</span>
+        <span class="hint">需要你確認的時候會另外開一個視窗。</span>
       </template>
 
       <template v-else>
@@ -161,6 +154,8 @@ function onCancel() {
 }
 .field:focus { outline: none; border-color: var(--primary-border); }
 .who { font-size: 12px; color: var(--text3); text-align: center; }
+.status-txt { font-size: 13px; color: var(--text2); }
+.hint { font-size: 12px; color: var(--text3); text-align: center; max-width: 240px; line-height: 1.6; }
 .err { font-size: 12px; color: var(--red); line-height: 1.6; }
 
 .btn-passkey {

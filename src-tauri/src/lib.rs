@@ -232,7 +232,6 @@ enum GamapassLoginResult {
 async fn gamapass_login<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    region: overlay::Region,
     account: Option<String>,
     password: Option<String>,
 ) -> Result<GamapassLoginResult, String> {
@@ -254,7 +253,7 @@ async fn gamapass_login<R: tauri::Runtime>(
         _ => gamapass::Mode::Manual,
     };
 
-    match gamapass::wait_for_login(&app, &entry, region, mode).await? {
+    match gamapass::wait_for_login(&app, &entry, mode).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)
