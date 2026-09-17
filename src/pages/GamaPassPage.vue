@@ -12,56 +12,48 @@ type Result =
   | { status: "approved"; token: string; games: LoginGame[] }
   | { status: "cancelled" };
 
-// 帳號、密碼、登入中。帳號與密碼分兩步問，跟 GamaPass 自己的順序一致。
-type Step = "account" | "password" | "running";
-
-const step = ref<Step>("account");
 const account = ref("");
 const password = ref("");
+const remembered = ref(false);
+const running = ref(false);
 const errorMsg = ref("");
 // 切走時這一頁會被卸載，但視窗可能還開著；那時候的回覆不該再動這一頁。
 let disposed = false;
 
-// 上次登入成功記住的那組，直接帶到密碼那一步，按登入就好。
+// 上次登入成功記住的那組，進來就填好，直接按登入就行。
 onMounted(async () => {
   try {
     const saved = await invoke<{ account: string; password: string } | null>("saved_gamapass");
-    if (disposed || !saved || account.value) return;
+    if (disposed || !saved) return;
     account.value = saved.account;
     password.value = saved.password;
-    step.value = "password";
-  } catch { /* 沒記住就從頭問起 */ }
+    remembered.value = true;
+  } catch { /* 沒記住就空著 */ }
 });
-
-async function forget() {
-  const who = account.value.trim();
-  password.value = "";
-  account.value = "";
-  step.value = "account";
-  try { await invoke("forget_gamapass", { account: who }); } catch { /* 沒存過也無妨 */ }
-}
 
 onUnmounted(() => {
   disposed = true;
   invoke("gamapass_cancel").catch(() => { /* 視窗早就關了 */ });
 });
 
-const canNext = computed(() => account.value.trim().length > 0);
-const canLogin = computed(() => password.value.length > 0);
+const hasAccount = computed(() => account.value.trim().length > 0);
+const canLogin = computed(() => hasAccount.value && password.value.length > 0);
 
-function toPassword() {
-  if (!canNext.value) return;
-  errorMsg.value = "";
-  step.value = "password";
+async function forget() {
+  const who = account.value.trim();
+  account.value = "";
+  password.value = "";
+  remembered.value = false;
+  try { await invoke("forget_gamapass", { account: who }); } catch { /* 沒存過也無妨 */ }
 }
 
 // passkey 一樣帶帳號過去（不然使用者要在對方頁面重打一次），只是不帶密碼：
 // 帳號填完、過了那一步就把視窗交給他，因為 passkey 的憑證綁在對方網域上，
 // 只有他們自己的頁面問得到。
 async function run(withPassword: boolean) {
-  if (withPassword && !canLogin.value) return;
+  if (withPassword ? !canLogin.value : !hasAccount.value) return;
   errorMsg.value = "";
-  step.value = "running";
+  running.value = true;
   try {
     const result = await invoke<Result>("gamapass_login", {
       account: account.value.trim(),
@@ -78,18 +70,15 @@ async function run(withPassword: boolean) {
       });
       return;
     }
-    // 視窗關掉了：回到密碼那一步，帳號留著，不用從頭打。
-    step.value = "password";
   } catch (e: unknown) {
-    if (disposed) return;
-    errorMsg.value = e instanceof Error ? e.message : String(e);
-    step.value = "password";
+    if (!disposed) errorMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    if (!disposed) running.value = false;
   }
 }
 
 function onCancel() {
-  if (step.value === "running") invoke("gamapass_cancel").catch(() => { /* 已經關了 */ });
-  else if (step.value === "password") step.value = "account";
+  if (running.value) invoke("gamapass_cancel").catch(() => { /* 已經關了 */ });
   else emit("cancel");
 }
 </script>
@@ -97,7 +86,7 @@ function onCancel() {
 <template>
   <div class="gp-page">
     <div class="gp-main">
-      <template v-if="step === 'running'">
+      <template v-if="running">
         <div class="spinner-lg"></div>
         <span class="status-txt">登入中…</span>
         <span class="hint">需要你確認的時候會另外開一個視窗。</span>
@@ -106,12 +95,11 @@ function onCancel() {
       <template v-else>
         <div class="gp-hd">
           <h2>GamaPass 登入</h2>
-          <p>{{ step === "account" ? "輸入手機號碼或電子郵件" : "輸入密碼" }}</p>
+          <p>用遊戲橘子的帳號登入</p>
         </div>
 
         <div class="form">
           <input
-            v-if="step === 'account'"
             v-model="account"
             class="field"
             type="text"
@@ -119,34 +107,28 @@ function onCancel() {
             autocomplete="off"
             spellcheck="false"
             placeholder="手機號碼或電子郵件"
-            @keyup.enter="toPassword"
           />
-          <template v-else>
-            <div class="who">
-              {{ account }}
-              <button class="link" @click="forget">換一組</button>
-            </div>
-            <input
-              v-model="password"
-              class="field"
-              type="password"
-              autocomplete="off"
-              placeholder="密碼"
-              @keyup.enter="run(true)"
-            />
-          </template>
-
+          <input
+            v-model="password"
+            class="field"
+            type="password"
+            autocomplete="off"
+            placeholder="密碼"
+            @keyup.enter="run(true)"
+          />
           <div v-if="errorMsg" class="err">{{ errorMsg }}</div>
         </div>
 
-        <button v-if="step === 'password'" class="btn-passkey" @click="run(false)">使用 passkey</button>
+        <div class="extras">
+          <button class="btn-passkey" :disabled="!hasAccount" @click="run(false)">使用 passkey</button>
+          <button v-if="remembered" class="link" @click="forget">忘記這組帳密</button>
+        </div>
       </template>
     </div>
 
     <div class="bottom-bar">
-      <button class="btn-ghost" @click="onCancel">{{ step === "password" ? "上一步" : "取消" }}</button>
-      <button v-if="step === 'account'" class="btn-solid" :disabled="!canNext" @click="toPassword">下一步</button>
-      <button v-else-if="step === 'password'" class="btn-solid" :disabled="!canLogin" @click="run(true)">登入</button>
+      <button class="btn-ghost" @click="onCancel">取消</button>
+      <button v-if="!running" class="btn-solid" :disabled="!canLogin" @click="run(true)">登入</button>
     </div>
   </div>
 </template>
@@ -173,18 +155,9 @@ function onCancel() {
   color: var(--text);
 }
 .field:focus { outline: none; border-color: var(--primary-border); }
-.who {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  font-size: 12px; color: var(--text3);
-}
-.link {
-  padding: 0; border: none; background: none;
-  font-size: 12px; color: var(--primary-color); text-decoration: underline;
-}
-.status-txt { font-size: 13px; color: var(--text2); }
-.hint { font-size: 12px; color: var(--text3); text-align: center; max-width: 240px; line-height: 1.6; }
 .err { font-size: 12px; color: var(--red); line-height: 1.6; }
 
+.extras { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .btn-passkey {
   padding: 9px 16px;
   border: 1px solid var(--border);
@@ -194,7 +167,16 @@ function onCancel() {
   color: var(--text2);
   transition: background 0.15s, color 0.15s;
 }
-.btn-passkey:hover { background: var(--surface2); color: var(--text); }
+.btn-passkey:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+.btn-passkey:disabled { opacity: 0.4; cursor: default; }
+.link {
+  padding: 0; border: none; background: none;
+  font-size: 12px; color: var(--text3); text-decoration: underline;
+}
+.link:hover { color: var(--text2); }
+
+.status-txt { font-size: 13px; color: var(--text2); }
+.hint { font-size: 12px; color: var(--text3); text-align: center; max-width: 240px; line-height: 1.6; }
 
 /* 同掃碼頁的等待指示器（scoped 樣式各自為政，共用的只有 main.css 的 token）。 */
 .spinner-lg {
