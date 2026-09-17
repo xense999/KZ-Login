@@ -212,18 +212,38 @@ const AUTOFILL_JS: &str = r##"(() => {
     [...document.querySelectorAll("input")].find(
       (i) => visible(i) && (i.type || "").toLowerCase() === "password");
 
-  // 框架綁的是 input 事件，直接指定 value 不會更新它的狀態，送出去會是空的。
+  // 直接指定 value，框架的狀態不會跟著動——畫面上看得到字，它內部還當成空的，
+  // 於是「下一步」一直是停用的，按了也沒反應。execCommand 走的是真正的輸入路徑，
+  // 事件跟使用者打字時長得一樣；不支援時再退回指定 value 並自己發事件。
   const fill = (el, value) => {
-    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
-    if (setter && setter.set) setter.set.call(el, value);
-    else el.value = value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+    el.select && el.select();
+    let ok = false;
+    try { ok = document.execCommand("insertText", false, value); } catch (e) {}
+    if (!ok || el.value !== value) {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
+      if (setter && setter.set) setter.set.call(el, value);
+      else el.value = value;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+    return el.value === value;
   };
 
   // 兩邊的按鈕都不是 <button>：一邊是自訂元件、一邊是框架產生的版面，所以
   // 不限標籤，找「文字對得上、而且自己底下沒有更小的元素也對得上」的那一個
   // ——也就是最貼著文字的那層。點它，事件照樣冒泡到綁著 click 的外層。
+  // 停用中的按鈕點了也沒用，而且它停用通常代表「欄位的值它還沒收到」——那時候
+  // 該做的是重填，不是一直點。這些頁面用 class 表示停用，不是 disabled 屬性。
+  const disabled = (el) => {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      if (n.disabled || n.getAttribute("aria-disabled") === "true") return true;
+      if (/disabled/i.test(n.className || "")) return true;
+    }
+    return false;
+  };
+
   const clickLabelled = (text) => {
     const want = text.toLowerCase();
     const matches = [...document.querySelectorAll("button, [role=button], a, div, span, li, label")]
@@ -231,47 +251,72 @@ const AUTOFILL_JS: &str = r##"(() => {
       .filter((el) => ![...el.children].some(
         (c) => (c.textContent || "").toLowerCase().includes(want)));
     const hit = matches[matches.length - 1];
-    if (hit) { hit.click(); return true; }
-    return false;
+    if (!hit || disabled(hit)) return false;
+    hit.click();
+    return true;
+  };
+
+  // 調通之前讓使用者看得到程式走到哪一步，不然只能用猜的。整條流程穩定之後
+  // 連同視窗一起收回幕後。
+  const say = (text) => {
+    let tag = document.getElementById("__kz_tag");
+    if (!tag) {
+      if (!document.body) return;
+      tag = document.createElement("div");
+      tag.id = "__kz_tag";
+      tag.setAttribute("style",
+        "position:fixed;left:0;right:0;top:0;z-index:2147483000;padding:6px 10px;" +
+        "background:#131924;color:#3dd6c3;font:12px/1.5 system-ui,sans-serif;" +
+        "text-align:center;pointer-events:none");
+      document.body.appendChild(tag);
+    }
+    if (tag.textContent !== text) tag.textContent = text;
   };
 
   const started = Date.now();
   const timer = setInterval(() => {
     // 卡住就不要再等了：交給使用者，讓他看到頁面到底停在哪。
-    if (Date.now() - started > 20000) { clearInterval(timer); askForUser(); return; }
+    if (Date.now() - started > 20000) { clearInterval(timer); say("等太久了，交給你"); askForUser(); return; }
 
     // beanfun 的登入頁：按下它自己的「使用 gamapass」，讓它用自己的 session 去
     // 要跳轉網址。我們代打的話，回程的 nonce 會對不起來。
     if (ON_BEANFUN) {
       // 按一次就好：多按幾次等於多跟它要幾組跳轉網址。沒跳成就等逾時交給使用者。
-      if (!step("__kz_goto") && clickLabelled("gamapass")) mark("__kz_goto");
+      if (step("__kz_goto")) { say("已按下使用 gamapass，等它跳轉"); return; }
+      say("找「使用 gamapass」按鈕");
+      if (clickLabelled("gamapass")) mark("__kz_goto");
       return;
     }
 
     if (!step("__kz_acc")) {
+      say("填帳號");
       const acc = accountField();
-      if (acc && !passwordField()) { fill(acc, ACC); mark("__kz_acc"); }
+      if (acc && !passwordField() && fill(acc, ACC)) mark("__kz_acc");
       return;
     }
     if (!step("__kz_next")) {
       if (passwordField()) { mark("__kz_next"); return; }
+      say("按下一步");
       clickLabelled("下一步");
       return;
     }
     // passkey：帳號已經帶進去、也過了這一步，剩下的是使用者的事。
-    if (!PW) { clearInterval(timer); askForUser(); return; }
+    if (!PW) { clearInterval(timer); say("帳號已填好，請用 passkey 登入"); askForUser(); return; }
     if (!step("__kz_pw")) {
+      say("填密碼");
       const pw = passwordField();
-      if (pw) { fill(pw, PW); mark("__kz_pw"); }
+      if (pw && fill(pw, PW)) mark("__kz_pw");
       return;
     }
     if (!step("__kz_login")) {
+      say("按登入");
       if (clickLabelled("登入")) mark("__kz_login");
       return;
     }
     // 送出了。再往下一律是人的事：二階段、密碼錯了、或是我們沒想到的畫面。
     // 真的成功的話，頁面會離開這個網域，這支腳本也就不再跑了。
     clearInterval(timer);
+    say("已送出，等它回應");
     setTimeout(askForUser, 2500);
   }, 300);
 })();"##;
