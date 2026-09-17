@@ -201,7 +201,8 @@ const AUTOFILL_JS: &str = r##"(() => {
     try { location.hash = FRAGMENT; } catch (e) {}
   };
 
-  const visible = (el) => el && el.offsetParent !== null && !el.disabled;
+  // offsetParent 對 fixed 定位的元素一律是 null，改看有沒有實際畫出來的方框。
+  const visible = (el) => !!el && !el.disabled && el.getClientRects().length > 0;
   const accountField = () =>
     [...document.querySelectorAll("input")].find(
       (i) => visible(i) && ["text", "tel", "email"].includes((i.type || "").toLowerCase()));
@@ -218,10 +219,16 @@ const AUTOFILL_JS: &str = r##"(() => {
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
+  // 兩邊的按鈕都不是 <button>：一邊是自訂元件、一邊是框架產生的版面，所以
+  // 不限標籤，找「文字對得上、而且自己底下沒有更小的元素也對得上」的那一個
+  // ——也就是最貼著文字的那層。點它，事件照樣冒泡到綁著 click 的外層。
   const clickLabelled = (text) => {
     const want = text.toLowerCase();
-    const hit = [...document.querySelectorAll("button, [role=button]")].find(
-      (b) => visible(b) && (b.textContent || "").trim().toLowerCase().includes(want));
+    const matches = [...document.querySelectorAll("button, [role=button], a, div, span, li, label")]
+      .filter((el) => visible(el) && (el.textContent || "").trim().toLowerCase().includes(want))
+      .filter((el) => ![...el.children].some(
+        (c) => (c.textContent || "").toLowerCase().includes(want)));
+    const hit = matches[matches.length - 1];
     if (hit) { hit.click(); return true; }
     return false;
   };
