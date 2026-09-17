@@ -163,15 +163,27 @@ async fn password_login_resume<R: tauri::Runtime>(
     run_password_login(&app, &state, session, &captcha).await
 }
 
-/// The remembered logins, passwords included: the form fills them in.
+/// The remembered beanfun logins, passwords included: the form fills them in.
 #[tauri::command]
 fn saved_logins<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<credentials::SavedLogin>, String> {
-    credentials::list(&app)
+    credentials::list_of(&app, credentials::LoginKind::Beanfun)
+}
+
+/// The GamaPass login to offer, if one was remembered. Only the last one: that
+/// form has no dropdown, it just arrives filled in.
+#[tauri::command]
+fn saved_gamapass<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Option<credentials::SavedLogin>, String> {
+    Ok(credentials::list_of(&app, credentials::LoginKind::Gamapass)?.pop())
 }
 
 #[tauri::command]
 fn forget_saved_login<R: tauri::Runtime>(app: tauri::AppHandle<R>, account: String) -> Result<(), String> {
-    credentials::forget(&app, &account)
+    credentials::forget(&app, &account, credentials::LoginKind::Beanfun)
+}
+
+#[tauri::command]
+fn forget_gamapass<R: tauri::Runtime>(app: tauri::AppHandle<R>, account: String) -> Result<(), String> {
+    credentials::forget(&app, &account, credentials::LoginKind::Gamapass)
 }
 
 #[tauri::command]
@@ -253,9 +265,10 @@ async fn gamapass_login<R: tauri::Runtime>(
     let entry = beanfun::go_gamapass(&client, &page).await.map_err(map_err)?;
 
     let fill = gamapass::Fill {
-        account,
+        account: account.clone(),
         password: password.filter(|p| !p.is_empty()),
     };
+    let fill_password = fill.password.clone();
 
     match gamapass::wait_for_login(&app, &entry, fill).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
@@ -265,6 +278,14 @@ async fn gamapass_login<R: tauri::Runtime>(
                 .map_err(map_err)?;
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
             state.session_stores.lock().await.insert(token.clone(), cookie_store);
+            // Saving is a convenience; failing to save must not undo a good
+            // login. Only a password is worth keeping — a passkey login has
+            // none, and must not wipe the one already saved.
+            if let Some(password) = fill_password {
+                if let Err(e) = credentials::remember(&app, &account, &password, credentials::LoginKind::Gamapass) {
+                    eprintln!("[credentials] {e}");
+                }
+            }
             Ok(GamapassLoginResult::Approved { token, games })
         }
     }
@@ -317,7 +338,7 @@ async fn run_password_login<R: tauri::Runtime>(
     let games = beanfun::get_game_accounts(&session.client, &token).await.unwrap_or_default();
     state.session_stores.lock().await.insert(token.clone(), session.cookie_store.clone());
     // Saving is a convenience; failing to save must not undo a good login.
-    if let Err(e) = credentials::remember(app, &session.account, &session.password) {
+    if let Err(e) = credentials::remember(app, &session.account, &session.password, credentials::LoginKind::Beanfun) {
         eprintln!("[credentials] {e}");
     }
     Ok(PasswordLoginResult::Approved { token, games })
@@ -1383,7 +1404,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, gamapass_login, gamapass_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, gamapass_login, gamapass_cancel, saved_logins, saved_gamapass, forget_saved_login, forget_gamapass, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             game_running, launch_game, kill_game,
             prime_game_zone, launch_uri_of, otp_of, verify_hidden_key,

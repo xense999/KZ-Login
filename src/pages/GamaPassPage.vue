@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { LoginGame, LoginResult } from "../stores/accounts";
 
@@ -21,6 +21,25 @@ const password = ref("");
 const errorMsg = ref("");
 // 切走時這一頁會被卸載，但視窗可能還開著；那時候的回覆不該再動這一頁。
 let disposed = false;
+
+// 上次登入成功記住的那組，直接帶到密碼那一步，按登入就好。
+onMounted(async () => {
+  try {
+    const saved = await invoke<{ account: string; password: string } | null>("saved_gamapass");
+    if (disposed || !saved || account.value) return;
+    account.value = saved.account;
+    password.value = saved.password;
+    step.value = "password";
+  } catch { /* 沒記住就從頭問起 */ }
+});
+
+async function forget() {
+  const who = account.value.trim();
+  password.value = "";
+  account.value = "";
+  step.value = "account";
+  try { await invoke("forget_gamapass", { account: who }); } catch { /* 沒存過也無妨 */ }
+}
 
 onUnmounted(() => {
   disposed = true;
@@ -65,9 +84,6 @@ async function run(withPassword: boolean) {
     if (disposed) return;
     errorMsg.value = e instanceof Error ? e.message : String(e);
     step.value = "password";
-  } finally {
-    // 密碼只存在到這一刻為止，登入器不留它。
-    if (!disposed && step.value !== "running") password.value = "";
   }
 }
 
@@ -106,7 +122,10 @@ function onCancel() {
             @keyup.enter="toPassword"
           />
           <template v-else>
-            <div class="who">{{ account }}</div>
+            <div class="who">
+              {{ account }}
+              <button class="link" @click="forget">換一組</button>
+            </div>
             <input
               v-model="password"
               class="field"
@@ -154,7 +173,14 @@ function onCancel() {
   color: var(--text);
 }
 .field:focus { outline: none; border-color: var(--primary-border); }
-.who { font-size: 12px; color: var(--text3); text-align: center; }
+.who {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  font-size: 12px; color: var(--text3);
+}
+.link {
+  padding: 0; border: none; background: none;
+  font-size: 12px; color: var(--primary-color); text-decoration: underline;
+}
 .status-txt { font-size: 13px; color: var(--text2); }
 .hint { font-size: 12px; color: var(--text3); text-align: center; max-width: 240px; line-height: 1.6; }
 .err { font-size: 12px; color: var(--red); line-height: 1.6; }

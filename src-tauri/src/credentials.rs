@@ -10,17 +10,41 @@ use tauri::{AppHandle, Manager, Runtime};
 
 const FILE_NAME: &str = "credentials.dat";
 
+/// Which login an entry belongs to. They are kept in one file but never mixed:
+/// a GamaPass account is not a beanfun account and would only fail there.
+/// Absent in files written before GamaPass existed, hence the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginKind {
+    #[default]
+    Beanfun,
+    Gamapass,
+}
+
 /// The list order on disk is the order the user arranged in the dropdown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedLogin {
     pub account: String,
     pub password: String,
+    #[serde(default)]
+    pub kind: LoginKind,
 }
 
-pub fn remember<R: Runtime>(app: &AppHandle<R>, account: &str, password: &str) -> Result<(), String> {
+pub fn remember<R: Runtime>(
+    app: &AppHandle<R>,
+    account: &str,
+    password: &str,
+    kind: LoginKind,
+) -> Result<(), String> {
     let mut logins = list(app)?;
-    upsert(&mut logins, account, password);
+    upsert(&mut logins, account, password, kind);
     store(app, &logins)
+}
+
+/// Everything saved for one login. The beanfun dropdown and the GamaPass form
+/// each only ever see their own.
+pub fn list_of<R: Runtime>(app: &AppHandle<R>, kind: LoginKind) -> Result<Vec<SavedLogin>, String> {
+    Ok(list(app)?.into_iter().filter(|l| l.kind == kind).collect())
 }
 
 pub fn reorder<R: Runtime>(app: &AppHandle<R>, order: &[String]) -> Result<(), String> {
@@ -29,9 +53,9 @@ pub fn reorder<R: Runtime>(app: &AppHandle<R>, order: &[String]) -> Result<(), S
     store(app, &logins)
 }
 
-pub fn forget<R: Runtime>(app: &AppHandle<R>, account: &str) -> Result<(), String> {
+pub fn forget<R: Runtime>(app: &AppHandle<R>, account: &str, kind: LoginKind) -> Result<(), String> {
     let mut logins = list(app)?;
-    remove(&mut logins, account);
+    remove(&mut logins, account, kind);
     store(app, &logins)
 }
 
@@ -43,13 +67,17 @@ fn same_account(a: &str, b: &str) -> bool {
 }
 
 /// A known account keeps its place; a new one joins at the end.
-fn upsert(logins: &mut Vec<SavedLogin>, account: &str, password: &str) {
-    match logins.iter_mut().find(|l| same_account(&l.account, account)) {
+fn upsert(logins: &mut Vec<SavedLogin>, account: &str, password: &str, kind: LoginKind) {
+    match logins.iter_mut().find(|l| l.kind == kind && same_account(&l.account, account)) {
         Some(l) => {
             l.account = account.to_owned();
             l.password = password.to_owned();
         }
-        None => logins.push(SavedLogin { account: account.to_owned(), password: password.to_owned() }),
+        None => logins.push(SavedLogin {
+            account: account.to_owned(),
+            password: password.to_owned(),
+            kind,
+        }),
     }
 }
 
@@ -60,8 +88,8 @@ fn arrange(logins: &mut Vec<SavedLogin>, order: &[String]) {
     logins.sort_by_key(rank);
 }
 
-fn remove(logins: &mut Vec<SavedLogin>, account: &str) {
-    logins.retain(|l| !same_account(&l.account, account));
+fn remove(logins: &mut Vec<SavedLogin>, account: &str, kind: LoginKind) {
+    logins.retain(|l| !(l.kind == kind && same_account(&l.account, account)));
 }
 
 fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -147,7 +175,11 @@ mod tests {
     use super::*;
 
     fn saved(account: &str, password: &str) -> SavedLogin {
-        SavedLogin { account: account.into(), password: password.into() }
+        SavedLogin { account: account.into(), password: password.into(), kind: LoginKind::Beanfun }
+    }
+
+    fn gamapass(account: &str, password: &str) -> SavedLogin {
+        SavedLogin { account: account.into(), password: password.into(), kind: LoginKind::Gamapass }
     }
 
     fn names(logins: &[SavedLogin]) -> Vec<&str> {
@@ -157,7 +189,7 @@ mod tests {
     #[test]
     fn a_new_account_joins_at_the_end() {
         let mut logins = vec![saved("alpha", "a")];
-        upsert(&mut logins, "beta", "b");
+        upsert(&mut logins, "beta", "b", LoginKind::Beanfun);
         assert_eq!(logins, vec![saved("alpha", "a"), saved("beta", "b")]);
     }
 
@@ -166,15 +198,27 @@ mod tests {
     #[test]
     fn a_known_account_is_updated_where_it_stands() {
         let mut logins = vec![saved("Alpha", "old"), saved("beta", "b")];
-        upsert(&mut logins, "alpha", "new");
+        upsert(&mut logins, "alpha", "new", LoginKind::Beanfun);
         assert_eq!(logins, vec![saved("alpha", "new"), saved("beta", "b")]);
     }
 
     #[test]
     fn forgetting_ignores_case_and_surrounding_spaces() {
         let mut logins = vec![saved("Alpha", "a"), saved("beta", "b")];
-        remove(&mut logins, " ALPHA ");
+        remove(&mut logins, " ALPHA ", LoginKind::Beanfun);
         assert_eq!(logins, vec![saved("beta", "b")]);
+    }
+
+    /// 同名但不同登入方式是兩筆：GamaPass 的帳號拿去 beanfun 登入只會失敗，
+    /// 所以覆蓋、刪除都不能跨過去。
+    #[test]
+    fn the_same_name_under_two_logins_stays_two_entries() {
+        let mut logins = vec![saved("alpha", "a")];
+        upsert(&mut logins, "alpha", "g", LoginKind::Gamapass);
+        assert_eq!(logins, vec![saved("alpha", "a"), gamapass("alpha", "g")]);
+
+        remove(&mut logins, "alpha", LoginKind::Gamapass);
+        assert_eq!(logins, vec![saved("alpha", "a")]);
     }
 
     #[test]
