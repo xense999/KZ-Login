@@ -130,13 +130,15 @@ const { mainAction } = useMainAction();
 // 「啟動遊戲」模式下那顆按鈕的兩種結局：遊戲沒開就開它，開著就問要不要強制關掉。
 // 先問後端遊戲在不在，讓同一顆按鈕自己決定要做哪一件。
 const gameBusy = ref(false);
-const askKillGame = ref(false);
+// 0＝沒問；>0＝正在問要不要關掉這幾個。關閉是全部一起關，所以數量要讓使用者看到。
+const killAsk = ref(0);
 
 async function launchGame() {
   gameBusy.value = true;
   try {
-    if (await invoke<boolean>("game_running")) {
-      askKillGame.value = true;
+    const running = await invoke<number>("running_game_count");
+    if (running > 0) {
+      killAsk.value = running;
       return;
     }
     await invoke("launch_game");
@@ -149,10 +151,10 @@ async function launchGame() {
 }
 
 async function confirmKillGame() {
-  askKillGame.value = false;
+  killAsk.value = 0;
   try {
-    await invoke("kill_game");
-    toast("已關閉遊戲");
+    const killed = await invoke<number>("kill_game");
+    toast(killed > 1 ? `已關閉 ${killed} 個遊戲` : "已關閉遊戲");
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), { kind: "error" });
   }
@@ -864,13 +866,16 @@ function cleanError(msg: string): string {
   <!-- v-if 在 Teleport 上，不在內容上：目標 .page-container 是 App.vue 畫的，
        MainPage 掛載當下還進不了 document，那時解析目標會落空，之後連
        離開主頁都會在 unmount 拋錯。要用的時候才掛，目標必定已經在。 -->
-  <Teleport v-if="askKillGame" to=".page-container">
-    <div class="kill-overlay" @click.self="askKillGame = false">
+  <Teleport v-if="killAsk > 0" to=".page-container">
+    <div class="kill-overlay" @click.self="killAsk = 0">
       <div class="kill-card">
         <div class="kill-title">遊戲正在執行中</div>
-        <div class="kill-body">要強制關閉遊戲嗎？遊戲會直接被結束，未儲存的動作不會保留。</div>
+        <div class="kill-body">
+          <template v-if="killAsk > 1">偵測到 {{ killAsk }} 個遊戲，強制關閉會把它們全部結束，未儲存的動作不會保留。</template>
+          <template v-else>要強制關閉遊戲嗎？遊戲會直接被結束，未儲存的動作不會保留。</template>
+        </div>
         <div class="kill-actions">
-          <button class="kill-btn" @click="askKillGame = false">取消</button>
+          <button class="kill-btn" @click="killAsk = 0">取消</button>
           <button class="kill-btn danger" @click="confirmKillGame">強制關閉</button>
         </div>
       </div>

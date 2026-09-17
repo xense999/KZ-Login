@@ -259,7 +259,10 @@ async fn run_password_login<R: tauri::Runtime>(
 #[cfg(windows)]
 mod win {
     use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, MAPVK_VK_TO_VSC,
         SendInput, INPUT, INPUT_0,
@@ -478,33 +481,64 @@ mod win {
         pids
     }
 
-    /// True when a game client process exists at all — including one that hung
-    /// and shows no window, which [`is_game_running`] (window-based, used for
-    /// typing into the login form) deliberately does not count.
-    pub fn is_game_process_running() -> bool {
-        !game_pids().is_empty()
+    /// How many game client processes exist — including one that hung and shows
+    /// no window, which [`is_game_running`] (window-based, used for typing into
+    /// the login form) deliberately does not count. Multi-boxing is why this is
+    /// a count and not a flag: closing them is all-or-nothing, so the user is
+    /// told how many are about to go.
+    pub fn running_game_count() -> usize {
+        game_pids().len()
+    }
+
+    /// The executable an open handle actually belongs to, file name only.
+    /// Windows reuses PIDs, so a handle opened from a PID read moments ago may
+    /// belong to whatever process took that number over — this is what tells the
+    /// two apart before anything is terminated.
+    unsafe fn image_name(handle: *mut core::ffi::c_void) -> Option<String> {
+        let mut buf = [0u16; 512];
+        let mut len = buf.len() as u32;
+        if QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len) == 0 {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        path.rsplit(['\\', '/']).next().map(|f| f.to_string())
     }
 
     /// Terminate the running game clients — the same abrupt kill Task Manager's
     /// "End task" performs, so the game gets no chance to save or ask anything.
-    pub fn kill_game() -> Result<(), String> {
+    /// Returns how many were killed; anything left alive is reported as an error
+    /// rather than passed off as success.
+    pub fn kill_game() -> Result<usize, String> {
         let pids = game_pids();
         if pids.is_empty() {
             return Err("找不到執行中的遊戲".to_string());
         }
+        let total = pids.len();
         let mut killed = 0usize;
         for pid in pids {
             unsafe {
-                let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                let handle = OpenProcess(
+                    PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                    0,
+                    pid,
+                );
                 if handle.is_null() { continue; }
-                if TerminateProcess(handle, 0) != 0 { killed += 1; }
+                let is_game = image_name(handle)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(GAME_EXE));
+                if is_game && TerminateProcess(handle, 0) != 0 { killed += 1; }
                 CloseHandle(handle);
             }
         }
         if killed == 0 {
             return Err("無法關閉遊戲，請改用工作管理員結束".to_string());
         }
-        Ok(())
+        if killed < total {
+            return Err(format!(
+                "關掉了 {killed} 個，還有 {} 個沒關掉，請用工作管理員結束",
+                total - killed
+            ));
+        }
+        Ok(killed)
     }
 
     /// Hand a target (file path or protocol URI such as `gamaniagames://…`) to
@@ -904,17 +938,18 @@ async fn update_ggm(url: String) -> Result<(), String> {
 
 // ─── Plain game launch / force close ───────────────────────────────────────────
 
-/// True when a game client process is running. The 「啟動遊戲」 button asks this
-/// before acting, so the same button can launch or offer to force-close.
+/// How many game clients are running. The 「啟動遊戲」 button asks this before
+/// acting, so the same button can launch, or offer to force-close and say how
+/// many that covers.
 #[tauri::command]
-fn game_running() -> bool {
+fn running_game_count() -> usize {
     #[cfg(windows)]
     {
-        win::is_game_process_running()
+        win::running_game_count()
     }
     #[cfg(not(windows))]
     {
-        false
+        0
     }
 }
 
@@ -923,19 +958,23 @@ fn game_running() -> bool {
 /// GGM resolves (see [`get_game_path`]), so a machine GGM can find needs nothing
 /// extra configured.
 #[tauri::command]
-fn launch_game() -> Result<(), String> {
+async fn launch_game() -> Result<(), String> {
     #[cfg(windows)]
     {
-        let dir = get_game_path();
-        let dir = dir.trim();
-        if dir.is_empty() {
-            return Err("找不到遊戲安裝位置，請先在設定頁指定遊戲路徑".to_string());
-        }
-        let exe = std::path::Path::new(dir).join(win::GAME_EXE);
-        if !exe.exists() {
-            return Err(format!("設定的遊戲路徑裡找不到 {}，請重新指定", win::GAME_EXE));
-        }
-        win::shell_open_in(&exe.to_string_lossy(), dir)?;
+        tokio::task::spawn_blocking(|| {
+            let dir = get_game_path();
+            let dir = dir.trim();
+            if dir.is_empty() {
+                return Err("找不到遊戲安裝位置，請先在設定頁指定遊戲路徑".to_string());
+            }
+            let exe = std::path::Path::new(dir).join(win::GAME_EXE);
+            if !exe.exists() {
+                return Err(format!("設定的遊戲路徑裡找不到 {}，請重新指定", win::GAME_EXE));
+            }
+            win::shell_open_in(&exe.to_string_lossy(), dir)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     }
     Ok(())
 }
@@ -943,12 +982,17 @@ fn launch_game() -> Result<(), String> {
 /// Kill the running game clients outright, like Task Manager's 「結束工作」.
 /// The confirmation lives in the UI — by the time this runs the user has said yes.
 #[tauri::command]
-fn kill_game() -> Result<(), String> {
+async fn kill_game() -> Result<usize, String> {
     #[cfg(windows)]
     {
-        win::kill_game()?;
+        return tokio::task::spawn_blocking(win::kill_game)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        Ok(0)
+    }
 }
 
 // ─── Game path override (registry) ─────────────────────────────────────────────
@@ -1286,7 +1330,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
-            game_running, launch_game, kill_game,
+            running_game_count, launch_game, kill_game,
             prime_game_zone, launch_uri_of, otp_of, verify_hidden_key,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
