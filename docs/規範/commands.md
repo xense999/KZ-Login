@@ -10,6 +10,7 @@
 - `password_login_start(account, password)` / `password_login_resume(captcha)` → `{ status: "approved", token, games } | { status: "captcha" } | { status: "rejected", message } | { status: "use_qr", message }`；網路錯誤走 `Err(String)`。
 - `saved_logins() -> { account, password }[]`、`forget_saved_login(account)`、`reorder_saved_logins(accounts)`：記住的帳密（見總表 `credentials` 條）。
 - `captcha_solve(palette, region) -> string | null`、`captcha_cancel()`：替暫停中的帳密登入開驗證視窗（site key 與頁面網址從暫停狀態取，前端不經手）。
+- `gamapass_login() -> { status: "approved", token, games } | { status: "cancelled" }`、`gamapass_cancel()`：GamaPass 帳號走遊戲橘子自己的登入頁（見總表 `gamapass` 條）。指令會一直 await 到使用者登完或關掉視窗。
 
 ## 單一來源
 
@@ -19,4 +20,5 @@
 
 - `pending_password` 只在「需要驗證」時保存；成功、被拒、改用 QR、錯誤、開始新的帳密登入、驗證取消或逾時（`captcha_solve` 回傳 null）、切到 QR（`qr_start`）時都會清掉，裡面的明文密碼不會多留（2026-09-14 審查後補齊）。
 - 密碼只有在帳密登入成功時才交給 `credentials` 加密儲存；被拒、改用 QR、錯誤時都不存。
-- 兩種登入成功後都把 cookie jar 登記進 `session_stores`，OTP／啟動沿用。
+- 三種登入成功後都把 cookie jar 登記進 `session_stores`，OTP／啟動沿用。
+- **GamaPass 的收尾**與 QR 同一條：`complete_login(client, store, skey)`。登入態綁在 `pSKey` 上而不是誰的 cookie jar，所以在別的視窗登入也拿得到 token。

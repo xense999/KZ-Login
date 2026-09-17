@@ -8,7 +8,7 @@ export interface GameAccount {
   localName: string | null;
 }
 
-export type LoginMethod = "qr" | "password";
+export type LoginMethod = "qr" | "password" | "gamapass";
 
 // A game account as a login returns it, before any local renaming.
 export type LoginGame = { sn: string; sid: string; sname: string };

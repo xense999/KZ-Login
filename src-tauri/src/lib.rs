@@ -2,6 +2,7 @@ mod beanfun;
 mod browser;
 mod captcha;
 mod credentials;
+mod gamapass;
 mod hidden;
 mod icon;
 mod keyhook;
@@ -206,6 +207,56 @@ async fn captcha_solve<R: tauri::Runtime>(
 #[tauri::command]
 fn captcha_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     captcha::cancel(&app);
+}
+
+// ─── GamaPass Login ───────────────────────────────────────────────────────────
+
+/// How a GamaPass login ended. `Cancelled` is the user closing the window (or
+/// the wait timing out) — an ordinary outcome, not an error.
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum GamapassLoginResult {
+    Approved { token: String, games: Vec<GameAccount> },
+    Cancelled,
+}
+
+/// Sign in with a GamaPass account: open Gamania's own login page in its own
+/// window, wait until the portal takes over, then finish on the session key we
+/// minted — the same tail the QR login uses, because the login is tied to that
+/// key rather than to whoever's cookie jar performed it. The password never
+/// passes through us, so nothing is remembered for this account.
+#[tauri::command]
+async fn gamapass_login<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<GamapassLoginResult, String> {
+    // Starting this abandons a paused password login, and its password.
+    *state.pending_password.lock().await = None;
+    *state.pending_qr.lock().await = None;
+
+    let (client, cookie_store) = beanfun::build_client_with_store().map_err(map_err)?;
+    let skey = beanfun::get_session_key(&client).await.map_err(map_err)?;
+    // Establish the login page for this key before handing it to the window.
+    beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
+
+    match gamapass::wait_for_login(&app, &skey).await? {
+        gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
+        gamapass::Outcome::Completed => {
+            let token = beanfun::complete_login(&client, &cookie_store, &skey)
+                .await
+                .map_err(map_err)?;
+            let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
+            state.session_stores.lock().await.insert(token.clone(), cookie_store);
+            Ok(GamapassLoginResult::Approved { token, games })
+        }
+    }
+}
+
+/// Close the GamaPass window; the pending `gamapass_login` then resolves as
+/// cancelled. Used by the login page's own cancel button.
+#[tauri::command]
+fn gamapass_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    gamapass::cancel(&app);
 }
 
 /// Walk the steps from wherever `session` stopped. A captcha demand parks the
@@ -1314,7 +1365,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, gamapass_login, gamapass_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             game_running, launch_game, kill_game,
             prime_game_zone, launch_uri_of, otp_of, verify_hidden_key,

@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import MainPage from "./pages/MainPage.vue";
 import QrPage from "./pages/QrPage.vue";
 import PasswordPage from "./pages/PasswordPage.vue";
+import GamaPassPage from "./pages/GamaPassPage.vue";
 import SuccessPage from "./pages/SuccessPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import ToastPop from "./components/ToastPop.vue";
@@ -39,15 +40,23 @@ function openLogin(mode: LoginMethod, prefill: string) {
   page.value = "login";
 }
 
+// 標題列那顆按鈕就是在這條環上走一格，所以順序也是它顯示的順序。
+const LOGIN_MODES: LoginMethod[] = ["qr", "password", "gamapass"];
+
+function savedLoginMode(): LoginMethod {
+  const saved = localStorage.getItem(LOGIN_MODE_KEY);
+  return LOGIN_MODES.find((m) => m === saved) ?? "qr";
+}
+
 function onAddAccount() {
   reauthAccountId.value = null;
-  const saved = localStorage.getItem(LOGIN_MODE_KEY);
-  openLogin(saved === "password" ? "password" : "qr", "");
+  openLogin(savedLoginMode(), "");
 }
 
 function switchLoginMode() {
   if (loginBusy.value) return;
-  loginMode.value = loginMode.value === "qr" ? "password" : "qr";
+  const next = (LOGIN_MODES.indexOf(loginMode.value) + 1) % LOGIN_MODES.length;
+  loginMode.value = LOGIN_MODES[next];
   if (!reauthAccountId.value) localStorage.setItem(LOGIN_MODE_KEY, loginMode.value);
 }
 
@@ -203,6 +212,7 @@ function onAccountSaved() {
       <MainPage v-if="page === 'main'" @add-account="onAddAccount" @reauth="onReauth" />
       <template v-else-if="page === 'login'">
         <QrPage v-if="loginMode === 'qr'" @cancel="cancelLogin" @success="onLoginSuccess" />
+        <GamaPassPage v-else-if="loginMode === 'gamapass'" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
         <PasswordPage v-else :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
       </template>
       <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />
