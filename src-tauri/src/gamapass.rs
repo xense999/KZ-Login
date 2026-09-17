@@ -111,9 +111,9 @@ pub async fn wait_for_login<R: Runtime>(
         .transparent(true)
         .shadow(false)
         .resizable(false)
-        // 登入期間置頂：Windows 的安全性驗證框跟著發起它的視窗排 z-order，那顆
-        // 沉下去，框就跟著沉到別的程式後面。這個視窗登完就關，不會賴在上面。
-        .always_on_top(true)
+        // ★不要置頂：Windows 安全性（輸入 PIN）那個框是系統自己的程式畫的，不是
+        // 掛在我們視窗底下的東西——置頂反而會蓋住它。要讓它出得來，靠的是把焦點
+        // 給網頁那顆視窗（見下面的 set_focus）。
         .visible(false)
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
@@ -129,7 +129,6 @@ pub async fn wait_for_login<R: Runtime>(
         .shadow(false)
         .resizable(false)
         .skip_taskbar(true)
-        .always_on_top(true)
         .visible(false)
         .owner(&shell)
         .map_err(|e| e.to_string())?
