@@ -111,6 +111,9 @@ pub async fn wait_for_login<R: Runtime>(
         .transparent(true)
         .shadow(false)
         .resizable(false)
+        // 登入期間置頂：Windows 的安全性驗證框跟著發起它的視窗排 z-order，那顆
+        // 沉下去，框就跟著沉到別的程式後面。這個視窗登完就關，不會賴在上面。
+        .always_on_top(true)
         .visible(false)
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
@@ -126,6 +129,7 @@ pub async fn wait_for_login<R: Runtime>(
         .shadow(false)
         .resizable(false)
         .skip_taskbar(true)
+        .always_on_top(true)
         .visible(false)
         .owner(&shell)
         .map_err(|e| e.to_string())?
