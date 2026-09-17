@@ -861,8 +861,11 @@ function cleanError(msg: string): string {
     </button>
   </div>
 
-  <Teleport to=".page-container">
-    <div v-if="askKillGame" class="kill-overlay" @click.self="askKillGame = false">
+  <!-- v-if 在 Teleport 上，不在內容上：目標 .page-container 是 App.vue 畫的，
+       MainPage 掛載當下還進不了 document，那時解析目標會落空，之後連
+       離開主頁都會在 unmount 拋錯。要用的時候才掛，目標必定已經在。 -->
+  <Teleport v-if="askKillGame" to=".page-container">
+    <div class="kill-overlay" @click.self="askKillGame = false">
       <div class="kill-card">
         <div class="kill-title">遊戲正在執行中</div>
         <div class="kill-body">要強制關閉遊戲嗎？遊戲會直接被結束，未儲存的動作不會保留。</div>
