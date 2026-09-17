@@ -226,12 +226,12 @@ async function supportAuthor() {
 
       <div class="card">
         <div class="row">
-          <span class="row-title">偏好設定</span>
-          <div class="seg seg-wide">
+          <span class="row-title">按鈕偏好設定</span>
+          <div class="seg">
             <button :class="{ active: mainAction === 'proxy' }" @click="setMainAction('proxy')"
-              title="主畫面按鈕＝讀取剪貼簿裡對方分享的登入連結並啟動遊戲">代理登入</button>
+              title="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
             <button :class="{ active: mainAction === 'game' }" @click="setMainAction('game')"
-              title="主畫面按鈕＝直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動遊戲</button>
+              title="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
           </div>
         </div>
       </div>
@@ -706,9 +706,6 @@ async function supportAuthor() {
   color: var(--text);
 }
 .seg button:not(.active):hover { color: var(--text); }
-/* 四個字的選項用窄一點的內距：視窗一窄，18px 內距會讓文字折行，那張卡片就比
-   主題那張高一截。 */
-.seg-wide button { padding: 6px 12px; }
 
 /* ── 底部按鈕 ── */
 .bottom-bar {
