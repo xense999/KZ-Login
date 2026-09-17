@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{
-    AppHandle, LogicalSize, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
+    AppHandle, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -90,7 +90,6 @@ pub async fn wait_for_login<R: Runtime>(
     jar: &Arc<CookieStoreMutex>,
     fill: Fill,
 ) -> Result<Outcome, String> {
-    let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
     let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
         .parse()
         .map_err(|e| format!("登入頁網址錯誤：{e}"))?;
@@ -115,7 +114,9 @@ pub async fn wait_for_login<R: Runtime>(
         .visible(false)
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
-    center_on_main(&shell, &main);
+    // 螢幕正中間，不是主視窗中間：主視窗待在右下角，登入視窗跟著擠過去會半個
+    // 掉出畫面，而且要看的東西都在那裡。
+    let _ = shell.center();
 
     // 先開空白頁再導過去：cookie 要在第一個真正的請求之前就位，不然 beanfun 綁在
     // 這條 session 上的 nonce 對不起來。
@@ -141,7 +142,9 @@ pub async fn wait_for_login<R: Runtime>(
     place_view(&shell, &view);
     let _ = shell.show();
     let _ = view.show();
-    let _ = shell.set_focus();
+    // 焦點要給網頁那顆，不是外殼：Windows 的安全性驗證（指紋／PIN）跳出來時會
+    // 掛在發起它的視窗上，那顆沒有焦點的話，框就冒在別人後面。
+    let _ = view.set_focus();
 
     let started = Instant::now();
     let outcome = loop {
@@ -384,18 +387,6 @@ const AUTOFILL_JS: &str = r##"(() => {
     say("已送出，等它回應");
   }, 300);
 })();"##;
-
-/// 開在主視窗上面——主視窗待在右下角，登入視窗跑到螢幕另一頭會像是別的程式。
-fn center_on_main<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>) {
-    let _ = window.set_size(LogicalSize::new(WINDOW_SIZE.0, WINDOW_SIZE.1));
-    if let (Ok(main_pos), Ok(main_size), Ok(size)) =
-        (main.outer_position(), main.outer_size(), window.outer_size())
-    {
-        let x = main_pos.x + (main_size.width as i32 - size.width as i32) / 2;
-        let y = main_pos.y + (main_size.height as i32 - size.height as i32) / 2;
-        let _ = window.set_position(PhysicalPosition::new(x, y));
-    }
-}
 
 /// The token, once the window has it. Everything the beanfun domains hold comes
 /// back with it: the session those cookies belong to is the one that just
