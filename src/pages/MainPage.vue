@@ -114,7 +114,7 @@ async function proxyLaunch() {
   try {
     const clip = ((await readText()) ?? "").trim();
     if (!clip.startsWith("gamaniagames://")) {
-      toast("剪貼簿沒有有效的登入金鑰，請先複製對方傳來的資料", { kind: "error" });
+      toast("請複製金鑰", { kind: "error" });
       return;
     }
     await invoke<string>("proxy_launch", { uri: clip });
