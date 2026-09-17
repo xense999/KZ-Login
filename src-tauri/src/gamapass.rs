@@ -115,7 +115,7 @@ pub async fn wait_for_login<R: Runtime>(
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(true)
+        .skip_taskbar(fill.password.is_some())
         // 腳本開得動的時候沒人需要看到這個視窗；要人接手時才現身（見 `show_window`）。
         .visible(false)
         // Its own WebView2 environment, like the captcha window: one user-data
@@ -128,6 +128,11 @@ pub async fn wait_for_login<R: Runtime>(
 
     overlay::disable_tracking_prevention(&window);
     browser::seed_and_navigate(&window, jar, url)?;
+    // passkey 一定要人操作，藏起來沒有意義：藏著的話，系統那個 passkey 詢問框會
+    // 掛在一個看不見的視窗上跳出來，然後我們的視窗才追上去現身，兩個一起冒出來。
+    if fill.password.is_none() {
+        show_window(&window, &main);
+    }
 
     let started = Instant::now();
     let outcome = loop {
