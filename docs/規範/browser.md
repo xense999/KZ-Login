@@ -15,6 +15,7 @@
 - `browser::open(app, account_id, alias, jar)` — 開瀏覽器（守門→注 cookie→工具列視窗→第一個分頁）。
 - `browser::navigate(app, action, url)` — `back`／`forward`／`reload`／`goto`（作用於**作用中分頁**）。
 - `browser::tab_command(app, action, id)` — `new`／`activate`／`close`。
+- `browser::seed_and_navigate(window, jar, target)` — 把 jar 的 cookie 注入某顆 webview（注入前先清空）後才導向。給 `gamapass` 的登入視窗用；cookie 注入的實作歸屬仍在本模組，不另開第二套。
 - command 包裝（`lib.rs`）：`open_account_browser(token, account_id, alias)`、`browser_navigate(action, url)`、`browser_tab(action, id)`。
 - 事件（→ 工具列 webview）：`browser://tabs`＝`[{id,title,active}]`；`browser://nav`＝`{url}`（作用中分頁的網址）。
 - 錯誤碼：`SESSION_EXPIRED`（無 session 或 jar 無 beanfun cookie）、`BROWSER_STILL_OPEN`（他帳號視窗組還開著）。

@@ -270,7 +270,7 @@ async fn gamapass_login<R: tauri::Runtime>(
     };
     let fill_password = fill.password.clone();
 
-    match gamapass::wait_for_login(&app, &entry, fill).await? {
+    match gamapass::wait_for_login(&app, &entry, &cookie_store, fill).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)

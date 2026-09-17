@@ -21,12 +21,14 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use reqwest_cookie_store::CookieStoreMutex;
+use std::sync::Arc;
 use tauri::{
     AppHandle, LogicalSize, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
-use crate::overlay;
+use crate::{browser, overlay};
 
 const LABEL_PREFIX: &str = "gamapass-";
 /// Short enough that the window keeps up when the main window is dragged.
@@ -75,6 +77,7 @@ pub enum Outcome {
 pub async fn wait_for_login<R: Runtime>(
     app: &AppHandle<R>,
     entry_url: &str,
+    jar: &Arc<CookieStoreMutex>,
     fill: Fill,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
@@ -89,7 +92,10 @@ pub async fn wait_for_login<R: Runtime>(
 
     cancel(app);
     let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+    // 先開空白頁再導過去：cookie 要在第一個真正的請求之前就位，不然 beanfun 綁在
+    // 這條 session 上的 nonce 對不起來。
+    let blank: Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
@@ -105,6 +111,7 @@ pub async fn wait_for_login<R: Runtime>(
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
     overlay::disable_tracking_prevention(&window);
+    browser::seed_and_navigate(&window, jar, url)?;
 
     let started = Instant::now();
     let outcome = loop {

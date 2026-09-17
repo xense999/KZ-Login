@@ -9,7 +9,7 @@
 ```rust
 pub struct Fill { account: String, password: Option<String> }
 pub enum Outcome { Completed, Cancelled }
-pub async fn wait_for_login(app, entry_url: &str, fill: Fill) -> Result<Outcome, String>
+pub async fn wait_for_login(app, entry_url: &str, jar, fill: Fill) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
@@ -29,7 +29,7 @@ pub fn cancel(app)
 ## 流程
 
 1. `gamapass_login`：建一個新的 client + cookie jar，`get_session_key` 拿 `pSKey`，`open_login_page` 建立那把 key 的登入頁，`go_gamapass` 取得入口網址。
-2. 開一個隱藏的 WebView 視窗載入入口網址，注入的腳本把帳密填進對方的欄位並送出。
+2. 開一個隱藏的 WebView 視窗，**先停在 `about:blank`、把 client 的 cookie 注入進去（`browser::seed_and_navigate`，注入前會先清空）**，再導向入口網址；注入的腳本把帳密填進對方的欄位並送出。
 3. 輪詢那個視窗的網址：
    - 回到 beanfun portal ＝ 登入完成 → `complete_login(client, store, skey)` 拿 `bfWebToken`，接著 `get_game_accounts`，登記進 `session_stores`。
    - fragment 出現 `kz-gamapass=user` ＝ 腳本請求把畫面交給人 → 顯示成獨立視窗。
@@ -50,6 +50,7 @@ pub fn cancel(app)
 - 腳本只做「填欄位、按下一步、按登入」。不偽裝自動化痕跡、不碰任何驗證挑戰；對方要驗就讓它跳出來給使用者做。
 - 欄位靠 `input` 的 type 找、按鈕靠文字找，不用對方的 class：那是框架產生的名字，改版就會變。
 - 視窗**不掛任何 capability**（零 IPC），同 `captcha`：載入的是外部網站，給它 IPC 等於把 app 的指令開放給那個頁面。結果一律靠輪詢視窗網址取得。
+- **第一個真正的請求之前 cookie 就要就位**：登入態是 beanfun 綁在這條 session 上的，webview 沒帶著同一批 cookie，OAuth 繞回來時 beanfun 認不得自己發的 nonce，回「參數(nonce)驗證失敗」。注入前先清空，否則上一次登入留下的 token 會讓 portal 短路掉這一次。
 - 使用固定、可重用的獨立 WebView2 資料夾（app local data 底下的 `gamapass-webview`），不可與主視窗或 captcha 視窗共用。
 - label 每次換號（`gamapass-<n>`）：tauri 的 label 簿記要等 `Destroyed` 才清，用固定 label 會撞號。
 - 關掉視窗就是取消；10 分鐘逾時。

@@ -954,6 +954,62 @@ fn open_tab<R: Runtime>(
     Ok(tab)
 }
 
+/// 把登入 session 的 cookie 寫進 `window` 這顆 webview，然後才導向 `target`。
+///
+/// 給 `gamapass` 用（歸屬仍在本模組，見總表）：那個流程的登入態是 beanfun 綁在
+/// 這條 session 上的，webview 沒帶著同一批 cookie 過去，OAuth 繞一圈回來時
+/// beanfun 認不得自己發的 nonce，回「參數(nonce)驗證失敗」。
+///
+/// **先清空再注入**：那個 webview 的資料夾是重複使用的，上一次登入留下的 token
+/// 還在裡面，portal 會拿舊的那條短路掉這一次的流程。
+pub(crate) fn seed_and_navigate<R: Runtime>(
+    window: &WebviewWindow<R>,
+    jar: &Arc<CookieStoreMutex>,
+    target: Url,
+) -> Result<(), String> {
+    let cookies = cookies_from_jar(jar);
+    let expected = cookies.len();
+    let nav_target = window.clone();
+    window
+        .with_webview(move |platform| {
+            // 注入在主執行緒非同步跑，錯誤回不到呼叫端；印出來至少查得到——
+            // 「登入繞回來說 nonce 不對」的成因就在這幾行的結果裡。
+            if let Err(e) = clear_cookies(&platform) {
+                eprintln!("[browser] 舊 cookie 清不掉：{e}");
+            }
+            match inject_cookies(&platform, &cookies) {
+                Ok(n) if n == expected => {}
+                Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
+                Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
+            }
+            let _ = nav_target.navigate(target);
+        })
+        .map_err(|e| format!("注入登入資訊失敗：{e}"))
+}
+
+#[cfg(windows)]
+fn clear_cookies(platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
+    use windows_core::Interface;
+
+    unsafe {
+        let manager: ICoreWebView2CookieManager = platform
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.cast::<ICoreWebView2_2>())
+            .and_then(|core2| core2.CookieManager())
+            .map_err(|e| format!("取不到 cookie manager：{e}"))?;
+        manager
+            .DeleteAllCookies()
+            .map_err(|e| format!("清除 cookie 失敗：{e}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn clear_cookies(_platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
+    Ok(())
+}
+
 /// 切到某個分頁：顯示它、藏起其他的，並把它的網址推給網址列。
 fn activate_tab<R: Runtime>(app: &AppHandle<R>, id: u64) -> Result<(), String> {
     let (ids, url) = {
