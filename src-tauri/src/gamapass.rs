@@ -107,8 +107,9 @@ pub async fn wait_for_login<R: Runtime>(
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(true)
-        // Hidden while the script drives it; shown the moment a person is needed.
+        .skip_taskbar(false)
+        // 目前一律顯示：整條流程還沒跑通過，看不見就只能用猜的。調通之後再改回
+        // 「只有需要人接手時才現身」。
         .visible(false)
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
@@ -120,6 +121,7 @@ pub async fn wait_for_login<R: Runtime>(
 
     overlay::disable_tracking_prevention(&window);
     browser::seed_and_navigate(&window, jar, url)?;
+    show_window(&window, &main);
 
     let started = Instant::now();
     let outcome = loop {
