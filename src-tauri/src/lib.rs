@@ -238,10 +238,12 @@ async fn gamapass_login<R: tauri::Runtime>(
 
     let (client, cookie_store) = beanfun::build_client_with_store().map_err(map_err)?;
     let skey = beanfun::get_session_key(&client).await.map_err(map_err)?;
-    // Establish the login page for this key before handing it to the window.
-    beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
+    // The entry point is minted on the login page for this key, so the page has
+    // to be established first — and it is what carries the way back here.
+    let page = beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
+    let entry = beanfun::go_gamapass(&client, &page).await.map_err(map_err)?;
 
-    match gamapass::wait_for_login(&app, &skey, region).await? {
+    match gamapass::wait_for_login(&app, &entry, region).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)

@@ -44,14 +44,15 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// Open beanfun's login page for `skey` and wait until the portal takes over.
+/// Open the GamaPass entry point (see `beanfun::go_gamapass`) and wait until
+/// the portal takes over.
 pub async fn wait_for_login<R: Runtime>(
     app: &AppHandle<R>,
-    skey: &str,
+    entry_url: &str,
     region: Region,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
-    let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
+    let url: Url = entry_url
         .parse()
         .map_err(|e| format!("登入頁網址錯誤：{e}"))?;
     let data_dir = app

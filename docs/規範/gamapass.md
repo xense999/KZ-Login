@@ -8,17 +8,22 @@
 
 ```rust
 pub enum Outcome { Completed, Cancelled }
-pub async fn wait_for_login(app, skey: &str, region: overlay::Region) -> Result<Outcome, String>
+pub async fn wait_for_login(app, entry_url: &str, region: overlay::Region) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
 - 呼叫者：`commands` 的 `gamapass_login`、`gamapass_cancel`（登入頁的「取消」）。
 - `Completed` 只代表「頁面已經回到 portal」，token 由呼叫端用 `beanfun::complete_login` 取得。
+- `entry_url` 由 `beanfun::go_gamapass` 取得，本模組不認得 GamaPass 的網址長什麼樣。
 
 ## 單一來源
 
 - **登入完成的判定**只寫在本模組的 `PORTAL_HOSTS`：網址的 host 落在 beanfun portal 才算完成。
 - **登入視窗貼在哪**由前端量測登入頁「標題列與底部按鈕列之間」那塊元素後傳入，本模組不寫死任何版面尺寸（同 `captcha`，共用 `overlay`）。
+
+## 單一來源（續）
+
+- **入口網址**只能來自 `Login/GoGamaPass`（`beanfun::go_gamapass`）。那個網址是 beanfun 按 session 產生的，帶著回到這把 `pSKey` 的路；寫死 `accounts.gamania.com/login` 會讓使用者登完停在橘子那邊，沒有東西回到 portal，`complete_login` 也就無從收尾。
 
 ## 不變量
 
