@@ -11,6 +11,7 @@
 - `saved_logins() -> { account, password }[]`、`forget_saved_login(account)`、`reorder_saved_logins(accounts)`：記住的帳密（見總表 `credentials` 條）。
 - `captcha_solve(palette, region) -> string | null`、`captcha_cancel()`：替暫停中的帳密登入開驗證視窗（site key 與頁面網址從暫停狀態取，前端不經手）。
 - `gamapass_login() -> { status: "approved", token, games } | { status: "cancelled" }`、`gamapass_cancel()`：GamaPass 帳號走遊戲橘子自己的登入頁（見總表 `gamapass` 條）。指令會一直 await 到使用者登完或關掉視窗。
+- `saved_gamapass() -> SavedLogin[]`、`forget_gamapass(account)`：GamaPass 記住的帳密，與 `saved_logins` 各自分流（見總表 `credentials` 條）。
 
 ## 單一來源
 

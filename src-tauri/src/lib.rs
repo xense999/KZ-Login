@@ -169,11 +169,10 @@ fn saved_logins<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<crede
     credentials::list_of(&app, credentials::LoginKind::Beanfun)
 }
 
-/// The GamaPass login to offer, if one was remembered. Only the last one: that
-/// form has no dropdown, it just arrives filled in.
+/// The remembered GamaPass logins, passwords included: the form fills them in.
 #[tauri::command]
-fn saved_gamapass<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Option<credentials::SavedLogin>, String> {
-    Ok(credentials::list_of(&app, credentials::LoginKind::Gamapass)?.pop())
+fn saved_gamapass<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<credentials::SavedLogin>, String> {
+    credentials::list_of(&app, credentials::LoginKind::Gamapass)
 }
 
 #[tauri::command]
