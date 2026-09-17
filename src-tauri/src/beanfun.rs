@@ -64,20 +64,37 @@ const SERVICE_REGION: &str = "T9";
 
 // ─── Client Builders ─────────────────────────────────────────────────────────
 
+/// The browser we present ourselves as. beanfun's HK portal turns away anything
+/// that does not look like a modern browser, and its bot scoring reads the user
+/// agent together with the client hints below — the Chrome major version has to
+/// match in both, a mismatch is itself a signal.
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+
+/// The low-entropy client hints a Chrome of that version sends on every request,
+/// read from a real Chrome 153 on this machine (`navigator.userAgentData`). The
+/// brand list changes with each major version, so it moves with `USER_AGENT`.
+const SEC_CH_UA: &str = r#""Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153""#;
+
+fn client_builder() -> reqwest::ClientBuilder {
+    let mut headers = header::HeaderMap::new();
+    headers.insert("sec-ch-ua", header::HeaderValue::from_static(SEC_CH_UA));
+    headers.insert("sec-ch-ua-mobile", header::HeaderValue::from_static("?0"));
+    headers.insert("sec-ch-ua-platform", header::HeaderValue::from_static("\"Windows\""));
+    Client::builder().user_agent(USER_AGENT).default_headers(headers)
+}
+
 pub fn build_client_with_store() -> Result<(Client, Arc<CookieStoreMutex>), BeanfunError> {
     let store = Arc::new(CookieStoreMutex::new(Default::default()));
-    let client = Client::builder()
+    let client = client_builder()
         .cookie_provider(store.clone())
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .build()?;
     Ok((client, store))
 }
 
 /// Build a client reusing an existing cookie store (e.g. from the login session).
 pub fn build_client_from_store(store: &Arc<CookieStoreMutex>) -> Result<Client, BeanfunError> {
-    Ok(Client::builder()
+    Ok(client_builder()
         .cookie_provider(store.clone())
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .build()?)
 }
 
@@ -837,9 +854,7 @@ pub async fn otp_from_uri(uri: &str) -> Result<(String, String), BeanfunError> {
     };
     let sn = field("SN").ok_or_else(|| BeanfunError::Parse("連結缺少 SN".into()))?;
     let data = field("Data").ok_or_else(|| BeanfunError::Parse("連結缺少 Data".into()))?;
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-        .build()?;
+    let client = client_builder().build()?;
     let (service_account, req) = v2_request(&sn, &data)?;
     let otp = v2_exchange(&client, &req).await?;
     Ok((service_account, otp))
