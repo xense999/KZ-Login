@@ -3,6 +3,7 @@ mod browser;
 mod captcha;
 mod credentials;
 mod gamapass;
+mod overlay;
 mod hidden;
 mod icon;
 mod keyhook;
@@ -184,7 +185,7 @@ async fn captcha_solve<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     palette: captcha::Palette,
-    region: captcha::Region,
+    region: overlay::Region,
 ) -> Result<Option<String>, String> {
     let (page_url, site_key) = {
         let guard = state.pending_password.lock().await;
@@ -229,6 +230,7 @@ enum GamapassLoginResult {
 async fn gamapass_login<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
+    region: overlay::Region,
 ) -> Result<GamapassLoginResult, String> {
     // Starting this abandons a paused password login, and its password.
     *state.pending_password.lock().await = None;
@@ -239,7 +241,7 @@ async fn gamapass_login<R: tauri::Runtime>(
     // Establish the login page for this key before handing it to the window.
     beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
 
-    match gamapass::wait_for_login(&app, &skey).await? {
+    match gamapass::wait_for_login(&app, &skey, region).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)

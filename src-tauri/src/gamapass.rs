@@ -5,6 +5,10 @@
 //! to Gamania's own page. So this opens that page in a window of its own and
 //! lets the user sign in there; we never see the credentials.
 //!
+//! The window is borderless and pinned over the login page's own content area
+//! (see `overlay`), so signing in reads as part of the app rather than as a
+//! browser that appeared out of nowhere.
+//!
 //! What comes back is not a token. The login is tied to the `pSKey` the window
 //! was opened with, so once the portal takes over the page, the caller finishes
 //! the same way a QR login does — with `beanfun::complete_login` on the client
@@ -13,13 +17,13 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tauri::{
-    AppHandle, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
+
+use crate::overlay::{self, Region};
 
 const LABEL_PREFIX: &str = "gamapass-";
-const POLL_INTERVAL: Duration = Duration::from_millis(400);
+/// Short enough that the window keeps up when the main window is dragged.
+const POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// Long enough to read a mail or open an authenticator app on the way through.
 const TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -41,7 +45,12 @@ pub enum Outcome {
 }
 
 /// Open beanfun's login page for `skey` and wait until the portal takes over.
-pub async fn wait_for_login<R: Runtime>(app: &AppHandle<R>, skey: &str) -> Result<Outcome, String> {
+pub async fn wait_for_login<R: Runtime>(
+    app: &AppHandle<R>,
+    skey: &str,
+    region: Region,
+) -> Result<Outcome, String> {
+    let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
     let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
         .parse()
         .map_err(|e| format!("登入頁網址錯誤：{e}"))?;
@@ -54,17 +63,22 @@ pub async fn wait_for_login<R: Runtime>(app: &AppHandle<R>, skey: &str) -> Resul
     cancel(app);
     let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .title("GamaPass 登入")
-        .inner_size(480.0, 720.0)
-        .resizable(true)
+        .decorations(false)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
         .visible(false)
+        .owner(&main)
+        .map_err(|e| e.to_string())?
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
         .data_directory(data_dir)
+        .additional_browser_args(overlay::BROWSER_ARGS)
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
-    center_on_main(app, &window);
+    overlay::place(&window, &main, region);
+    overlay::disable_tracking_prevention(&window);
     let _ = window.show();
     let _ = window.set_focus();
 
@@ -81,6 +95,7 @@ pub async fn wait_for_login<R: Runtime>(app: &AppHandle<R>, skey: &str) -> Resul
         if window.url().ok().is_some_and(|u| at_portal(&u)) {
             break Outcome::Completed;
         }
+        overlay::place(&window, &main, region);
     };
 
     if let Some(w) = app.get_webview_window(&label) {
@@ -101,21 +116,6 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
 fn at_portal(url: &Url) -> bool {
     url.host_str()
         .is_some_and(|h| PORTAL_HOSTS.iter().any(|p| h.eq_ignore_ascii_case(p)))
-}
-
-/// Put it over the main window rather than wherever Windows would have placed
-/// it — the app sits in the bottom-right corner, and a login window that opens
-/// across the screen from it reads as something else entirely.
-fn center_on_main<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
-    let Some(main) = app.get_webview_window("main") else { return };
-    let (Ok(main_pos), Ok(main_size), Ok(size)) =
-        (main.outer_position(), main.outer_size(), window.outer_size())
-    else {
-        return;
-    };
-    let x = main_pos.x + (main_size.width as i32 - size.width as i32) / 2;
-    let y = main_pos.y + (main_size.height as i32 - size.height as i32) / 2;
-    let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
 #[cfg(test)]

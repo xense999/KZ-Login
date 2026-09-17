@@ -212,7 +212,7 @@ function onAccountSaved() {
       <MainPage v-if="page === 'main'" @add-account="onAddAccount" @reauth="onReauth" />
       <template v-else-if="page === 'login'">
         <QrPage v-if="loginMode === 'qr'" @cancel="cancelLogin" @success="onLoginSuccess" />
-        <GamaPassPage v-else-if="loginMode === 'gamapass'" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
+        <GamaPassPage v-else-if="loginMode === 'gamapass'" @cancel="cancelLogin" @success="onLoginSuccess" />
         <PasswordPage v-else :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
       </template>
       <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />

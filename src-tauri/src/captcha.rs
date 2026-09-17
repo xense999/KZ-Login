@@ -12,10 +12,9 @@
 use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, Url, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
+
+use crate::overlay::{self, Region};
 
 const LABEL_PREFIX: &str = "captcha-";
 const TOKEN_FRAGMENT: &str = "kz-captcha=";
@@ -34,15 +33,6 @@ pub struct Palette {
     pub bg: String,
     pub text: String,
     pub dark: bool,
-}
-
-/// Where the checkbox goes, in CSS pixels of the main window's client area.
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct Region {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
 }
 
 /// Show the checkbox and wait for the user. `None` means cancelled (see
@@ -77,19 +67,13 @@ pub async fn solve<R: Runtime>(
         // window's, and one user-data folder cannot host both. The folder is
         // reused every time, so nothing piles up.
         .data_directory(data_dir)
-        // Without these the widget takes the WebView for automation and serves
-        // endless image challenges, and tracking prevention starves the Google
-        // iframe of the storage it needs.
-        .additional_browser_args(
-            "--disable-blink-features=AutomationControlled \
-             --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,ThirdPartyStoragePartitioning,PartitionedCookies,msEdgeTrackingPrevention",
-        )
+        .additional_browser_args(overlay::BROWSER_ARGS)
         .initialization_script(&overlay_script(site_key, palette))
         .build()
         .map_err(|e| format!("驗證視窗開不起來：{e}"))?;
 
-    place(&window, &main, region);
-    disable_tracking_prevention(&window);
+    overlay::place(&window, &main, region);
+    overlay::disable_tracking_prevention(&window);
     let _ = window.show();
     let _ = window.set_focus();
 
@@ -105,7 +89,7 @@ pub async fn solve<R: Runtime>(
         }
         // Every tick, not only on change: this is what makes the window follow
         // the main window when it is dragged.
-        place(&window, &main, region);
+        overlay::place(&window, &main, region);
     };
 
     if let Some(w) = app.get_webview_window(&label) {
@@ -123,55 +107,12 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn place<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>, region: Region) {
-    let (Ok(origin), Ok(scale)) = (main.inner_position(), main.scale_factor()) else {
-        return;
-    };
-    let pos = PhysicalPosition::new(
-        origin.x + (region.x * scale).round() as i32,
-        origin.y + (region.y * scale).round() as i32,
-    );
-    let size = PhysicalSize::new((region.width * scale).round() as u32, (region.height * scale).round() as u32);
-    if window.outer_position().ok() != Some(pos) {
-        let _ = window.set_position(pos);
-    }
-    if window.inner_size().ok() != Some(size) {
-        let _ = window.set_size(size);
-    }
-}
-
 fn read_token(fragment: &str) -> Option<String> {
     fragment
         .strip_prefix(TOKEN_FRAGMENT)
         .filter(|t| !t.is_empty())
         .map(str::to_owned)
 }
-
-#[cfg(windows)]
-fn disable_tracking_prevention<R: Runtime>(window: &WebviewWindow<R>) {
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2Profile3, ICoreWebView2_13, COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_NONE,
-    };
-    use windows_core::Interface;
-
-    let _ = window.with_webview(|platform| unsafe {
-        let profile = platform
-            .controller()
-            .CoreWebView2()
-            .and_then(|core| core.cast::<ICoreWebView2_13>())
-            .and_then(|core| core.Profile())
-            .and_then(|profile| profile.cast::<ICoreWebView2Profile3>());
-        match profile {
-            Ok(p) => {
-                let _ = p.SetPreferredTrackingPreventionLevel(COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_NONE);
-            }
-            Err(e) => eprintln!("[captcha] tracking prevention stays on: {e}"),
-        }
-    });
-}
-
-#[cfg(not(windows))]
-fn disable_tracking_prevention<R: Runtime>(_window: &WebviewWindow<R>) {}
 
 fn overlay_script(site_key: &str, palette: &Palette) -> String {
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());

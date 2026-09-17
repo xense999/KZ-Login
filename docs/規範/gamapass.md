@@ -8,7 +8,7 @@
 
 ```rust
 pub enum Outcome { Completed, Cancelled }
-pub async fn wait_for_login(app, skey: &str) -> Result<Outcome, String>
+pub async fn wait_for_login(app, skey: &str, region: overlay::Region) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
@@ -18,13 +18,15 @@ pub fn cancel(app)
 ## 單一來源
 
 - **登入完成的判定**只寫在本模組的 `PORTAL_HOSTS`：網址的 host 落在 beanfun portal 才算完成。
-- **視窗的樣子與位置**（480×720、置中於主視窗）只寫在這裡，前端不傳任何尺寸。
+- **登入視窗貼在哪**由前端量測登入頁「標題列與底部按鈕列之間」那塊元素後傳入，本模組不寫死任何版面尺寸（同 `captcha`，共用 `overlay`）。
 
 ## 不變量
 
 - 帳密與二階段驗證都在遊戲橘子自己的頁面上，本程式不經手、不儲存，卡片的 `loginAccount` 是 null。
 - 視窗**不掛任何 capability**（零 IPC），同 `captcha`：載入的是外部網站，給它 IPC 等於把 app 的指令開放給那個頁面。結果一律靠輪詢視窗網址取得。
 - 使用固定、可重用的獨立 WebView2 資料夾（app local data 底下的 `gamapass-webview`），不可與主視窗或 captcha 視窗共用。
+- 視窗無邊框、不進工作列、owner 是主視窗，每 80ms 依主視窗目前位置重新定位，所以拖動主視窗時會跟著移動。
+- **進到 GamaPass 子頁就開視窗**，沒有「先按一顆按鈕」那一步——選了這個登入方式就是要登入。切走或按「取消」都會關掉它。
 - label 每次換號（`gamapass-<n>`）：tauri 的 label 簿記要等 `Destroyed` 才清，用固定 label 會撞號。
 - 關掉視窗就是取消，沒有第二種取消方式；10 分鐘逾時。
 
