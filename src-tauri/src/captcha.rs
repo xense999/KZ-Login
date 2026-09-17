@@ -9,12 +9,11 @@
 //! token comes back through the URL fragment: the page's CSP keeps app IPC out,
 //! and the window deliberately has no capability anyway.
 
-use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
 
-use crate::overlay::{self, Region};
+use crate::overlay::{self, Palette, Region};
 
 const LABEL_PREFIX: &str = "captcha-";
 const TOKEN_FRAGMENT: &str = "kz-captcha=";
@@ -25,15 +24,6 @@ const TIMEOUT: Duration = Duration::from_secs(180);
 /// A fixed label would collide: tauri only forgets a label once the old
 /// window's `Destroyed` event has gone through the event loop.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-/// The app theme's colours, read from the main window's CSS so the overlay
-/// matches without a second copy of the palette.
-#[derive(Debug, Deserialize)]
-pub struct Palette {
-    pub bg: String,
-    pub text: String,
-    pub dark: bool,
-}
 
 /// Show the checkbox and wait for the user. `None` means cancelled (see
 /// [`cancel`]), timed out, or the window went away.

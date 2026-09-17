@@ -7,8 +7,7 @@
 ## 公開介面
 
 ```rust
-pub struct Palette { bg, text: String, dark: bool }
-pub async fn solve(app, page_url: &str, site_key: &str, palette: &Palette, region: overlay::Region) -> Result<Option<String>, String>
+pub async fn solve(app, page_url: &str, site_key: &str, palette: &overlay::Palette, region: overlay::Region) -> Result<Option<String>, String>
 pub fn cancel(app)
 ```
 
@@ -19,7 +18,7 @@ pub fn cancel(app)
 
 - **fragment 字串**（`kz-captcha=` 回傳 token）只寫在本模組常數，注入腳本透過替換取得，不另寫一份。
 - **驗證區的位置**由前端量測登入頁「標題列與底部按鈕列之間」那塊元素後傳入；本模組不寫死任何版面尺寸。`Region` 與貼上去的動作屬於 `overlay`（見總表），這裡只是用它。
-- **配色**來自前端 `styles/main.css` 的 token，由前端讀出後傳進來；本模組不保存調色盤。
+- **配色**來自前端 `styles/main.css` 的 token，由前端讀出後傳進來；`Palette` 與 `Region` 都屬於 `overlay`（見總表），這裡只是用它。
 
 ## 不變量
 

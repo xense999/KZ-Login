@@ -8,12 +8,13 @@
 
 ```rust
 pub struct Region { x, y, width, height: f64 }   // 主視窗客戶區的 CSS px
+pub struct Palette { bg, text: String, dark: bool }   // 前端讀出來的主題色
 pub const BROWSER_ARGS: &str
 pub fn place(window, main, region)
 pub fn disable_tracking_prevention(window)
 ```
 
-- 使用者：`captcha`、`gamapass`。
+- 使用者：`captcha`、`gamapass`（後者只有 passkey 那條會貼）。
 
 ## 單一來源
 
@@ -22,7 +23,7 @@ pub fn disable_tracking_prevention(window)
 
 ## 不變量
 
-- `Region` 是 CSS px，一律由前端量測後傳入，Rust 這邊不寫死任何版面尺寸。
+- `Region` 是 CSS px、`Palette` 是 CSS token 的值，一律由前端量測／讀出後傳入，Rust 這邊不寫死任何版面尺寸或顏色。
 - `place` 每個輪詢 tick 都呼叫，不是只在變化時——那正是視窗跟著主視窗移動的方式。
 
 ## 禁止

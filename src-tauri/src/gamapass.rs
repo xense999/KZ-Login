@@ -37,7 +37,8 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
-use crate::{browser, overlay};
+use crate::browser;
+use crate::overlay::{self, Palette, Region};
 
 const LABEL_PREFIX: &str = "gamapass-";
 /// Short enough that the window keeps up when the main window is dragged.
@@ -95,6 +96,8 @@ pub async fn wait_for_login<R: Runtime>(
     skey: &str,
     jar: &Arc<CookieStoreMutex>,
     fill: Fill,
+    palette: Palette,
+    region: Region,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
     let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
@@ -111,27 +114,33 @@ pub async fn wait_for_login<R: Runtime>(
     // 先開空白頁再導過去：cookie 要在第一個真正的請求之前就位，不然 beanfun 綁在
     // 這條 session 上的 nonce 對不起來。
     let blank: Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
+    // passkey 要蓋在主視窗上（見模組說明），所以連視窗的樣子都不一樣。
+    let passkey = fill.password.is_none();
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(fill.password.is_some())
+        .skip_taskbar(true)
         // 腳本開得動的時候沒人需要看到這個視窗；要人接手時才現身（見 `show_window`）。
-        .visible(false)
+        .visible(false);
+    if passkey {
+        builder = builder.decorations(false).shadow(false).owner(&main).map_err(|e| e.to_string())?;
+    }
+    let window = builder
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
         .data_directory(data_dir)
         .additional_browser_args(overlay::BROWSER_ARGS)
-        .initialization_script(&init_script(&fill))
+        .initialization_script(&init_script(&fill, &palette))
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
     overlay::disable_tracking_prevention(&window);
     browser::seed_and_navigate(&window, jar, url)?;
-    // passkey 一定要人操作，藏起來沒有意義：藏著的話，系統那個 passkey 詢問框會
-    // 掛在一個看不見的視窗上跳出來，然後我們的視窗才追上去現身，兩個一起冒出來。
-    if fill.password.is_none() {
-        show_window(&window, &main);
+    if passkey {
+        overlay::place(&window, &main, region);
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 
     let started = Instant::now();
@@ -146,6 +155,10 @@ pub async fn wait_for_login<R: Runtime>(
         };
         if let Some(done) = harvest(&window) {
             break done;
+        }
+        // 每個 tick 都貼一次，主視窗被拖動時才跟得上。
+        if passkey {
+            overlay::place(&window, &main, region);
         }
         let Ok(url) = window.url() else { continue };
         // The script gave up on doing it silently — hand the page over.
@@ -178,7 +191,7 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
 /// The script the window runs on every document it loads. It only acts on
 /// Gamania's own host — the credentials must never be handed to a page that
 /// merely happens to load in this window.
-fn init_script(fill: &Fill) -> String {
+fn init_script(fill: &Fill, palette: &Palette) -> String {
     let account = fill.account.as_str();
     let password = fill.password.as_deref().unwrap_or("");
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
@@ -186,6 +199,8 @@ fn init_script(fill: &Fill) -> String {
         .replace("__ACCOUNT__", &json(account))
         .replace("__PASSWORD__", &json(password))
         .replace("__FRAGMENT__", &json(NEEDS_USER_FRAGMENT))
+        .replace("__BG__", &json(&palette.bg))
+        .replace("__TEXT__", &json(&palette.text))
 }
 
 /// Fills Gamania's own form with what the user typed into ours, and submits.
@@ -207,6 +222,8 @@ const AUTOFILL_JS: &str = r##"(() => {
   if (!ACC) return;
 
   const FRAGMENT = __FRAGMENT__;
+  const BG = __BG__;
+  const TEXT = __TEXT__;
   const step = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
   const mark = (k) => { try { sessionStorage.setItem(k, "1"); } catch (e) {} };
 
@@ -293,6 +310,30 @@ const AUTOFILL_JS: &str = r##"(() => {
     return true;
   };
 
+  // passkey 那條的視窗是貼在主視窗上、看得見的，所以要把對方的頁面蓋掉——
+  // 使用者要看的是系統那個指紋／PIN 的框，不是這個網站。蓋子擋不住系統的框，
+  // 那是作業系統自己畫的，永遠在最上面。
+  const cover = () => {
+    if (PW || !document.body || document.getElementById("__kz_cover")) return;
+    const el = document.createElement("div");
+    el.id = "__kz_cover";
+    el.setAttribute("style",
+      "position:fixed;inset:0;z-index:2147483000;background:" + BG + ";color:" + TEXT + ";" +
+      "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;" +
+      "font:14px/1.7 system-ui,sans-serif;text-align:center;padding:24px");
+    const title = document.createElement("div");
+    title.textContent = "請用指紋、PIN 或安全金鑰完成登入";
+    const again = document.createElement("button");
+    again.textContent = "沒有跳出視窗？點這裡再試一次";
+    again.setAttribute("style",
+      "border:none;background:none;color:inherit;opacity:.55;font:12px system-ui,sans-serif;" +
+      "text-decoration:underline;cursor:pointer");
+    again.addEventListener("click", () => { clickLabelled("passkey"); });
+    el.appendChild(title);
+    el.appendChild(again);
+    document.body.appendChild(el);
+  };
+
   // 視窗平常是藏著的，這行字只有在「交給使用者」時才會被看到——那正是最需要
   // 知道「程式走到哪一步、為什麼停下來」的時候。
   const say = (text) => {
@@ -312,6 +353,7 @@ const AUTOFILL_JS: &str = r##"(() => {
 
   const started = Date.now();
   const timer = setInterval(() => {
+    cover();
     // 卡住就不要再等了：交給使用者，讓他看到頁面到底停在哪。
     if (Date.now() - started > 20000) { clearInterval(timer); say("等太久了，交給你"); askForUser(); return; }
 
@@ -342,7 +384,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     }
     // passkey：帳號帶進去就收手。游標一進帳號欄，那頁就會問要不要用金鑰，系統的
     // 詢問框蓋上來之後頁面是動不了的——再去按「下一步」只會空等到逾時。
-    if (!PW) { clearInterval(timer); say("請用 passkey 登入"); askForUser(); return; }
+    if (!PW) { clearInterval(timer); cover(); askForUser(); return; }
     if (!step("__kz_next")) {
       if (passwordField()) { mark("__kz_next"); return; }
       say("按下一步");

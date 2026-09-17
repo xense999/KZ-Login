@@ -9,7 +9,7 @@
 ```rust
 pub struct Fill { account: String, password: Option<String> }
 pub enum Outcome { Completed { token, cookies }, Cancelled }
-pub async fn wait_for_login(app, skey: &str, jar, fill: Fill) -> Result<Outcome, String>
+pub async fn wait_for_login(app, skey: &str, jar, fill: Fill, palette, region) -> Result<Outcome, String>
 pub fn cancel(app)
 ```
 
@@ -24,7 +24,8 @@ pub fn cancel(app)
 
 - 上次成功登入記住的那組（見總表 `credentials` 條）進來就填好，按登入即可；「忘記這組帳密」只在有記住時出現。
 - 「改用 passkey（不用密碼）」要填了帳號才能按——不然沒有東西帶得進去，使用者得在對方頁面重打一次。
-- **主視窗裡從頭到尾不放對方的頁面。** 自動填入期間那個視窗是隱藏的；需要人接手時它變成一個獨立視窗（480×720、置中於主視窗、進工作列）。
+- **主視窗裡從頭到尾不放對方的頁面。** 帶密碼那條的視窗全程隱藏；需要人接手時才變成一個獨立視窗（480×720、置中於主視窗、進工作列）。
+- **passkey 例外**：Windows 只肯替「在最前面的視窗」跳出指紋／PIN 的框，藏著就不會出現。所以那條的視窗無邊框、貼在這一頁的內容區上（同 `captcha`），並由注入的腳本用我們的配色蓋掉整頁——看得到的是我們的畫面和系統的框，不是對方的網站。遮罩上留一個「沒有跳出視窗？點這裡再試一次」的出路。
 
 ## 流程
 

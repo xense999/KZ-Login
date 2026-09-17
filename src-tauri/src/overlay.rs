@@ -10,6 +10,15 @@
 use serde::Deserialize;
 use tauri::{PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
+/// The app theme's colours, read from the main window's CSS so a window laid
+/// over it matches without a second copy of the palette living in Rust.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Palette {
+    pub bg: String,
+    pub text: String,
+    pub dark: bool,
+}
+
 /// Where the child window goes, in CSS pixels of the main window's client
 /// area. Measured by the page that owns that strip — no size is written here
 /// or anywhere else in Rust.
