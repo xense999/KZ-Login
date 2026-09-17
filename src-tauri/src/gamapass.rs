@@ -244,15 +244,36 @@ const AUTOFILL_JS: &str = r##"(() => {
     return false;
   };
 
-  const clickLabelled = (text) => {
+  // 有些元件聽的是按下去那一刻（pointerdown／mousedown），只送 click 不會動。
+  const press = (el) => {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    try { el.dispatchEvent(new PointerEvent("pointerdown", opts)); } catch (e) {}
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    try { el.dispatchEvent(new PointerEvent("pointerup", opts)); } catch (e) {}
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.click();
+  };
+
+  // 文字對得上的元素可能不只一個（說明文字、彈窗裡的字），所以先挑看起來像按鈕
+  // 的那些；都不像才退回「最貼著文字的那一層」。
+  const clickLabelled = (text, selector) => {
     const want = text.toLowerCase();
-    const matches = [...document.querySelectorAll("button, [role=button], a, div, span, li, label")]
+    if (selector) {
+      const direct = [...document.querySelectorAll(selector)].filter((el) => visible(el) && !disabled(el));
+      if (direct.length === 1) { press(direct[0]); return true; }
+    }
+    const all = [...document.querySelectorAll("button, [role=button], a, div, span, li, label")]
       .filter((el) => visible(el) && (el.textContent || "").trim().toLowerCase().includes(want))
       .filter((el) => ![...el.children].some(
-        (c) => (c.textContent || "").toLowerCase().includes(want)));
-    const hit = matches[matches.length - 1];
-    if (!hit || disabled(hit)) return false;
-    hit.click();
+        (c) => (c.textContent || "").toLowerCase().includes(want)))
+      .filter((el) => !disabled(el));
+    const looksClickable = (el) =>
+      el.tagName === "BUTTON" || el.tagName === "A" || el.getAttribute("role") === "button" ||
+      /btn|button/i.test(el.className || "") ||
+      getComputedStyle(el).cursor === "pointer";
+    const hit = all.find(looksClickable) || all[all.length - 1];
+    if (!hit) return false;
+    press(hit);
     return true;
   };
 
@@ -281,10 +302,19 @@ const AUTOFILL_JS: &str = r##"(() => {
     // beanfun 的登入頁：按下它自己的「使用 gamapass」，讓它用自己的 session 去
     // 要跳轉網址。我們代打的話，回程的 nonce 會對不起來。
     if (ON_BEANFUN) {
-      // 按一次就好：多按幾次等於多跟它要幾組跳轉網址。沒跳成就等逾時交給使用者。
-      if (step("__kz_goto")) { say("已按下使用 gamapass，等它跳轉"); return; }
-      say("找「使用 gamapass」按鈕");
-      if (clickLabelled("gamapass")) mark("__kz_goto");
+      // 按下去之後頁面應該就離開這裡了。還在，就是那一下沒生效——重挑一次目標再按。
+      // 多按幾次等於多跟它要幾組跳轉網址，所以有上限，到頂就交給使用者。
+      const at = Number(step("__kz_goto_at") || 0);
+      if (at && Date.now() - at < 3500) { say("已按下使用 gamapass，等它跳轉"); return; }
+      const tries = Number(step("__kz_goto_n") || 0);
+      if (tries >= 3) { clearInterval(timer); say("按不動「使用 gamapass」，交給你"); askForUser(); return; }
+      say(tries ? `再試一次「使用 gamapass」（第 ${tries + 1} 次）` : "找「使用 gamapass」按鈕");
+      if (clickLabelled("gamapass", ".use-gama-pass")) {
+        try {
+          sessionStorage.setItem("__kz_goto_at", String(Date.now()));
+          sessionStorage.setItem("__kz_goto_n", String(tries + 1));
+        } catch (e) {}
+      }
       return;
     }
 
