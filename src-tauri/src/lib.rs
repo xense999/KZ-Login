@@ -258,7 +258,8 @@ async fn run_password_login<R: tauri::Runtime>(
 
 #[cfg(windows)]
 mod win {
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, MAPVK_VK_TO_VSC,
         SendInput, INPUT, INPUT_0,
@@ -443,6 +444,69 @@ mod win {
         unsafe { !find_game_window().is_null() }
     }
 
+    /// Executable name of the game client, as Task Manager lists it. Also what
+    /// a plain launch looks for inside the configured install directory.
+    pub const GAME_EXE: &str = "MapleStory.exe";
+
+    /// PIDs of every running game client, found by executable name rather than
+    /// by window: a client that hung and lost its window is still a process the
+    /// user wants gone, and multi-boxing means there can be several.
+    fn game_pids() -> Vec<u32> {
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
+
+        let mut pids: Vec<u32> = Vec::new();
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE { return pids; }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snap, &mut entry) != 0 {
+                loop {
+                    let name = &entry.szExeFile;
+                    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+                    if String::from_utf16_lossy(&name[..len]).eq_ignore_ascii_case(GAME_EXE) {
+                        pids.push(entry.th32ProcessID);
+                    }
+                    if Process32NextW(snap, &mut entry) == 0 { break; }
+                }
+            }
+            CloseHandle(snap);
+        }
+        pids
+    }
+
+    /// True when a game client process exists at all — including one that hung
+    /// and shows no window, which [`is_game_running`] (window-based, used for
+    /// typing into the login form) deliberately does not count.
+    pub fn is_game_process_running() -> bool {
+        !game_pids().is_empty()
+    }
+
+    /// Terminate the running game clients — the same abrupt kill Task Manager's
+    /// "End task" performs, so the game gets no chance to save or ask anything.
+    pub fn kill_game() -> Result<(), String> {
+        let pids = game_pids();
+        if pids.is_empty() {
+            return Err("找不到執行中的遊戲".to_string());
+        }
+        let mut killed = 0usize;
+        for pid in pids {
+            unsafe {
+                let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                if handle.is_null() { continue; }
+                if TerminateProcess(handle, 0) != 0 { killed += 1; }
+                CloseHandle(handle);
+            }
+        }
+        if killed == 0 {
+            return Err("無法關閉遊戲，請改用工作管理員結束".to_string());
+        }
+        Ok(())
+    }
+
     /// Hand a target (file path or protocol URI such as `gamaniagames://…`) to
     /// its registered handler via ShellExecute. Used to launch the game through
     /// the local Gamania Games Manager. (Explorer can't resolve custom schemes,
@@ -452,11 +516,22 @@ mod win {
     /// when the app restarts on a rebuild — a dev-only artifact; a packaged build
     /// has no such job, so the game keeps running independently.
     pub fn shell_open(target: &str) -> Result<(), String> {
-        shell_open_with_args(target, None)
+        shell_exec(target, None, None)
     }
 
     /// [`shell_open`] with command-line arguments handed to the target.
     pub fn shell_open_with_args(target: &str, args: Option<&str>) -> Result<(), String> {
+        shell_exec(target, args, None)
+    }
+
+    /// [`shell_open`] starting the target in `dir`. The game resolves its data
+    /// files relative to the working directory, so launching its exe without one
+    /// starts it in *our* install folder and it fails to find them.
+    pub fn shell_open_in(target: &str, dir: &str) -> Result<(), String> {
+        shell_exec(target, None, Some(dir))
+    }
+
+    fn shell_exec(target: &str, args: Option<&str>, dir: Option<&str>) -> Result<(), String> {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -464,13 +539,15 @@ mod win {
         let verb: Vec<u16> = "open".encode_utf16().chain(Some(0u16)).collect();
         let args_wide: Option<Vec<u16>> =
             args.map(|a| a.encode_utf16().chain(Some(0u16)).collect());
+        let dir_wide: Option<Vec<u16>> =
+            dir.map(|d| d.encode_utf16().chain(Some(0u16)).collect());
         let result = unsafe {
             ShellExecuteW(
                 std::ptr::null_mut(),
                 verb.as_ptr(),
                 target_wide.as_ptr(),
                 args_wide.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
-                std::ptr::null(),
+                dir_wide.as_ref().map_or(std::ptr::null(), |d| d.as_ptr()),
                 SW_SHOWNORMAL,
             )
         };
@@ -825,6 +902,55 @@ async fn update_ggm(url: String) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Plain game launch / force close ───────────────────────────────────────────
+
+/// True when a game client process is running. The 「啟動遊戲」 button asks this
+/// before acting, so the same button can launch or offer to force-close.
+#[tauri::command]
+fn game_running() -> bool {
+    #[cfg(windows)]
+    {
+        win::is_game_process_running()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Start the game with no account attached — it stops at its own login screen,
+/// where a card's arrow can then type an account in. Uses the install directory
+/// GGM resolves (see [`get_game_path`]), so a machine GGM can find needs nothing
+/// extra configured.
+#[tauri::command]
+fn launch_game() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let dir = get_game_path();
+        let dir = dir.trim();
+        if dir.is_empty() {
+            return Err("找不到遊戲安裝位置，請先在設定頁指定遊戲路徑".to_string());
+        }
+        let exe = std::path::Path::new(dir).join(win::GAME_EXE);
+        if !exe.exists() {
+            return Err(format!("設定的遊戲路徑裡找不到 {}，請重新指定", win::GAME_EXE));
+        }
+        win::shell_open_in(&exe.to_string_lossy(), dir)?;
+    }
+    Ok(())
+}
+
+/// Kill the running game clients outright, like Task Manager's 「結束工作」.
+/// The confirmation lives in the UI — by the time this runs the user has said yes.
+#[tauri::command]
+fn kill_game() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        win::kill_game()?;
+    }
+    Ok(())
+}
+
 // ─── Game path override (registry) ─────────────────────────────────────────────
 
 /// Read the MapleStory install directory GGM resolves from
@@ -1160,6 +1286,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, saved_logins, forget_saved_login, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
+            game_running, launch_game, kill_game,
             prime_game_zone, launch_uri_of, otp_of, verify_hidden_key,
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,

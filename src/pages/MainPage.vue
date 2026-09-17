@@ -6,6 +6,7 @@ import { toast } from "../composables/useToast";
 import { useAccountsStore, type BeanfunAccount, type GameAccount } from "../stores/accounts";
 import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useDiscord";
 import { useHidden } from "../composables/useHidden";
+import { useMainAction } from "../composables/useMainAction";
 import ExportProgress from "../components/ExportProgress.vue";
 
 const HUES = [210, 150, 270, 35, 0, 190];
@@ -121,6 +122,39 @@ async function proxyLaunch() {
     toast(e instanceof Error ? e.message : String(e), { kind: "error" });
   } finally {
     proxyLaunching.value = false;
+  }
+}
+
+const { mainAction } = useMainAction();
+
+// 「啟動遊戲」模式下那顆按鈕的兩種結局：遊戲沒開就開它，開著就問要不要強制關掉。
+// 先問後端遊戲在不在，讓同一顆按鈕自己決定要做哪一件。
+const gameBusy = ref(false);
+const askKillGame = ref(false);
+
+async function launchGame() {
+  gameBusy.value = true;
+  try {
+    if (await invoke<boolean>("game_running")) {
+      askKillGame.value = true;
+      return;
+    }
+    await invoke("launch_game");
+    toast("已啟動遊戲，請稍候");
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  } finally {
+    gameBusy.value = false;
+  }
+}
+
+async function confirmKillGame() {
+  askKillGame.value = false;
+  try {
+    await invoke("kill_game");
+    toast("已關閉遊戲");
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
   }
 }
 
@@ -482,6 +516,7 @@ function displayName(game: { sname: string; localName: string | null }) {
 
 async function copyAccountId(sid: string, sn: string) {
   await writeText(sid);
+  toast("已複製帳號");
   copiedAccount.value.add(sn);
   setTimeout(() => copiedAccount.value.delete(sn), 1800);
 }
@@ -498,6 +533,7 @@ async function copyOtp(account: BeanfunAccount, game: { sn: string; sid: string;
       accountSname: game.sname,
     });
     await writeText(r.otp);
+    toast("已複製密碼");
     store.markUsed(game.sn);
     copiedPwd.value.add(game.sn);
     setTimeout(() => copiedPwd.value.delete(game.sn), 1800);
@@ -805,7 +841,15 @@ function cleanError(msg: string): string {
       </svg>
       新增帳號
     </button>
-    <button class="btn-launch" :disabled="proxyLaunching" @click="proxyLaunch"
+    <button v-if="mainAction === 'game'" class="btn-launch" :disabled="gameBusy" @click="launchGame"
+      title="開啟遊戲；遊戲已在執行時會詢問是否強制關閉">
+      <span v-if="gameBusy" class="spin"></span>
+      <svg v-else viewBox="0 0 16 16" fill="none" width="14" height="14">
+        <path d="M5 3.5l7 4.5-7 4.5V3.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+      啟動遊戲
+    </button>
+    <button v-else class="btn-launch" :disabled="proxyLaunching" @click="proxyLaunch"
       title="讀取剪貼簿裡對方分享的登入連結並啟動遊戲">
       <span v-if="proxyLaunching" class="spin"></span>
       <svg v-else viewBox="0 0 16 16" fill="none" width="14" height="14">
@@ -816,6 +860,19 @@ function cleanError(msg: string): string {
       代理登入
     </button>
   </div>
+
+  <Teleport to=".page-container">
+    <div v-if="askKillGame" class="kill-overlay" @click.self="askKillGame = false">
+      <div class="kill-card">
+        <div class="kill-title">遊戲正在執行中</div>
+        <div class="kill-body">要強制關閉遊戲嗎？遊戲會直接被結束，未儲存的動作不會保留。</div>
+        <div class="kill-actions">
+          <button class="kill-btn" @click="askKillGame = false">取消</button>
+          <button class="kill-btn danger" @click="confirmKillGame">強制關閉</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 
 
   </div>
@@ -1080,4 +1137,55 @@ function cleanError(msg: string): string {
 }
 .btn-launch:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
 .btn-launch:disabled { opacity: 0.3; cursor: default; }
+
+/* 確認框：absolute 不是 fixed，Teleport 到 .page-container 蓋住標題列以下（同
+   批次匯出的遮罩），圓角交給視窗外框裁。 */
+.kill-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.kill-card {
+  width: 100%;
+  max-width: 300px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: var(--ctx-shadow);
+}
+.kill-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.kill-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text2);
+  margin-bottom: 18px;
+}
+.kill-actions { display: flex; gap: 8px; }
+.kill-btn {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface2);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  transition: background 0.12s, color 0.12s;
+}
+.kill-btn:hover { background: var(--surface3); color: var(--text); }
+.kill-btn.danger { color: var(--red); }
+.kill-btn.danger:hover { background: rgba(255,69,58,0.15); }
 </style>

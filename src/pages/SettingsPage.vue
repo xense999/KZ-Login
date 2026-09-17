@@ -7,6 +7,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "../composables/useToast";
 import { useTheme } from "../composables/useTheme";
+import { useMainAction } from "../composables/useMainAction";
 import { useDiscordShare } from "../composables/useDiscord";
 import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
 
@@ -16,6 +17,7 @@ const GITHUB_URL = "https://github.com/xense999";
 const emit = defineEmits<{ back: [] }>();
 
 const { theme, setTheme } = useTheme();
+const { mainAction, setMainAction } = useMainAction();
 
 const WEBHOOK_KEY = "kusei:discord_webhook";
 
@@ -218,6 +220,18 @@ async function supportAuthor() {
           <div class="seg">
             <button :class="{ active: theme === 'neutral' }" @click="setTheme('neutral')">亮色</button>
             <button :class="{ active: theme === 'dark' }" @click="setTheme('dark')">暗色</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <span class="row-title">偏好設定</span>
+          <div class="seg">
+            <button :class="{ active: mainAction === 'proxy' }" @click="setMainAction('proxy')"
+              title="主畫面按鈕＝讀取剪貼簿裡對方分享的登入連結並啟動遊戲">代理登入</button>
+            <button :class="{ active: mainAction === 'game' }" @click="setMainAction('game')"
+              title="主畫面按鈕＝直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動遊戲</button>
           </div>
         </div>
       </div>
