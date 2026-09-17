@@ -36,16 +36,17 @@ function toPassword() {
   step.value = "password";
 }
 
-// 帶著帳密去登入；passkey 則什麼都不帶，直接把那一頁交給使用者，因為 passkey
-// 的憑證綁在對方網域上，只有他們自己的頁面問得到。
-async function run(withCredentials: boolean) {
-  if (withCredentials && !canLogin.value) return;
+// passkey 一樣帶帳號過去（不然使用者要在對方頁面重打一次），只是不帶密碼：
+// 帳號填完、過了那一步就把視窗交給他，因為 passkey 的憑證綁在對方網域上，
+// 只有他們自己的頁面問得到。
+async function run(withPassword: boolean) {
+  if (withPassword && !canLogin.value) return;
   errorMsg.value = "";
   step.value = "running";
   try {
     const result = await invoke<Result>("gamapass_login", {
-      account: withCredentials ? account.value.trim() : null,
-      password: withCredentials ? password.value : null,
+      account: account.value.trim(),
+      password: withPassword ? password.value : null,
     });
     if (disposed) return;
     if (result.status === "approved") {
@@ -59,11 +60,11 @@ async function run(withCredentials: boolean) {
       return;
     }
     // 視窗關掉了：回到密碼那一步，帳號留著，不用從頭打。
-    step.value = withCredentials ? "password" : "account";
+    step.value = "password";
   } catch (e: unknown) {
     if (disposed) return;
     errorMsg.value = e instanceof Error ? e.message : String(e);
-    step.value = withCredentials ? "password" : "account";
+    step.value = "password";
   } finally {
     // 密碼只存在到這一刻為止，登入器不留它。
     if (!disposed && step.value !== "running") password.value = "";
@@ -119,7 +120,7 @@ function onCancel() {
           <div v-if="errorMsg" class="err">{{ errorMsg }}</div>
         </div>
 
-        <button class="btn-passkey" @click="run(false)">使用 passkey</button>
+        <button v-if="step === 'password'" class="btn-passkey" @click="run(false)">使用 passkey</button>
       </template>
     </div>
 

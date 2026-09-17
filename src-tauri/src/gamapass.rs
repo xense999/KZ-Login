@@ -5,13 +5,13 @@
 //! Gamania's own page and only work on their origin. So the page is loaded in a
 //! window of its own; what we control is whether anyone has to look at it.
 //!
-//! In [`Mode::Autofill`] that window is never shown: the account and password
-//! were typed into our own form, an injected script puts them into Gamania's
-//! fields and submits, and the whole login can finish without their site ever
-//! appearing. It surfaces — as a separate, ordinary window — only when a person
-//! is actually needed: a second factor, a wrong password, anything unexpected.
-//! [`Mode::Manual`] (passkey) shows that window from the start, because the
-//! system's own passkey prompt has to have a real window to sit on.
+//! The window is never shown while the script is working: what the user typed
+//! into our own form is put into Gamania's fields, and with a password the
+//! whole login can finish without their site ever appearing. It surfaces — as a
+//! separate, ordinary window — only when a person is actually needed: a second
+//! factor, a wrong password, anything unexpected, and passkey, where the script
+//! fills in the account, gets past that step and then stands aside. (A passkey
+//! also needs a real window for the system's own prompt to sit on.)
 //!
 //! What comes back is not a token. The login is tied to the `pSKey` the window
 //! was opened with, so once the portal takes over the page, the caller finishes
@@ -51,15 +51,15 @@ const PORTAL_HOSTS: &[&str] = &["tw.beanfun.com", "tw.newlogin.beanfun.com"];
 /// window's `Destroyed` event has gone through the event loop.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// What the window should do once it is open.
-pub enum Mode {
-    /// Type these into Gamania's form and submit. Empty strings are treated as
-    /// [`Mode::Manual`] rather than filling the page with nothing.
-    Autofill { account: String, password: String },
-    /// Show the page and stay out of the way — passkey, or the user preferring
-    /// to type there. A passkey cannot work any other way: the credential is
-    /// bound to Gamania's origin, so only their page can ask for it.
-    Manual,
+/// What the script should put into Gamania's form.
+pub struct Fill {
+    pub account: String,
+    /// `None` for passkey: the account still goes in and the step is still
+    /// advanced — so the user is not made to type it a second time — but the
+    /// window is then handed over. A passkey cannot work any other way: the
+    /// credential is bound to Gamania's origin, so only their page can ask for
+    /// it, and the system's prompt needs that window on screen.
+    pub password: Option<String>,
 }
 
 /// How a [`wait_for_login`] ended.
@@ -75,7 +75,7 @@ pub enum Outcome {
 pub async fn wait_for_login<R: Runtime>(
     app: &AppHandle<R>,
     entry_url: &str,
-    mode: Mode,
+    fill: Fill,
 ) -> Result<Outcome, String> {
     let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
     let url: Url = entry_url
@@ -89,27 +89,22 @@ pub async fn wait_for_login<R: Runtime>(
 
     cancel(app);
     let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-    let autofilling = matches!(mode, Mode::Autofill { .. });
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title("GamaPass 登入")
         .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
         .resizable(false)
-        .skip_taskbar(autofilling)
-        // Hidden while the script drives it; shown the moment a person is
-        // needed. A passkey needs it up from the start.
+        .skip_taskbar(true)
+        // Hidden while the script drives it; shown the moment a person is needed.
         .visible(false)
         // Its own WebView2 environment, like the captcha window: one user-data
         // folder cannot host two. Reused every time, so nothing piles up.
         .data_directory(data_dir)
         .additional_browser_args(overlay::BROWSER_ARGS)
-        .initialization_script(&init_script(&mode))
+        .initialization_script(&init_script(&fill))
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
     overlay::disable_tracking_prevention(&window);
-    if !autofilling {
-        show_window(&window, &main);
-    }
 
     let started = Instant::now();
     let outcome = loop {
@@ -150,13 +145,9 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
 /// The script the window runs on every document it loads. It only acts on
 /// Gamania's own host — the credentials must never be handed to a page that
 /// merely happens to load in this window.
-fn init_script(mode: &Mode) -> String {
-    let (account, password) = match mode {
-        Mode::Autofill { account, password } if !account.is_empty() && !password.is_empty() => {
-            (account.as_str(), password.as_str())
-        }
-        _ => ("", ""),
-    };
+fn init_script(fill: &Fill) -> String {
+    let account = fill.account.as_str();
+    let password = fill.password.as_deref().unwrap_or("");
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     AUTOFILL_JS
         .replace("__ACCOUNT__", &json(account))
@@ -176,8 +167,8 @@ fn init_script(mode: &Mode) -> String {
 const AUTOFILL_JS: &str = r##"(() => {
   if (location.hostname !== "accounts.gamania.com") return;
   const ACC = __ACCOUNT__;
-  const PW = __PASSWORD__;
-  if (!ACC || !PW) return;
+  const PW = __PASSWORD__;   // 空的＝passkey：帳號照填，密碼那一步交給使用者
+  if (!ACC) return;
 
   const FRAGMENT = __FRAGMENT__;
   const step = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
@@ -231,6 +222,8 @@ const AUTOFILL_JS: &str = r##"(() => {
       clickLabelled("下一步");
       return;
     }
+    // passkey：帳號已經帶進去、也過了這一步，剩下的是使用者的事。
+    if (!PW) { clearInterval(timer); askForUser(); return; }
     if (!step("__kz_pw")) {
       const pw = passwordField();
       if (pw) { fill(pw, PW); mark("__kz_pw"); }

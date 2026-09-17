@@ -223,8 +223,9 @@ enum GamapassLoginResult {
 
 /// Sign in with a GamaPass account. The account and password are the ones typed
 /// into our own form; they are handed to the window to put into Gamania's
-/// fields and are never stored — a GamaPass login remembers nothing. Passing
-/// neither shows that page as it is, which is the only way a passkey can work.
+/// fields and are never stored — a GamaPass login remembers nothing. Without a
+/// password the account still goes in, and the window is then handed to the
+/// user for a passkey.
 ///
 /// The tail is the QR login's: the login is tied to the session key we minted
 /// rather than to whoever's cookie jar performed it.
@@ -232,9 +233,14 @@ enum GamapassLoginResult {
 async fn gamapass_login<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    account: Option<String>,
+    account: String,
     password: Option<String>,
 ) -> Result<GamapassLoginResult, String> {
+    let account = account.trim().to_owned();
+    if account.is_empty() {
+        return Err("請先輸入手機號碼或電子郵件".into());
+    }
+
     // Starting this abandons a paused password login, and its password.
     *state.pending_password.lock().await = None;
     *state.pending_qr.lock().await = None;
@@ -246,14 +252,12 @@ async fn gamapass_login<R: tauri::Runtime>(
     let page = beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
     let entry = beanfun::go_gamapass(&client, &page).await.map_err(map_err)?;
 
-    let mode = match (account, password) {
-        (Some(account), Some(password)) if !account.is_empty() && !password.is_empty() => {
-            gamapass::Mode::Autofill { account, password }
-        }
-        _ => gamapass::Mode::Manual,
+    let fill = gamapass::Fill {
+        account,
+        password: password.filter(|p| !p.is_empty()),
     };
 
-    match gamapass::wait_for_login(&app, &entry, mode).await? {
+    match gamapass::wait_for_login(&app, &entry, fill).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed => {
             let token = beanfun::complete_login(&client, &cookie_store, &skey)
