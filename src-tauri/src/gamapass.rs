@@ -186,8 +186,8 @@ pub async fn wait_for_login<R: Runtime>(
         .skip_taskbar(true)
         // ★位置不能交給 builder：tao 建視窗時，指定的位置不在任何一個螢幕上就整個
         // 丟掉、改用系統預設——無邊框視窗的預設就是螢幕左上角，使用者會看到對方的
-        // 頁面憑空冒出來（2026-09-19 實機）。所以先藏著建、建好再移出去、最後才
-        // 顯示；`set_position` 是直接的 SetWindowPos，沒有那道檢查。
+        // 頁面憑空冒出來（2026-09-19 實機）。所以先藏著建，建好再由
+        // `show_off_screen` 一步移出去並顯示——那裡說了為什麼不能拆成兩步。
         .focused(false)
         .visible(false)
         // 尺寸先照著之後要貼的那一塊：現身時版面才不會當著使用者的面重排一次。
@@ -538,8 +538,9 @@ const AUTOFILL_JS: &str = r##"(() => {
   // 其他帳號登入」與頁尾的條款在這裡只會讓他走岔。只在放手的時候藏——在那之前
   // 腳本自己還要按那顆按鈕（新增帳號、過期的帳號都從它走）。用樣式表而不是改
   // 元素：對方的框架重畫時，改在元素上的東西會被洗掉。
+  const onSelectAccount = () => /\/select-account$/.test(location.pathname.replace(/\/+$/, ""));
   const tidy = () => {
-    if (!/\/select-account$/.test(location.pathname.replace(/\/+$/, ""))) return;
+    if (!onSelectAccount()) return;
     // 清單上沒有他要的那個帳號時，「使用其他帳號登入」是唯一走得下去的路，留著。
     // 過期的那一列也一樣：點它只會再跳一次「已過期」。
     if (FRESH || recall("__kz_expired") || !rememberedRow()) return;
@@ -686,7 +687,7 @@ const AUTOFILL_JS: &str = r##"(() => {
       // 那份樣式只屬於選帳號頁；使用者從那裡走到別頁（點了過期的帳號會回登入頁）
       // 就拿掉，別頁的同名區塊不該跟著消失。
       const tidied = document.getElementById("__kz_tidy");
-      if (tidied && !/\/select-account$/.test(location.pathname.replace(/\/+$/, ""))) tidied.remove();
+      if (tidied && !onSelectAccount()) tidied.remove();
       return;
     }
     if (frame) return handOver("請完成圖形驗證");
@@ -718,7 +719,8 @@ const AUTOFILL_JS: &str = r##"(() => {
     // 沒見過的裝置，對方會先跳一個框說要驗證身分，按了「前往驗證」才發驗證碼、
     // 才進到輸入那一頁。這一下替使用者按：他按下登入就是要走到那裡。
     // 這個框只會出現在送出密碼或點了帳號之後，在那之前不必每一輪都掃整頁找它。
-    if (recall("__kz_sent") || recall("__kz_row")) {
+    // 驗證碼那一頁出現過之後它也不會再來，就不再找了——找它要掃整頁。
+    if ((recall("__kz_sent") || recall("__kz_row")) && !recall("__kz_code_seen")) {
       const go = labelled("前往驗證", true);
       if (go && presses("__kz_go_verify") >= 3) return handOver("請按「前往驗證」");
       if (pressOnce("__kz_go_verify", go, 5000)) return;
@@ -743,6 +745,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     // 要驗證碼：哪一頁問的都一樣處理。剛送出的那幾秒不回報，免得舊的錯誤訊息
     // 還掛在畫面上就被當成這一次的結果。
     if (codeBoxes().length) {
+      note("__kz_code_seen", "1");
       if (Date.now() - Number(recall("__kz_code_at") || 0) < 2500) return;
       return report("code", {
         sentTo: codeSentTo(), error: codeError(), attempt: Number(recall("__kz_code_n") || 0),

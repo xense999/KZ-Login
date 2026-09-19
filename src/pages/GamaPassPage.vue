@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { LoginGame, LoginResult } from "../stores/accounts";
+import { sameLoginAccount, type LoginGame, type LoginResult } from "../stores/accounts";
 
 // 從某張卡片按「重新登入」進來時，是那張卡片的 GamaPass 帳號；否則是空字串。
 const props = defineProps<{ initialAccount: string }>();
@@ -89,7 +89,12 @@ async function loadSaved() {
     saved.value = await invoke<Saved[]>("saved_gamapass");
     if (disposed) return;
     // 卡片指定的帳號優先：不然選單停在「上次用的」，一按登入就登進別的帳號去了。
-    const wanted = props.initialAccount || localStorage.getItem(LAST_KEY);
+    // 指定了卻不在清單裡（被刪了）就什麼都不預選，理由一樣——寧可讓他自己挑。
+    if (props.initialAccount) {
+      chosen.value = saved.value.find((s) => sameLoginAccount(s.account, props.initialAccount)) ?? null;
+      return;
+    }
+    const wanted = localStorage.getItem(LAST_KEY);
     chosen.value = saved.value.find((s) => s.account === wanted) ?? saved.value[saved.value.length - 1] ?? null;
   } catch { /* 沒記住就只剩新增 */ }
 }

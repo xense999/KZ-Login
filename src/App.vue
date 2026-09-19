@@ -191,7 +191,10 @@ function loginTarget(login: LoginResult): string | null {
   const stranger = started && started.gameAccounts.length > 0 && login.games.length > 0;
   const reauth = stranger ? undefined : started;
   if (!login.account) return reauth?.id ?? null;
-  if (reauth?.loginAccount && sameLoginAccount(reauth.loginAccount, login.account)) return reauth.id;
+  // 同一串字在 GamaPass 與 beanfun 是不同的人（見 `findByLoginAccount`），所以發起
+  // 的那張卡片也要是同一邊的才算。
+  const sameSide = (reauth?.loginMethod === "gamapass") === (login.method === "gamapass");
+  if (sameSide && reauth?.loginAccount && sameLoginAccount(reauth.loginAccount, login.account)) return reauth.id;
   const owner = store.findByLoginAccount(login.account, login.method);
   if (owner) return owner.id;
   return reauth && reauth.loginAccount === null ? reauth.id : null;

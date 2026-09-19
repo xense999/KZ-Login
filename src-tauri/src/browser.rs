@@ -272,9 +272,11 @@ struct BrowserState {
     active: u64,
     next_id: u64,
     cookies: Vec<WebviewCookie>,
-    /// 下一次注入之前要先把整個 cookie 儲存區清空（這一組視窗換了帳號）。第一個
-    /// 分頁注入時領走，之後的分頁只做同名替換。
-    wipe_pending: bool,
+    /// 這一組視窗的第一個分頁注入之前，要怎麼整理 cookie 儲存區。第一個分頁領走
+    /// 之後就是 `Keep`：之後的「+」分頁只注入、不刪——瀏覽期間網站自己發的同名
+    /// cookie（別的子網域的 `ASP.NET_SessionId` 之類）是使用者正在走的流程，刪了
+    /// 就把那個流程的 session 砍斷了。
+    tidy: Tidy,
     /// 哪一組視窗擁有現在這份狀態。`destroy()` 是排進主執行緒的，舊視窗的
     /// `Destroyed` 可能在下一組都建好之後才跑到——它一律清空 STATE 與
     /// `WINDOW_OWNER`，那就會把新視窗的 cookie 清掉（開出來直接是未登入，
@@ -282,12 +284,23 @@ struct BrowserState {
     generation: u64,
 }
 
+/// 注入之前對 cookie 儲存區做的事。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Tidy {
+    /// 什麼都不刪。
+    Keep,
+    /// 同一個帳號再開一次：只刪 beanfun 登入網址底下與注入批次**同名**的。
+    SameNames,
+    /// 換了帳號：整個清空。清成功了，儲存區才算是這個帳號的。
+    Everything { account: String },
+}
+
 static STATE: Mutex<BrowserState> = Mutex::new(BrowserState {
     tabs: Vec::new(),
     active: 0,
     next_id: 1,
     cookies: Vec::new(),
-    wipe_pending: false,
+    tidy: Tidy::Keep,
     generation: 0,
 });
 
@@ -743,9 +756,15 @@ pub fn open<R: Runtime>(
         state.tabs.clear();
         state.active = 0;
         state.cookies = cookies;
-        let mut owner = COOKIE_OWNER.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
-        state.wipe_pending = owner.as_deref() != Some(account_id);
-        *owner = Some(account_id.to_string());
+        // ★這裡只「判斷」，不登記：儲存區要等真的清空了才算換了主人。先登記的話，
+        // 這次開到一半失敗（清空沒發生），下一次再開同一個帳號就會被當成「沒換
+        // 帳號」，上一個人留下的東西就這樣留著了。
+        let owner = COOKIE_OWNER.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
+        state.tidy = if owner.as_deref() == Some(account_id) {
+            Tidy::SameNames
+        } else {
+            Tidy::Everything { account: account_id.to_string() }
+        };
     }
 
     // 工具列視窗先隱藏著開，套用記住的幾何、排好版面才顯示——否則會先閃一下預設
@@ -953,9 +972,9 @@ fn open_tab<R: Runtime>(
         // 手動開的分頁：cookie 注入完成才導向，網頁才不會在沒有登入態時先載入
         // 一次。注入是 profile 層級的，理論上注一次就夠，但注入便宜、到期時間又
         // 短（6h），每次開分頁都重注一次省得踩到過期。
-        let (cookies, wipe) = {
+        let (cookies, tidy) = {
             let mut state = STATE.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
-            (state.cookies.clone(), std::mem::take(&mut state.wipe_pending))
+            (state.cookies.clone(), std::mem::replace(&mut state.tidy, Tidy::Keep))
         };
         let expected = cookies.len();
         let nav_target = tab.clone();
@@ -980,13 +999,22 @@ fn open_tab<R: Runtime>(
             // 換了帳號：整個清空（見 `COOKIE_OWNER`）。清空是排進同一條佇列的，
             // 緊接著的注入一定在它後面。同一個帳號：只換掉同名的，他在這個瀏覽器裡
             // 登過的其他網站不受影響。
-            if wipe {
-                if let Err(e) = delete_all_cookies(&platform) {
-                    eprintln!("[browser] 換帳號時 cookie 清不掉：{e}");
+            match tidy {
+                Tidy::Everything { account } => {
+                    match delete_all_cookies(&platform) {
+                        Ok(()) => {
+                            if let Ok(mut owner) = COOKIE_OWNER.lock() {
+                                *owner = Some(account);
+                            }
+                        }
+                        Err(e) => eprintln!("[browser] 換帳號時 cookie 清不掉：{e}"),
+                    }
+                    seed(&platform);
                 }
-                seed(&platform);
-            } else {
-                clear_cookies_then(platform, SESSION_COOKIE_URLS, move |name| names.contains(name), seed);
+                Tidy::SameNames => {
+                    clear_cookies_then(platform, SESSION_COOKIE_URLS, move |name| names.contains(name), seed);
+                }
+                Tidy::Keep => seed(&platform),
             }
         })
         .map_err(|e| format!("注入登入資訊失敗：{e}"))?;
