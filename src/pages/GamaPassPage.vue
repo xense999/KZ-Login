@@ -4,6 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { LoginGame, LoginResult } from "../stores/accounts";
 
+// 從某張卡片按「重新登入」進來時，是那張卡片的 GamaPass 帳號；否則是空字串。
+const props = defineProps<{ initialAccount: string }>();
+
 const emit = defineEmits<{
   cancel: [];
   success: [login: LoginResult];
@@ -11,10 +14,20 @@ const emit = defineEmits<{
 }>();
 
 type Result =
-  | { status: "approved"; token: string; games: LoginGame[] }
+  | { status: "approved"; token: string; games: LoginGame[]; account: string | null }
   | { status: "cancelled" };
 
-type Saved = { account: string; password: string };
+type Saved = { account: string; password: string; nickname?: string };
+
+// 清單上顯示暱稱：手機號碼不適合當名字，也不適合出現在別人看得到的畫面上。
+// 暱稱要登入過一次才讀得到，在那之前先顯示帳號。
+// 兩個帳號暱稱一樣的時候補上帳號的尾巴，不然選單上是兩列一模一樣的字，選哪個、
+// 刪哪個都分不出來。
+function label(entry: Saved) {
+  if (!entry.nickname) return entry.account;
+  const twins = saved.value.filter((s) => s.nickname === entry.nickname).length > 1;
+  return twins ? `${entry.nickname} ···${entry.account.slice(-3)}` : entry.nickname;
+}
 
 // 登入在一顆看不見的視窗裡進行；它走到哪裡，後端用這個事件告訴我們。
 type Stage =
@@ -37,8 +50,20 @@ const menuOpen = ref(false);
 const pickerEl = ref<HTMLElement | null>(null);
 const regionEl = ref<HTMLElement | null>(null);
 
+// 標題旁的說明（選帳號、新增帳號兩頁共用同一個標題列），滑鼠移上去就顯示、移開
+// 就收。按鈕上不放 `title`：那會另外跳一個系統自己的提示，跟我們的疊在一起。
+const tipOpen = ref(false);
+const TIP_LINES = [
+  "若登入後，需要經由 Windows 驗證",
+  "請至網頁版於登入後在右下角【會員中心】中，選擇【會員資料】→【PassKey 管理】",
+  "將【優先使用 PassKey】關閉即可。",
+];
+
+// 新增帳號是另一頁：平常這一頁只有「選一個記住的帳號」，輸入框要按了才出現。
+const adding = ref(false);
 const account = ref("");
 const password = ref("");
+const accountInput = ref<HTMLInputElement | null>(null);
 
 const running = ref(false);
 const stage = ref<Stage>({ stage: "working" });
@@ -63,7 +88,8 @@ async function loadSaved() {
   try {
     saved.value = await invoke<Saved[]>("saved_gamapass");
     if (disposed) return;
-    const wanted = localStorage.getItem(LAST_KEY);
+    // 卡片指定的帳號優先：不然選單停在「上次用的」，一按登入就登進別的帳號去了。
+    const wanted = props.initialAccount || localStorage.getItem(LAST_KEY);
     chosen.value = saved.value.find((s) => s.account === wanted) ?? saved.value[saved.value.length - 1] ?? null;
   } catch { /* 沒記住就只剩新增 */ }
 }
@@ -142,8 +168,10 @@ async function login(entry: Saved, fresh: boolean) {
         token: result.token,
         games: result.games,
         method: "gamapass",
-        // 帳號是打進對方頁面的，不是我們的表單狀態能代表的登入身分（同 QR）。
-        account: null,
+        // 後端確定登進去的就是這個帳號時才會給（腳本一路做完）；頁面交給使用者
+        // 接手過的就不知道了，那時同 QR：null。有帳號，重複登入才會刷新原本那張
+        // 卡片，而不是再多一張。
+        account: result.account,
       });
       return;
     }
@@ -156,6 +184,14 @@ async function login(entry: Saved, fresh: boolean) {
       emit("busy", false);
     }
   }
+}
+
+function openAdd() {
+  errorMsg.value = "";
+  menuOpen.value = false;
+  tipOpen.value = false;
+  adding.value = true;
+  nextTick(() => accountInput.value?.focus());
 }
 
 function addAndLogin() {
@@ -185,15 +221,45 @@ async function sendCode() {
   }
 }
 
+// 取消一次退一層：登入中→停下來，新增帳號那一頁→回到選帳號，再按才離開。
 function onCancel() {
   if (running.value) invoke("gamapass_cancel").catch(() => { /* 已經結束了 */ });
-  else emit("cancel");
+  else if (adding.value) {
+    adding.value = false;
+    password.value = "";
+    errorMsg.value = "";
+  } else emit("cancel");
 }
 </script>
 
 <template>
   <div class="gp-page">
     <div ref="regionEl" class="gp-main">
+      <template v-if="!running">
+        <div class="gp-hd tip-host">
+          <h2>{{ adding ? "新增帳號" : "GamaPass 登入" }}</h2>
+          <button
+            type="button"
+            class="btn-tip"
+            :class="{ on: tipOpen }"
+            aria-label="說明"
+            @mouseenter="tipOpen = true"
+            @mouseleave="tipOpen = false"
+            @focus="tipOpen = true"
+            @blur="tipOpen = false"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+              <circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 11v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              <circle cx="12" cy="7.75" r="1.05" fill="currentColor"/>
+            </svg>
+          </button>
+          <div v-if="tipOpen" class="tip">
+            <div v-for="line in TIP_LINES" :key="line">{{ line }}</div>
+          </div>
+        </div>
+      </template>
+
       <template v-if="running">
         <template v-if="stage.stage === 'code'">
           <div class="gp-hd">
@@ -227,36 +293,10 @@ function onCancel() {
         </template>
       </template>
 
-      <template v-else>
-        <div class="gp-hd">
-          <h2>GamaPass 登入</h2>
-          <p>用遊戲橘子的帳號登入</p>
-        </div>
-
-        <div v-if="saved.length" class="form">
-          <div class="label">已記住的帳號</div>
-          <div class="row">
-            <div ref="pickerEl" class="field-wrap grow">
-              <button type="button" class="field picker" :class="{ on: menuOpen }" @click="menuOpen = !menuOpen">
-                <span class="menu-name">{{ chosen?.account ?? "選擇帳號" }}</span>
-                <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
-                  <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <ul v-if="menuOpen" class="menu">
-                <li v-for="entry in saved" :key="entry.account" class="menu-row" @click="pick(entry)">
-                  <span class="menu-name">{{ entry.account }}</span>
-                  <button type="button" class="menu-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
-                </li>
-              </ul>
-            </div>
-            <button class="btn-solid" :disabled="!chosen" @click="chosen && login(chosen, false)">登入</button>
-          </div>
-        </div>
-
+      <template v-else-if="adding">
         <div class="form">
-          <div class="label">新增帳號</div>
           <input
+            ref="accountInput"
             v-model="account"
             class="field"
             type="text"
@@ -273,17 +313,43 @@ function onCancel() {
             placeholder="密碼"
             @keyup.enter="addAndLogin"
           />
-          <button class="btn-add" :disabled="!canAdd" @click="addAndLogin">新增並登入</button>
           <div v-if="errorMsg" class="err">{{ errorMsg }}</div>
-          <div class="hint left">
-            第一次登入可能要輸入驗證碼，之後選帳號就能直接登入。帳號若開了「優先使用 Passkey」，請先到 gamapass 會員中心關掉，否則每次都要驗證。
+        </div>
+      </template>
+
+      <template v-else>
+        <div v-if="saved.length" class="form">
+          <div class="label">已記住的帳號</div>
+          <div ref="pickerEl" class="field-wrap">
+            <button type="button" class="field picker" :class="{ on: menuOpen }" @click="menuOpen = !menuOpen">
+              <span class="menu-name">{{ chosen ? label(chosen) : "選擇帳號" }}</span>
+              <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+                <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <ul v-if="menuOpen" class="menu">
+              <li v-for="entry in saved" :key="entry.account" class="menu-row" @click="pick(entry)">
+                <span class="menu-name">{{ label(entry) }}</span>
+                <button type="button" class="menu-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
+              </li>
+            </ul>
           </div>
+        </div>
+
+        <div class="form">
+          <button class="btn-add" @click="openAdd">新增帳號</button>
+          <div v-if="errorMsg" class="err">{{ errorMsg }}</div>
         </div>
       </template>
     </div>
 
     <div class="bottom-bar">
       <button class="btn-ghost" @click="onCancel">取消</button>
+      <template v-if="!running">
+        <button v-if="adding" class="btn-solid" :disabled="!canAdd" @click="addAndLogin">新增並登入</button>
+        <!-- 登入的是上面選單裡選的那個記住的帳號。 -->
+        <button v-else-if="saved.length" class="btn-solid" :disabled="!chosen" @click="chosen && login(chosen, false)">登入</button>
+      </template>
     </div>
   </div>
 </template>
@@ -301,8 +367,6 @@ function onCancel() {
 
 .form { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 280px; }
 .label { font-size: 12px; color: var(--text3); }
-.row { display: flex; gap: 8px; align-items: stretch; }
-.grow { flex: 1; min-width: 0; }
 .field-wrap { position: relative; }
 .field {
   width: 100%;
@@ -347,6 +411,33 @@ function onCancel() {
 }
 .menu-del:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
+.tip-host { position: relative; }
+.gp-hd.tip-host { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; max-width: 280px; }
+.btn-tip {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text3);
+  cursor: default;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-tip:hover, .btn-tip.on { background: var(--surface2); color: var(--text); }
+.tip {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 10;
+  padding: 10px 12px;
+  background: var(--ctx-menu-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--ctx-shadow);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  font-size: 12px; line-height: 1.7; color: var(--text2); text-align: left;
+  /* 說明是給人看的，不是給人點的：讓滑鼠穿過去，底下的按鈕照樣點得到。 */
+  pointer-events: none;
+}
 .btn-add {
   padding: 10px 16px;
   border: 1px solid var(--border);
@@ -361,7 +452,6 @@ function onCancel() {
 
 .status-txt { font-size: 13px; color: var(--text2); }
 .hint { font-size: 12px; color: var(--text3); text-align: center; line-height: 1.6; }
-.hint.left { text-align: left; }
 
 /* 同掃碼頁的等待指示器（scoped 樣式各自為政，共用的只有 main.css 的 token）。 */
 .spinner-lg {

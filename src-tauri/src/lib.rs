@@ -228,7 +228,10 @@ fn captcha_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 #[derive(serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum GamapassLoginResult {
-    Approved { token: String, games: Vec<GameAccount> },
+    /// `account` is the GamaPass account that is now signed in, when Gamania's
+    /// password page vouched for it. It is the fallback for telling which card
+    /// a login belongs to when the account has no game accounts to go by.
+    Approved { token: String, games: Vec<GameAccount>, account: Option<String> },
     Cancelled,
 }
 
@@ -284,10 +287,11 @@ async fn gamapass_login<R: tauri::Runtime>(
 
     match gamapass::wait_for_login(&app, &skey, &cookie_store, fill, region, ticket, on_stage).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
-        gamapass::Outcome::Completed { token, cookies, password_checked } => {
+        gamapass::Outcome::Completed { token, cookies, password_checked, nickname } => {
             // The sign-in happened in that window, so its cookies are the live
             // session — ours has to carry them from here on, or the very next
             // request is an anonymous one.
+            let cookies: Vec<_> = cookies.iter().map(browser::SeenCookie::as_set_cookie).collect();
             beanfun::adopt_cookies(&cookie_store, &cookies).map_err(map_err)?;
             gamapass::close_windows(&app);
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
@@ -301,7 +305,16 @@ async fn gamapass_login<R: tauri::Runtime>(
                     eprintln!("[credentials] {e}");
                 }
             }
-            Ok(GamapassLoginResult::Approved { token, games })
+            // After `remember`, so that an account added just now has an entry
+            // for the name to go on.
+            if let Some(nickname) = nickname {
+                if let Err(e) = credentials::name(&app, &account, credentials::LoginKind::Gamapass, &nickname) {
+                    eprintln!("[credentials] {e}");
+                }
+            }
+            // The account list shows its rows masked, so a row login is only
+            // probably this account; the password page is the one that checks.
+            Ok(GamapassLoginResult::Approved { token, games, account: password_checked.then_some(account) })
         }
     }
 }
@@ -408,6 +421,18 @@ mod win {
         };
         if ok == 0 { return None; }
         Some((r.left, r.top, r.right, r.bottom))
+    }
+
+    /// Move a hidden window to (`x`, `y`) and show it there without making it
+    /// the active one — a single `SetWindowPos`, so it is never on screen
+    /// anywhere else first. tauri's `show()` is `SW_SHOW`, which also hands the
+    /// window the keyboard.
+    pub fn show_at_without_activating(hwnd: windows_sys::Win32::Foundation::HWND, x: i32, y: i32) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        };
+        let flags = SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW;
+        unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), x, y, 0, 0, flags) };
     }
 
     /// Windows「設定 → 協助工具 → 文字大小」的倍率（1.0＝100%，最大 2.25）。

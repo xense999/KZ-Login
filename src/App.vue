@@ -168,15 +168,31 @@ async function onLoginSuccess(login: LoginResult) {
   page.value = "success";
 }
 
-// Which card a login refreshes, or null for a new card. The account typed is
-// what counts: re-login from card A into account B refreshes B's card (or adds
-// one) and leaves A alone. A QR login, or a card that never recorded its
-// account, cannot be told apart, so a re-login keeps the card it came from.
+// Which card a login refreshes, or null for a new card.
+//
+// The game accounts decide it: their serial numbers never change and belong to
+// one beanfun account only, so a card holding any of them is this account's —
+// however the login was made, and whichever card it was started from. Re-login
+// from card A into account B refreshes B's card (or adds one) and leaves A alone.
+//
+// Only an account with no game accounts yet falls back to the account typed,
+// and a login that carries neither (QR) to the card it was started from — unless
+// that card plainly belongs to someone else: it has game accounts, this login
+// has some too, and none of them match.
 function loginTarget(login: LoginResult): string | null {
-  const reauth = reauthAccountId.value ? store.accounts.find((a) => a.id === reauthAccountId.value) : undefined;
+  const started = reauthAccountId.value ? store.accounts.find((a) => a.id === reauthAccountId.value) : undefined;
+  // 同一個帳號若已經有兩張卡片（這條規則上線前留下的），從哪一張按重新登入就
+  // 刷新哪一張——不然排在後面那張永遠是過期的，怎麼登都救不回來。
+  const sns = new Set(login.games.map((g) => g.sn));
+  if (started?.gameAccounts.some((g) => sns.has(g.sn))) return started.id;
+  const owned = store.findByGames(login.games);
+  if (owned) return owned.id;
+
+  const stranger = started && started.gameAccounts.length > 0 && login.games.length > 0;
+  const reauth = stranger ? undefined : started;
   if (!login.account) return reauth?.id ?? null;
   if (reauth?.loginAccount && sameLoginAccount(reauth.loginAccount, login.account)) return reauth.id;
-  const owner = store.findByLoginAccount(login.account);
+  const owner = store.findByLoginAccount(login.account, login.method);
   if (owner) return owner.id;
   return reauth && reauth.loginAccount === null ? reauth.id : null;
 }
@@ -212,7 +228,7 @@ function onAccountSaved() {
       <MainPage v-if="page === 'main'" @add-account="onAddAccount" @reauth="onReauth" />
       <template v-else-if="page === 'login'">
         <QrPage v-if="loginMode === 'qr'" @cancel="cancelLogin" @success="onLoginSuccess" />
-        <GamaPassPage v-else-if="loginMode === 'gamapass'" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
+        <GamaPassPage v-else-if="loginMode === 'gamapass'" :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
         <PasswordPage v-else :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
       </template>
       <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />

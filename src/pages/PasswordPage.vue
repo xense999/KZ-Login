@@ -36,7 +36,7 @@ const menuOpen = ref(false);
 const busy = computed(() => phase.value !== "idle");
 const canSubmit = computed(() => !busy.value && account.value.trim() !== "" && password.value !== "");
 
-const hasCard = (name: string) => store.findByLoginAccount(name) !== undefined;
+const hasCard = (name: string) => store.findByLoginAccount(name, "password") !== undefined;
 
 onMounted(async () => {
   document.addEventListener("pointerdown", closeMenuOutside);

@@ -10,7 +10,7 @@
 - `password_login_start(account, password)` / `password_login_resume(captcha)` → `{ status: "approved", token, games } | { status: "captcha" } | { status: "rejected", message } | { status: "use_qr", message }`；網路錯誤走 `Err(String)`。
 - `saved_logins() -> { account, password }[]`、`forget_saved_login(account)`、`reorder_saved_logins(accounts)`：記住的帳密（見總表 `credentials` 條）。
 - `captcha_solve(palette, region) -> string | null`、`captcha_cancel()`：替暫停中的帳密登入開驗證視窗（site key 與頁面網址從暫停狀態取，前端不經手）。
-- `gamapass_login(account, password, fresh, region) -> { status: "approved", token, games } | { status: "cancelled" }`、`gamapass_code(code)`、`gamapass_cancel()`：GamaPass 帳號走遊戲橘子自己的登入頁，在一顆看不見的視窗裡進行（見總表 `gamapass` 條）。指令會一直 await 到登入完成或取消；期間的進度以 **`gamapass-stage` 事件**送給主視窗（`{ stage: "working" } | { stage: "code", sentTo, error, attempt } | { stage: "user" }`），事件名只寫在 `GAMAPASS_STAGE_EVENT`。`fresh`＝這是新增的帳號（密碼未經對方驗證，不走選帳號的捷徑）；`region` 是那顆視窗需要現身時要貼的位置，由登入頁量測。**只有對方驗過的密碼才會被記住**（`password_checked`，見總表 `gamapass` 條）。指令第一步就要拿 `gamapass::ticket()`，取消才追得上還沒開窗的登入。
+- `gamapass_login(account, password, fresh, region) -> { status: "approved", token, games, account } | { status: "cancelled" }`、`gamapass_code(code)`、`gamapass_cancel()`：GamaPass 帳號走遊戲橘子自己的登入頁，在一顆看不見的視窗裡進行（見總表 `gamapass` 條）。指令會一直 await 到登入完成或取消；期間的進度以 **`gamapass-stage` 事件**送給主視窗（`{ stage: "working" } | { stage: "code", sentTo, error, attempt } | { stage: "user" }`），事件名只寫在 `GAMAPASS_STAGE_EVENT`。`fresh`＝這是新增的帳號（密碼未經對方驗證，不走選帳號的捷徑）；`region` 是那顆視窗需要現身時要貼的位置，由登入頁量測。**只有對方驗過的密碼才會被記住**（`password_checked`，見總表 `gamapass` 條）。指令第一步就要拿 `gamapass::ticket()`，取消才追得上還沒開窗的登入。
 - `saved_gamapass() -> SavedLogin[]`、`forget_gamapass(account)`：GamaPass 記住的帳密，與 `saved_logins` 各自分流（見總表 `credentials` 條）。
 
 ## 單一來源

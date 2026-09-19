@@ -28,6 +28,11 @@ pub struct SavedLogin {
     pub password: String,
     #[serde(default)]
     pub kind: LoginKind,
+    /// What the account calls itself on the other side. Only there to be shown
+    /// in place of the account — a phone number is nobody's idea of a label —
+    /// and only known once a login has had the chance to read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
 }
 
 pub fn remember<R: Runtime>(
@@ -39,6 +44,21 @@ pub fn remember<R: Runtime>(
     let mut logins = list(app)?;
     upsert(&mut logins, account, password, kind);
     store(app, &logins)
+}
+
+/// Note what a saved account calls itself. Nothing happens for an account that
+/// is not saved: a nickname alone is not a login.
+pub fn name<R: Runtime>(
+    app: &AppHandle<R>,
+    account: &str,
+    kind: LoginKind,
+    nickname: &str,
+) -> Result<(), String> {
+    let mut logins = list(app)?;
+    if rename(&mut logins, account, kind, nickname) {
+        store(app, &logins)?;
+    }
+    Ok(())
 }
 
 /// Everything saved for one login. The beanfun dropdown and the GamaPass form
@@ -66,6 +86,20 @@ fn same_account(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+/// Whether anything changed — an unsaved account, an empty name, or the name it
+/// already has are all nothing to write.
+fn rename(logins: &mut [SavedLogin], account: &str, kind: LoginKind, nickname: &str) -> bool {
+    let nickname = nickname.trim();
+    let Some(login) = logins.iter_mut().find(|l| l.kind == kind && same_account(&l.account, account)) else {
+        return false;
+    };
+    if nickname.is_empty() || login.nickname.as_deref() == Some(nickname) {
+        return false;
+    }
+    login.nickname = Some(nickname.to_owned());
+    true
+}
+
 /// A known account keeps its place; a new one joins at the end.
 fn upsert(logins: &mut Vec<SavedLogin>, account: &str, password: &str, kind: LoginKind) {
     match logins.iter_mut().find(|l| l.kind == kind && same_account(&l.account, account)) {
@@ -77,6 +111,7 @@ fn upsert(logins: &mut Vec<SavedLogin>, account: &str, password: &str, kind: Log
             account: account.to_owned(),
             password: password.to_owned(),
             kind,
+            nickname: None,
         }),
     }
 }
@@ -175,11 +210,26 @@ mod tests {
     use super::*;
 
     fn saved(account: &str, password: &str) -> SavedLogin {
-        SavedLogin { account: account.into(), password: password.into(), kind: LoginKind::Beanfun }
+        SavedLogin { account: account.into(), password: password.into(), kind: LoginKind::Beanfun, nickname: None }
     }
 
     fn gamapass(account: &str, password: &str) -> SavedLogin {
-        SavedLogin { account: account.into(), password: password.into(), kind: LoginKind::Gamapass }
+        SavedLogin { account: account.into(), password: password.into(), kind: LoginKind::Gamapass, nickname: None }
+    }
+
+    #[test]
+    fn a_nickname_goes_on_the_saved_account_of_the_same_kind_only() {
+        let mut logins = vec![saved("0922", "a"), gamapass("0922", "b")];
+        assert!(rename(&mut logins, " 0922 ", LoginKind::Gamapass, " 雨 "));
+        assert_eq!(logins[0].nickname, None);
+        assert_eq!(logins[1].nickname.as_deref(), Some("雨"));
+        // Nothing to write: the same name again, no name, an account not saved.
+        assert!(!rename(&mut logins, "0922", LoginKind::Gamapass, "雨"));
+        assert!(!rename(&mut logins, "0922", LoginKind::Gamapass, "  "));
+        assert!(!rename(&mut logins, "0933", LoginKind::Gamapass, "風"));
+        // Saving the password again keeps the name.
+        upsert(&mut logins, "0922", "c", LoginKind::Gamapass);
+        assert_eq!(logins[1].nickname.as_deref(), Some("雨"));
     }
 
     fn names(logins: &[SavedLogin]) -> Vec<&str> {

@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{
-    AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindow,
+    AppHandle, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -53,7 +53,7 @@ const TIMEOUT: Duration = Duration::from_secs(600);
 /// Where the window waits while it is not needed. It has to be a shown window:
 /// a hidden one stops painting, the page's transitions never finish, and the
 /// dialogs the script is waiting for never open.
-const OFFSCREEN: (f64, f64) = (-20000.0, -20000.0);
+const OFFSCREEN: PhysicalPosition<i32> = PhysicalPosition { x: -20000, y: -20000 };
 
 /// On top of [`overlay::BROWSER_ARGS`]: keep the page running at full speed
 /// while it is parked off screen, where Chromium would otherwise count it as
@@ -66,11 +66,7 @@ const KEEP_AWAKE_FEATURE: &str = "CalculateNativeWinOcclusion";
 /// Left over from the previous login, these would let the portal short-cut
 /// this one. Gamania's own cookies are deliberately not on the list — they are
 /// what makes it remember the device.
-const STALE_COOKIE_URLS: &[&str] = &[
-    "https://tw.beanfun.com/",
-    "https://login.beanfun.com/",
-    "https://tw.newlogin.beanfun.com/",
-];
+const STALE_COOKIE_URLS: &[&str] = browser::SESSION_COOKIE_URLS;
 
 /// Where the finished login leaves its cookies. Read in this order; the token
 /// is normally on the portal itself.
@@ -136,7 +132,16 @@ pub enum Outcome {
     /// the way: the script submitted it and was never relieved by the user.
     /// A login through the account list, or one finished by hand, proves
     /// nothing about that password.
-    Completed { token: String, cookies: Vec<(String, String)>, password_checked: bool },
+    ///
+    /// `nickname` is what the account calls itself over there, when the script
+    /// got to read it — and not at all once the user took over, since the
+    /// account that ends up signed in may then be another one.
+    Completed {
+        token: String,
+        cookies: Vec<browser::SeenCookie>,
+        password_checked: bool,
+        nickname: Option<String>,
+    },
     /// Cancelled (see [`cancel`]), or nothing happened for [`TIMEOUT`].
     Cancelled,
 }
@@ -179,10 +184,12 @@ pub async fn wait_for_login<R: Runtime>(
         .shadow(false)
         .resizable(false)
         .skip_taskbar(true)
-        // 一開始就以「不搶焦點」的方式顯示在畫面外：事後再 `show()` 會把它啟用，
-        // 主視窗的鍵盤焦點就被帶走了。
+        // ★位置不能交給 builder：tao 建視窗時，指定的位置不在任何一個螢幕上就整個
+        // 丟掉、改用系統預設——無邊框視窗的預設就是螢幕左上角，使用者會看到對方的
+        // 頁面憑空冒出來（2026-09-19 實機）。所以先藏著建、建好再移出去、最後才
+        // 顯示；`set_position` 是直接的 SetWindowPos，沒有那道檢查。
         .focused(false)
-        .position(OFFSCREEN.0, OFFSCREEN.1)
+        .visible(false)
         // 尺寸先照著之後要貼的那一塊：現身時版面才不會當著使用者的面重排一次。
         .inner_size(region.width, region.height)
         .owner(&main)
@@ -197,6 +204,7 @@ pub async fn wait_for_login<R: Runtime>(
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
     overlay::disable_tracking_prevention(&window);
+    show_off_screen(&window);
     // 資料夾是重用的，上一次登入的 token 可能還在裡面；清除是盡力而為、而且是
     // 非同步的，所以先記下它，之後只認「不是這一顆」的 token。
     let stale_token = read_token(&window, HARVEST_URLS[0]).map(|(token, _)| token);
@@ -206,6 +214,7 @@ pub async fn wait_for_login<R: Runtime>(
     let mut last_ask = Instant::now();
     let mut stage = Stage::Working;
     let mut password_sent = false;
+    let mut nickname: Option<String> = None;
     let outcome = loop {
         if started.elapsed() >= TIMEOUT || ticket != self::ticket() {
             break Outcome::Cancelled;
@@ -226,11 +235,24 @@ pub async fn wait_for_login<R: Runtime>(
             };
             last_ask = Instant::now();
             let Ok((harvested, report)) = asked else { continue };
-            if let Some((token, cookies)) = harvested {
-                let password_checked = password_sent && stage != Stage::User;
-                break Outcome::Completed { token, cookies, password_checked };
-            }
+            // 先收這一輪的回報再看 token：兩個同一輪到手的時候，暱稱不該因為
+            // 先跳出去而丟掉。
             password_sent |= report.as_ref().is_some_and(|r| r.sent);
+            if let Some(nick) = report.as_ref().map(|r| r.nick.trim()).filter(|n| !n.is_empty()) {
+                nickname = Some(nick.to_owned());
+            }
+            if let Some((token, cookies)) = harvested {
+                // 這一輪才回報「已放手」的也算放手：回報跟 token 可能同一輪到手。
+                let handed_over = stage == Stage::User
+                    || report.as_ref().is_some_and(|r| r.stage == Stage::User);
+                let by_script = !handed_over;
+                break Outcome::Completed {
+                    token,
+                    cookies,
+                    password_checked: password_sent && by_script,
+                    nickname: nickname.filter(|_| by_script),
+                };
+            }
             // 放手之後就不再收回來：頁面已經交給使用者了，中途又把它藏起來只會讓
             // 他打到一半的東西憑空消失。
             if stage != Stage::User {
@@ -296,6 +318,23 @@ pub fn close_windows<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Put the window at [`OFFSCREEN`] and show it there, in one step and without
+/// handing it the keyboard.
+///
+/// One step, because tauri's `set_position` is only a message to the main
+/// thread: showing the window right after it can come first, and the page then
+/// appears in the corner of the screen. And `show()` would activate it, while
+/// the main window is where the user is typing.
+fn show_off_screen<R: Runtime>(window: &WebviewWindow<R>) {
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        crate::win::show_at_without_activating(hwnd.0 as _, OFFSCREEN.x, OFFSCREEN.y);
+        return;
+    }
+    let _ = window.set_position(OFFSCREEN);
+    let _ = window.show();
+}
+
 fn browser_args() -> String {
     let shared = overlay::BROWSER_ARGS.replacen(
         "--disable-features=",
@@ -313,12 +352,20 @@ struct Report {
     /// The password has been submitted to Gamania's password page.
     #[serde(default)]
     sent: bool,
+    /// The account's nickname, once the script has come across it.
+    #[serde(default)]
+    nick: String,
 }
 
 /// `None` while there is nothing to hear — the page is between documents, or
 /// on a host the script stays off.
 fn ask<R: Runtime>(window: &WebviewWindow<R>) -> Option<Report> {
-    let json = browser::eval_json(window, "window.__kz || null")?;
+    // 順手告訴腳本「這一份我讀到了」：暱稱只在頁面離開之前讀得到，腳本會等到
+    // 這個記號才按下會讓頁面離開的那顆按鈕。
+    let json = browser::eval_json(
+        window,
+        "(() => { const r = window.__kz || null; if (r) window.__kzHeard = r.nick || \"\"; return r; })()",
+    )?;
     serde_json::from_str::<Option<Report>>(&json).ok().flatten()
 }
 
@@ -452,9 +499,13 @@ const AUTOFILL_JS: &str = r##"(() => {
     const at = Number(recall(key) || 0);
     if (at && Date.now() - at < (every || 2500)) return true;
     note(key, String(Date.now()));
+    note(key + "_n", String(Number(recall(key + "_n") || 0) + 1));
     press(el);
     return true;
   };
+  // 按了幾次。用在「按了就 return」的地方：按不動的按鈕會讓那個 return 每一輪都
+  // 發生，後面的卡住檢查永遠輪不到，所以要自己數、到頂就放手。
+  const presses = (key) => Number(recall(key + "_n") || 0);
 
   // 現身之後使用者看得到這一行，所以直接告訴他為什麼輪到他。
   const say = (text) => {
@@ -473,14 +524,31 @@ const AUTOFILL_JS: &str = r##"(() => {
   };
 
   const report = (stage, extra) => {
-    window.__kz = Object.assign({ stage, sent: !!recall("__kz_sent") }, extra || {});
+    window.__kz = Object.assign(
+      { stage, sent: !!recall("__kz_sent"), nick: recall("__kz_nick") || "" }, extra || {});
   };
   report("working");
 
   // 放手：之後這一頁是使用者的。passkey 的推銷照樣替他婉拒——那是唯一一個
   // 按錯了就回不來的地方。
   let handedOver = false;
-  const handOver = (why) => { handedOver = true; say(why); report("user"); };
+  const handOver = (why) => { handedOver = true; tidy(); say(why); report("user"); };
+
+  // 選帳號那一頁交給使用者時，只留帳號清單：他是來點自己選的那個帳號的，「使用
+  // 其他帳號登入」與頁尾的條款在這裡只會讓他走岔。只在放手的時候藏——在那之前
+  // 腳本自己還要按那顆按鈕（新增帳號、過期的帳號都從它走）。用樣式表而不是改
+  // 元素：對方的框架重畫時，改在元素上的東西會被洗掉。
+  const tidy = () => {
+    if (!/\/select-account$/.test(location.pathname.replace(/\/+$/, ""))) return;
+    // 清單上沒有他要的那個帳號時，「使用其他帳號登入」是唯一走得下去的路，留著。
+    // 過期的那一列也一樣：點它只會再跳一次「已過期」。
+    if (FRESH || recall("__kz_expired") || !rememberedRow()) return;
+    if (document.getElementById("__kz_tidy")) return;
+    const style = document.createElement("style");
+    style.id = "__kz_tidy";
+    style.textContent = "#main > .text-align-center, #footer { display: none !important; }";
+    document.head.appendChild(style);
+  };
 
   // 登入成功後對方會問要不要改用 passkey。答應了，這個帳號以後就只走 passkey，
   // 再也到不了密碼那一頁，也就再也不會被記住。
@@ -520,12 +588,50 @@ const AUTOFILL_JS: &str = r##"(() => {
       return true;
     });
   };
+  // 這個帳號在對方那邊的暱稱，給我們的清單顯示用（手機號碼不適合當名字）。
+  // 兩個來源：選帳號那一列上寫著；密碼登入之後，對方頁面自己的狀態裡也有。
+  // 後者是摸對方的內部結構，摸不到就算了，下次走選帳號那條時再補上。
+  // 對方的清單項目依序是：標題（遮罩帳號）、內容（暱稱）、尾巴（過期才有的
+  // 「已過期」）。所以暱稱就是緊接在遮罩帳號後面的那一段字，別的都不算——沒設
+  // 暱稱的帳號那一段是空的，這時寧可沒有，也不要撿別的字來當。
+  const rowNickname = (row) => {
+    const leaves = [...row.querySelectorAll("*")].filter((el) =>
+      !el.children.length && (el.textContent || "").trim());
+    const next = leaves[leaves.indexOf(maskedLeaf(row)) + 1];
+    const text = next ? next.textContent.trim() : "";
+    return /過期/.test(text) ? "" : text;
+  };
+  const profileNickname = () => {
+    try {
+      const app = document.getElementById("__nuxt").__vue_app__;
+      const data = app.config.globalProperties.$pinia.state.value.data;
+      const profile = (data.state || data).user.profile;
+      return (profile.openId || profile.nickname) && typeof profile.nickname === "string"
+        ? profile.nickname.trim() : "";
+    } catch (e) { return ""; }
+  };
+
+  // 每一列裡寫著遮罩帳號的那個元素。要點的就是它，不是外層那一列：click 綁在
+  // 哪一層是對方元件的事（讀對方原始碼：外層的 role=button 只綁了 Enter 鍵，click 在
+  // 裡面的清單項目元件上——點外層什麼都不會發生），而事件只會往上冒泡
+  // ——從最裡面點，不管綁在哪一層都收得到。
+  const maskedLeaf = (row) => [...row.querySelectorAll("*")].find((el) =>
+    !el.children.length && (el.textContent || "").includes("*") && matchesMask(el.textContent));
   const rememberedRow = () => {
-    const rows = [...document.querySelectorAll("#main [role=button]")].filter(visible).filter((row) =>
-      [...row.querySelectorAll("*")].some((el) =>
-        !el.children.length && (el.textContent || "").includes("*") && matchesMask(el.textContent)));
+    const rows = [...document.querySelectorAll("#main [role=button]")].filter(visible).filter(maskedLeaf);
     // 兩列都對得上就不猜：寧可走一次密碼，也不要登進別人的帳號。
     return rows.length === 1 ? rows[0] : null;
+  };
+
+  // 暱稱讀到了、但後端還沒來得及讀走之前，先不要按會讓頁面離開的按鈕——頁面一走
+  // 暱稱就跟著沒了，清單上就只剩電話號碼。後端每次來問都會留下 `__kzHeard`；
+  // 等不到也不能一直等，登入比暱稱重要。
+  let nickSince = 0;
+  const nickDelivered = () => {
+    const nick = recall("__kz_nick");
+    if (!nick || window.__kzHeard === nick) return true;
+    if (!nickSince) nickSince = Date.now();
+    return Date.now() - nickSince > 2500;
   };
 
   // 圖形驗證的框是 reCAPTCHA 自己排的（約 400×580），常被擺到畫面外；把它固定在
@@ -576,7 +682,13 @@ const AUTOFILL_JS: &str = r##"(() => {
     const frame = ON_GAMANIA && challenge();
     if (frame) fitChallenge(frame);
     if (ON_GAMANIA && declinePasskey()) return;
-    if (handedOver) return;
+    if (handedOver) {
+      // 那份樣式只屬於選帳號頁；使用者從那裡走到別頁（點了過期的帳號會回登入頁）
+      // 就拿掉，別頁的同名區塊不該跟著消失。
+      const tidied = document.getElementById("__kz_tidy");
+      if (tidied && !/\/select-account$/.test(location.pathname.replace(/\/+$/, ""))) tidied.remove();
+      return;
+    }
     if (frame) return handOver("請完成圖形驗證");
 
     const path = location.pathname.replace(/\/+$/, "").toLowerCase();
@@ -603,12 +715,29 @@ const AUTOFILL_JS: &str = r##"(() => {
       return;
     }
 
+    // 沒見過的裝置，對方會先跳一個框說要驗證身分，按了「前往驗證」才發驗證碼、
+    // 才進到輸入那一頁。這一下替使用者按：他按下登入就是要走到那裡。
+    // 這個框只會出現在送出密碼或點了帳號之後，在那之前不必每一輪都掃整頁找它。
+    if (recall("__kz_sent") || recall("__kz_row")) {
+      const go = labelled("前往驗證", true);
+      if (go && presses("__kz_go_verify") >= 3) return handOver("請按「前往驗證」");
+      if (pressOnce("__kz_go_verify", go, 5000)) return;
+    }
+
     // 對方跳了一個要人按「確定」的框：密碼錯、驗證碼過期、帳號被鎖、或別的我們
     // 沒料到的話。不替使用者按掉——那些字是寫給他看的。選帳號頁的「已過期」是
     // 例外，那個我們知道怎麼接。
     const notice = [...document.querySelectorAll("[role=dialog], .el-message-box")].find(visible);
     if (notice && path !== "/login/select-account" && labelled("確定", true)) {
       return handOver("請看畫面上的訊息");
+    }
+
+    // 只在登入完成的那一頁讀：在那之前（密碼剛送出、還在等驗證碼）頁面上的個人
+    // 資料可能還是上一個帳號的——資料夾是重用的。不經過這一頁的登入就不讀，下次
+    // 走選帳號那條時，列上寫的那個才是準的。
+    if (recall("__kz_sent") && !recall("__kz_nick") && /\/finished$/.test(path)) {
+      const nick = profileNickname();
+      if (nick) note("__kz_nick", nick);
     }
 
     // 要驗證碼：哪一頁問的都一樣處理。剛送出的那幾秒不回報，免得舊的錯誤訊息
@@ -628,7 +757,12 @@ const AUTOFILL_JS: &str = r##"(() => {
         if (ok) { note("__kz_expired", "1"); return void pressOnce("__kz_expired_ok", ok); }
       }
       const row = FRESH || recall("__kz_expired") ? null : rememberedRow();
-      if (row) { pressOnce("__kz_row", row, 6000); }
+      if (row) {
+        const nick = rowNickname(row);
+        if (nick) note("__kz_nick", nick);
+        report("working");
+        if (nickDelivered()) pressOnce("__kz_row", maskedLeaf(row), 6000);
+      }
       else if (document.querySelector("#main [role=button]")) {
         pressOnce("__kz_other", labelled("使用其他帳號登入"));
       }
@@ -670,6 +804,17 @@ const AUTOFILL_JS: &str = r##"(() => {
       return;
     }
 
+    // 驗證完成的那一頁不會自己走：要按「回到 <服務名稱>」，對方才把人送回
+    // beanfun、token 才會發下來。服務名稱是對方填的，所以只認前面那兩個字加空白
+    // （「回到會員中心」沒有空白，不會被誤按）。
+    if (/\/finished$/.test(path)) {
+      const back = [...document.querySelectorAll("button, [role=button]")].find((el) =>
+        visible(el) && !disabled(el) && (el.textContent || "").trim().startsWith("回到 "));
+      if (nickDelivered()) pressOnce("__kz_back", back, 5000);
+      if (stuck(path, 20000)) handOver("請按「回到」那顆按鈕");
+      return;
+    }
+
     // 其餘的頁面（授權中轉、登入完成的過場）只是路過。停太久才是有事。
     if (stuck(path, 15000)) handOver("這一步請你自己來");
   }, 300);
@@ -684,7 +829,7 @@ const AUTOFILL_JS: &str = r##"(() => {
 fn harvest<R: Runtime>(
     window: &WebviewWindow<R>,
     stale: Option<&str>,
-) -> Option<(String, Vec<(String, String)>)> {
+) -> Option<(String, Vec<browser::SeenCookie>)> {
     // 讀 cookie 是同步等一個跑在主執行緒的回呼，所以第一個網域沒有 token 就先
     // 收手——token 幾乎都在 portal 上，其餘兩個只在真的成功時才需要一起帶走。
     let (token, first) = read_token(window, HARVEST_URLS[0])?;
@@ -695,9 +840,12 @@ fn harvest<R: Runtime>(
     let mut all = first;
     for url in &HARVEST_URLS[1..] {
         let Ok(cookies) = browser::read_cookies(window, url) else { continue };
-        for (name, value) in cookies {
-            if !all.iter().any(|(n, _)| n == &name) {
-                all.push((name, value));
+        // 同一顆 cookie 會在好幾個網址底下都被列出來（`.beanfun.com` 的那些）；
+        // 同名但住在不同網域的則是不同的 cookie，兩顆都要。
+        for cookie in cookies {
+            let known = all.iter().any(|c| (&c.name, &c.domain, &c.path) == (&cookie.name, &cookie.domain, &cookie.path));
+            if !known {
+                all.push(cookie);
             }
         }
     }
@@ -708,12 +856,12 @@ fn harvest<R: Runtime>(
 fn read_token<R: Runtime>(
     window: &WebviewWindow<R>,
     url: &str,
-) -> Option<(String, Vec<(String, String)>)> {
+) -> Option<(String, Vec<browser::SeenCookie>)> {
     let cookies = browser::read_cookies(window, url).ok()?;
     let token = cookies
         .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case(TOKEN_COOKIE))
-        .map(|(_, v)| v.clone())
+        .find(|c| c.name.eq_ignore_ascii_case(TOKEN_COOKIE))
+        .map(|c| c.value.clone())
         .filter(|v| !v.is_empty())?;
     Some((token, cookies))
 }
@@ -726,13 +874,17 @@ mod tests {
     fn reads_what_the_script_reports() {
         let parse = |s: &str| serde_json::from_str::<Option<Report>>(s).unwrap();
         assert_eq!(parse("null"), None);
-        assert_eq!(parse(r#"{"stage":"working"}"#), Some(Report { stage: Stage::Working, sent: false }));
-        assert_eq!(parse(r#"{"stage":"user","sent":true}"#), Some(Report { stage: Stage::User, sent: true }));
+        assert_eq!(parse(r#"{"stage":"working"}"#), Some(Report { stage: Stage::Working, sent: false, nick: String::new() }));
+        assert_eq!(
+            parse(r#"{"stage":"user","sent":true,"nick":"風"}"#),
+            Some(Report { stage: Stage::User, sent: true, nick: "風".into() })
+        );
         assert_eq!(
             parse(r#"{"stage":"code","sent":true,"sentTo":"+886 922 313 293","error":"","attempt":1}"#),
             Some(Report {
                 stage: Stage::Code { sent_to: "+886 922 313 293".into(), error: String::new(), attempt: 1 },
                 sent: true,
+                nick: String::new(),
             })
         );
     }

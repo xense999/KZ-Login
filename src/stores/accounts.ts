@@ -43,8 +43,22 @@ export const useAccountsStore = defineStore("accounts", () => {
   const accounts = ref<BeanfunAccount[]>([]);
   const lastUsedSn = ref<string | null>(null);
 
-  function findByLoginAccount(account: string): BeanfunAccount | undefined {
-    return accounts.value.find((a) => a.loginAccount !== null && sameLoginAccount(a.loginAccount, account));
+  // 哪張卡片是這批遊戲帳號的主人。遊戲帳號的 `sn` 是 beanfun 發的序號，不會變、
+  // 也不會屬於兩個 beanfun 帳號，所以只要有一個對得上就是同一個帳號——不管這次
+  // 是掃碼、打帳密還是 GamaPass 登入的，也不管暱稱、信箱、手機後來改成什麼。
+  function findByGames(games: { sn: string }[]): BeanfunAccount | undefined {
+    const sns = new Set(games.map((g) => g.sn));
+    return accounts.value.find((a) => a.gameAccounts.some((g) => sns.has(g.sn)));
+  }
+
+  // GamaPass 帳號與 beanfun 帳號是兩個名字空間：同一串字（例如一支手機號碼）在
+  // 兩邊是不同的人，所以找卡片時登入方式也要同一邊。
+  function findByLoginAccount(account: string, method: LoginMethod): BeanfunAccount | undefined {
+    const gamapass = method === "gamapass";
+    return accounts.value.find((a) =>
+      a.loginAccount !== null &&
+      (a.loginMethod === "gamapass") === gamapass &&
+      sameLoginAccount(a.loginAccount, account));
   }
 
   function markUsed(sn: string) {
@@ -98,9 +112,14 @@ export const useAccountsStore = defineStore("accounts", () => {
     if (!acc) return;
     const { token, games: newGames } = login;
     acc.token = token;
+    // A login that names no account (QR, or a GamaPass one the user finished by
+    // hand) keeps the one we had — unless the card is changing sides: GamaPass
+    // and beanfun accounts are separate namespaces, and a name kept across would
+    // be looked up in the wrong one.
+    const switchedSides = (acc.loginMethod === "gamapass") !== (login.method === "gamapass");
     acc.loginMethod = login.method;
-    // A QR login says nothing about the typed account, so keep the one we had.
     if (login.account) acc.loginAccount = login.account;
+    else if (switchedSides) acc.loginAccount = null;
     const existingMap = new Map(acc.gameAccounts.map((g) => [g.sn, g]));
     const newMap = new Map(newGames.map((g) => [g.sn, g]));
     // Preserve existing custom order; append new accounts sorted by sn
@@ -117,5 +136,5 @@ export const useAccountsStore = defineStore("accounts", () => {
     acc.gameAccounts = [...preserved, ...added];
   }
 
-  return { accounts, lastUsedSn, findByLoginAccount, markUsed, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
+  return { accounts, lastUsedSn, findByGames, findByLoginAccount, markUsed, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
 });

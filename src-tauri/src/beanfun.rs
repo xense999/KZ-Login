@@ -330,22 +330,29 @@ pub async fn complete_login(
 /// Put cookies harvested from a webview into `store`, as if our own requests
 /// had received them. Used by the GamaPass login, where the sign-in happens in
 /// a window of its own and its session is the only one that counts afterwards.
+///
+/// Each cookie comes as the `Set-Cookie` line that made it and the URL that
+/// sent it, so it lands in the jar under the domain and path it really has.
+/// ★They must not all be filed under the portal host: the jar is later copied
+/// into the account browser, where a `bfUID` wrongly filed under
+/// `tw.beanfun.com` sits next to the real one on `.beanfun.com`, neither
+/// replacing the other, and beanfun — handed both — treats the visitor as
+/// signed out. That stayed behind in the browser's shared folder and broke
+/// every later login's browser too, QR included (v2.4.0).
 pub fn adopt_cookies(
     store: &Arc<CookieStoreMutex>,
     cookies: &[(String, String)],
 ) -> Result<(), BeanfunError> {
-    // The domain is not recorded per cookie on the way out; attaching them to
-    // the portal host is what the later requests need, and a cookie the portal
-    // did not set is harmless there.
-    let url: reqwest::Url = PORTAL_BASE
-        .parse()
-        .map_err(|e| BeanfunError::Parse(format!("portal 網址錯誤：{e}")))?;
     let mut jar = store
         .lock()
         .map_err(|_| BeanfunError::Parse("Cookie store mutex poisoned".into()))?;
-    for (name, value) in cookies {
-        let raw = format!("{name}={value}; Path=/");
-        if let Err(e) = jar.parse(&raw, &url) {
+    for (line, origin) in cookies {
+        let name = line.split('=').next().unwrap_or_default();
+        let Ok(url) = origin.parse::<reqwest::Url>() else {
+            eprintln!("[beanfun] 收不下 cookie {name}：來源網址不成立");
+            continue;
+        };
+        if let Err(e) = jar.parse(line, &url) {
             eprintln!("[beanfun] 收不下 cookie {name}：{e}");
         }
     }
@@ -1265,6 +1272,35 @@ async fn probe_with_session(cookie_store: &Arc<CookieStoreMutex>) -> SessionStat
         Err(_) => return SessionState::Unknown,
     };
     token_state(&client).await
+}
+
+#[cfg(test)]
+mod adopt_tests {
+    use super::*;
+
+    /// A harvested cookie keeps its own domain in the jar: the cross-subdomain
+    /// one reaches every beanfun host, the host-only one stays on its host, and
+    /// nothing is filed under the portal that did not come from it.
+    #[test]
+    fn adopted_cookies_keep_their_domains() {
+        let (_, store) = build_client_with_store().unwrap();
+        adopt_cookies(&store, &[
+            ("bfUID=a; Path=/; Domain=beanfun.com; Secure; HttpOnly".into(), "https://beanfun.com/".into()),
+            ("GamaLoginSession=b; Path=/; Secure".into(), "https://login.beanfun.com/".into()),
+        ])
+        .unwrap();
+
+        let jar = store.lock().unwrap();
+        let names = |url: &str| -> Vec<String> {
+            let url: reqwest::Url = url.parse().unwrap();
+            let mut names: Vec<String> = jar.matches(&url).iter().map(|c| c.name().to_string()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names("https://tw.beanfun.com/"), ["bfUID"]);
+        assert_eq!(names("https://tw.newlogin.beanfun.com/"), ["bfUID"]);
+        assert_eq!(names("https://login.beanfun.com/"), ["GamaLoginSession", "bfUID"]);
+    }
 }
 
 #[cfg(test)]

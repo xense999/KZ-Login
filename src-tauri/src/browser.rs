@@ -94,6 +94,13 @@ const DEFAULT_H: f64 = 720.0;
 const MIN_W: f64 = 720.0;
 const MIN_H: f64 = 480.0;
 
+/// beanfun 的登入態散在這三個網址底下。要清舊的、要撈新的，都是問這三個。
+pub(crate) const SESSION_COOKIE_URLS: &[&str] = &[
+    "https://tw.beanfun.com/",
+    "https://login.beanfun.com/",
+    "https://tw.newlogin.beanfun.com/",
+];
+
 /// 瀏覽器開啟後與「+」新分頁的起始頁。
 const HOME_URL: &str = "https://tw.beanfun.com/";
 
@@ -265,6 +272,9 @@ struct BrowserState {
     active: u64,
     next_id: u64,
     cookies: Vec<WebviewCookie>,
+    /// 下一次注入之前要先把整個 cookie 儲存區清空（這一組視窗換了帳號）。第一個
+    /// 分頁注入時領走，之後的分頁只做同名替換。
+    wipe_pending: bool,
     /// 哪一組視窗擁有現在這份狀態。`destroy()` 是排進主執行緒的，舊視窗的
     /// `Destroyed` 可能在下一組都建好之後才跑到——它一律清空 STATE 與
     /// `WINDOW_OWNER`，那就會把新視窗的 cookie 清掉（開出來直接是未登入，
@@ -277,6 +287,7 @@ static STATE: Mutex<BrowserState> = Mutex::new(BrowserState {
     active: 0,
     next_id: 1,
     cookies: Vec::new(),
+    wipe_pending: false,
     generation: 0,
 });
 
@@ -545,6 +556,14 @@ fn relayout_tabs<R: Runtime>(app: &AppHandle<R>) {
 /// cookie 儲存區，兩個帳號同時開會互相踩掉登入態），所以這裡就是單一狀態。
 static WINDOW_OWNER: Mutex<Option<String>> = Mutex::new(None);
 
+/// 共用的 cookie 儲存區現在裝的是哪個帳號的東西。`None`＝不知道（程式剛啟動，
+/// 資料夾裡留著的是上一次執行時最後開的那個帳號）。
+///
+/// 換了帳號就整個清空再注入：beanfun 的登入 cookie 我們認得、可以逐顆換掉，但
+/// 活動頁那類子網域會發自己的 session cookie，名字、網域都不在我們手上——留著，
+/// 下一個帳號開同一頁就可能沿用上一個人的 session。
+static COOKIE_OWNER: Mutex<Option<String>> = Mutex::new(None);
+
 /// 有一組視窗正在建、但還沒顯示出來。這段期間它答不出「我看得見」，沒有這個旗標
 /// 就會被下一次開啟當成幽靈砍掉。
 static OPENING: AtomicBool = AtomicBool::new(false);
@@ -724,6 +743,9 @@ pub fn open<R: Runtime>(
         state.tabs.clear();
         state.active = 0;
         state.cookies = cookies;
+        let mut owner = COOKIE_OWNER.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
+        state.wipe_pending = owner.as_deref() != Some(account_id);
+        *owner = Some(account_id.to_string());
     }
 
     // 工具列視窗先隱藏著開，套用記住的幾何、排好版面才顯示——否則會先閃一下預設
@@ -931,21 +953,41 @@ fn open_tab<R: Runtime>(
         // 手動開的分頁：cookie 注入完成才導向，網頁才不會在沒有登入態時先載入
         // 一次。注入是 profile 層級的，理論上注一次就夠，但注入便宜、到期時間又
         // 短（6h），每次開分頁都重注一次省得踩到過期。
-        let cookies = {
-            let state = STATE.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
-            state.cookies.clone()
+        let (cookies, wipe) = {
+            let mut state = STATE.lock().map_err(|_| "瀏覽器狀態鎖損壞".to_string())?;
+            (state.cookies.clone(), std::mem::take(&mut state.wipe_pending))
         };
         let expected = cookies.len();
         let nav_target = tab.clone();
+        // ★注入之前，先把儲存區裡**同名**的舊 cookie 都拿掉，不管它掛在哪個網域。
+        // 這個資料夾是所有帳號、所有 session 共用的，而注入只蓋得掉「名稱＋網域＋
+        // 路徑」都一樣的那一顆：上一個 session 若把 `bfUID` 留在 `tw.beanfun.com`，
+        // 這一次注進 `.beanfun.com` 的那顆蓋不到它，beanfun 就同時收到新舊兩個
+        // `bfUID`，判成未登入（2026-09-19 實機：GamaPass 登入留下的錯位 cookie
+        // 讓之後的 QR 登入開出來全是未登入）。要進來的那批才是現在登入的人。
+        let names: std::collections::HashSet<String> = cookies.iter().map(|c| c.name.clone()).collect();
         tab.with_webview(move |platform| {
-            // 注入在主執行緒非同步跑，錯誤沒辦法回傳給呼叫端；印出來至少實機驗收
-            // 時查得到——「網頁停在未登入首頁」的成因就在這行的結果裡。
-            match inject_cookies(&platform, &cookies) {
-                Ok(n) if n == expected => {}
-                Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
-                Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
+            let seed = move |platform: &tauri::webview::PlatformWebview| {
+                // 注入在主執行緒非同步跑，錯誤沒辦法回傳給呼叫端；印出來至少實機
+                // 驗收時查得到——「網頁停在未登入首頁」的成因就在這行的結果裡。
+                match inject_cookies(platform, &cookies) {
+                    Ok(n) if n == expected => {}
+                    Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
+                    Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
+                }
+                let _ = nav_target.navigate(target);
+            };
+            // 換了帳號：整個清空（見 `COOKIE_OWNER`）。清空是排進同一條佇列的，
+            // 緊接著的注入一定在它後面。同一個帳號：只換掉同名的，他在這個瀏覽器裡
+            // 登過的其他網站不受影響。
+            if wipe {
+                if let Err(e) = delete_all_cookies(&platform) {
+                    eprintln!("[browser] 換帳號時 cookie 清不掉：{e}");
+                }
+                seed(&platform);
+            } else {
+                clear_cookies_then(platform, SESSION_COOKIE_URLS, move |name| names.contains(name), seed);
             }
-            let _ = nav_target.navigate(target);
         })
         .map_err(|e| format!("注入登入資訊失敗：{e}"))?;
     }
@@ -988,12 +1030,33 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
                 }
                 let _ = nav_target.navigate(target);
             };
-            clear_cookies_then(platform, stale, seed);
+            clear_cookies_then(platform, stale, |_| true, seed);
         })
         .map_err(|e| format!("注入登入資訊失敗：{e}"))
 }
 
-/// 逐顆讀出來再刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
+#[cfg(windows)]
+fn delete_all_cookies(platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
+    use windows_core::Interface;
+
+    unsafe {
+        let manager: ICoreWebView2CookieManager = platform
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.cast::<ICoreWebView2_2>())
+            .and_then(|core2| core2.CookieManager())
+            .map_err(|e| format!("取不到 cookie manager：{e}"))?;
+        manager.DeleteAllCookies().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(not(windows))]
+fn delete_all_cookies(_platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
+    Ok(())
+}
+
+/// 逐顆讀出來、`doomed(名稱)` 說要刪的才刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
 /// 那支的第一個參數是 cookie 的 name，「這個網域下全部」不是它的語意。
 ///
 /// 任何一步失敗都照樣往下走：清不掉頂多是這一次被舊 token 短路，卡在這裡不導向
@@ -1002,6 +1065,7 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
 fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
     urls: &'static [&'static str],
+    doomed: impl Fn(&str) -> bool + Clone + 'static,
     then: impl FnOnce(&tauri::webview::PlatformWebview) + 'static,
 ) {
     use std::cell::{Cell, RefCell};
@@ -1039,13 +1103,19 @@ fn clear_cookies_then(
     for url in urls {
         let uri = HSTRING::from(*url);
         let deleter = manager.clone();
+        let doomed = doomed.clone();
         let (pending_cb, settle_cb) = (pending.clone(), settle.clone());
         let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
             if let Some(list) = list {
                 let mut count = 0u32;
                 let _ = unsafe { list.Count(&mut count) };
                 for i in 0..count {
-                    if let Ok(cookie) = unsafe { list.GetValueAtIndex(i) } {
+                    let Ok(cookie) = (unsafe { list.GetValueAtIndex(i) }) else { continue };
+                    let mut name = windows_core::PWSTR::null();
+                    if unsafe { cookie.Name(&mut name) }.is_err() {
+                        continue;
+                    }
+                    if doomed(&webview2_com::take_pwstr(name)) {
                         let _ = unsafe { deleter.DeleteCookie(&cookie) };
                     }
                 }
@@ -1064,6 +1134,7 @@ fn clear_cookies_then(
 fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
     _urls: &'static [&'static str],
+    _doomed: impl Fn(&str) -> bool + Clone + 'static,
     then: impl FnOnce(&tauri::webview::PlatformWebview) + 'static,
 ) {
     then(&platform);
@@ -1239,7 +1310,41 @@ fn urlencode(s: &str) -> String {
 
 // ─── Cookie 讀取（WebView2） ──────────────────────────────────────────────────
 
-/// 從某顆 webview 讀出 `url` 適用的 cookie，回傳 `(名稱, 值)`。
+/// 從 webview 讀出來的一顆 cookie，連同它住在哪裡。
+///
+/// ★網域與路徑一定要帶著走：撈回來的 cookie 之後會再被注入別的 webview，掛錯
+/// 網域的複本蓋不掉、也不會被正確的那一顆蓋掉，兩顆一起送出去就是未登入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeenCookie {
+    pub name: String,
+    pub value: String,
+    /// WebView2 的寫法：跨子網域的帶前導點（`.beanfun.com`），host-only 的不帶。
+    pub domain: String,
+    pub path: String,
+    pub secure: bool,
+    pub http_only: bool,
+}
+
+impl SeenCookie {
+    /// 這顆 cookie 當初的 `Set-Cookie` 長什麼樣，以及是哪個網址發的——交給 cookie
+    /// jar 照這兩樣收下，它在 jar 裡的歸屬就跟在瀏覽器裡一模一樣。
+    pub fn as_set_cookie(&self) -> (String, String) {
+        let host = self.domain.trim_start_matches('.');
+        let mut line = format!("{}={}; Path={}", self.name, self.value, self.path);
+        if self.domain.starts_with('.') {
+            line.push_str(&format!("; Domain={host}"));
+        }
+        if self.secure {
+            line.push_str("; Secure");
+        }
+        if self.http_only {
+            line.push_str("; HttpOnly");
+        }
+        (line, format!("https://{host}/"))
+    }
+}
+
+/// 從某顆 webview 讀出 `url` 適用的 cookie。
 ///
 /// 給 `gamapass` 用：那條登入的結果只會落在那顆 webview 的 cookie 儲存區裡，
 /// 我們自己的 HTTP client 拿不到，只能過來撈。
@@ -1250,13 +1355,13 @@ fn urlencode(s: &str) -> String {
 pub(crate) fn read_cookies<R: Runtime>(
     window: &WebviewWindow<R>,
     url: &str,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<SeenCookie>, String> {
     use std::sync::mpsc;
     use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
     use webview2_com::GetCookiesCompletedHandler;
     use windows_core::{Interface, HSTRING, PCWSTR};
 
-    let (tx, rx) = mpsc::sync_channel::<Vec<(String, String)>>(1);
+    let (tx, rx) = mpsc::sync_channel::<Vec<SeenCookie>>(1);
     let uri = HSTRING::from(url);
     window
         .with_webview(move |platform| unsafe {
@@ -1284,13 +1389,27 @@ pub(crate) fn read_cookies<R: Runtime>(
                         let Ok(cookie) = list.GetValueAtIndex(i) else { continue };
                         let mut name = windows_core::PWSTR::null();
                         let mut value = windows_core::PWSTR::null();
-                        if cookie.Name(&mut name).is_err() || cookie.Value(&mut value).is_err() {
+                        let mut domain = windows_core::PWSTR::null();
+                        let mut path = windows_core::PWSTR::null();
+                        if cookie.Name(&mut name).is_err()
+                            || cookie.Value(&mut value).is_err()
+                            || cookie.Domain(&mut domain).is_err()
+                            || cookie.Path(&mut path).is_err()
+                        {
                             continue;
                         }
-                        out.push((
-                            webview2_com::take_pwstr(name),
-                            webview2_com::take_pwstr(value),
-                        ));
+                        let mut secure = windows_core::BOOL(0);
+                        let mut http_only = windows_core::BOOL(0);
+                        let _ = cookie.IsSecure(&mut secure);
+                        let _ = cookie.IsHttpOnly(&mut http_only);
+                        out.push(SeenCookie {
+                            name: webview2_com::take_pwstr(name),
+                            value: webview2_com::take_pwstr(value),
+                            domain: webview2_com::take_pwstr(domain),
+                            path: webview2_com::take_pwstr(path),
+                            secure: secure.as_bool(),
+                            http_only: http_only.as_bool(),
+                        });
                     }
                 }
                 let _ = tx.send(out);
@@ -1311,7 +1430,7 @@ pub(crate) fn read_cookies<R: Runtime>(
 pub(crate) fn read_cookies<R: Runtime>(
     _window: &WebviewWindow<R>,
     _url: &str,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<SeenCookie>, String> {
     Ok(Vec::new())
 }
 
@@ -1424,6 +1543,31 @@ fn inject_cookies(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seen(name: &str, domain: &str, http_only: bool) -> SeenCookie {
+        SeenCookie {
+            name: name.into(),
+            value: "v".into(),
+            domain: domain.into(),
+            path: "/".into(),
+            secure: true,
+            http_only,
+        }
+    }
+
+    /// 撈回來的 cookie 要照它原本的歸屬還原：跨子網域的帶 Domain，host-only 的
+    /// 不帶、由來源網址決定。全部掛到同一台主機上，就是 v2.4.0 那個 bug。
+    #[test]
+    fn a_seen_cookie_goes_back_where_it_lived() {
+        assert_eq!(
+            seen("bfUID", ".beanfun.com", true).as_set_cookie(),
+            ("bfUID=v; Path=/; Domain=beanfun.com; Secure; HttpOnly".to_string(), "https://beanfun.com/".to_string())
+        );
+        assert_eq!(
+            seen("GamaLoginSession", "login.beanfun.com", false).as_set_cookie(),
+            ("GamaLoginSession=v; Path=/; Secure".to_string(), "https://login.beanfun.com/".to_string())
+        );
+    }
 
     fn jar_cookie(name: &str, domain: &str, kind: DomainKind) -> JarCookie {
         JarCookie {
