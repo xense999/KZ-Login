@@ -418,6 +418,9 @@ function onCancel() {
 
 .tip-host { position: relative; }
 .gp-hd.tip-host { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; max-width: 280px; }
+/* 置中的是標題文字，不是「文字＋ⓘ」這一組：左邊放一個跟 ⓘ 一樣寬的空位把它
+   平衡掉，文字才會對在視窗（與下面輸入框）的中線上。寬度要跟 .btn-tip 一致。 */
+.gp-hd.tip-host::before { content: ""; flex-shrink: 0; width: 24px; }
 .btn-tip {
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -428,6 +431,8 @@ function onCancel() {
   color: var(--text3);
   cursor: default;
   transition: background 0.15s, color 0.15s;
+  /* 視覺校正：flex 置中對的是行框，而中文字在行框裡偏下，實量圖示比字高 1px。 */
+  position: relative; top: 1px;
 }
 .btn-tip:hover, .btn-tip.on { background: var(--surface2); color: var(--text); }
 .tip {
