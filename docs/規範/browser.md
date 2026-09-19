@@ -16,7 +16,8 @@
 - `browser::navigate(app, action, url)` — `back`／`forward`／`reload`／`goto`（作用於**作用中分頁**）。
 - `browser::tab_command(app, action, id)` — `new`／`activate`／`close`。
 - `browser::read_cookies(window, url)` — 從某顆 webview 讀出 `url` 適用的 cookie。給 `gamapass` 用：那條登入的 token 只落在那顆 webview 裡。
-- `browser::seed_and_navigate(window, jar, target)` — 把 jar 的 cookie 注入某顆 webview（注入前先清空）後才導向。給 `gamapass` 的登入視窗用；cookie 注入的實作歸屬仍在本模組，不另開第二套。
+- `browser::seed_and_navigate(window, jar, stale, target)` — 先刪掉 `stale` 那幾個網址底下的舊 cookie，再把 jar 的 cookie 注入，最後才導向；三步靠回呼串成先後，不是各做各的（讀 cookie 是非同步的，晚到的刪除會把剛注入的帶走）。**不是整個清空**：同一個資料夾裡還住著別的網域的登入態。給 `gamapass` 的登入視窗用；cookie 注入的實作歸屬仍在本模組，不另開第二套。
+- `browser::eval_json(window, script)` — 在某顆 webview 的頁面裡跑一段腳本、拿回結果（JSON 字串），問不到回 `None`。給 `gamapass` 用：那顆視窗零 IPC，頁面的狀態只能由後端去問。
 - command 包裝（`lib.rs`）：`open_account_browser(token, account_id, alias)`、`browser_navigate(action, url)`、`browser_tab(action, id)`。
 - 事件（→ 工具列 webview）：`browser://tabs`＝`[{id,title,active}]`；`browser://nav`＝`{url}`（作用中分頁的網址）。
 - 錯誤碼：`SESSION_EXPIRED`（無 session 或 jar 無 beanfun cookie）、`BROWSER_STILL_OPEN`（他帳號視窗組還開著）。

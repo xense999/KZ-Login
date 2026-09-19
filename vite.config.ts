@@ -25,7 +25,6 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         browser: resolve(__dirname, "browser.html"),
-        gamapass: resolve(__dirname, "gamapass.html"),
       },
     },
   },

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { LoginGame, LoginResult } from "../stores/accounts";
 
 const emit = defineEmits<{
@@ -15,50 +16,70 @@ type Result =
 
 type Saved = { account: string; password: string };
 
+// 登入在一顆看不見的視窗裡進行；它走到哪裡，後端用這個事件告訴我們。
+type Stage =
+  | { stage: "working" }
+  | { stage: "code"; sentTo: string; error: string; attempt: number }
+  | { stage: "user" };
+
 // 上次用哪一組要自己記：`credentials` 的清單順序是使用者排的，已存在的帳號再次
-// 登入不會移位，拿最後一筆當「最近用的」會挑到別人（連密碼一起）。
+// 登入不會移位，拿最後一筆當「最近用的」會挑到別人。
 const LAST_KEY = "kusei:gamapass_last";
+// 對方的驗證碼固定四位數。
+const CODE_LENGTH = 4;
+
+const saved = ref<Saved[]>([]);
+const chosen = ref<Saved | null>(null);
+const menuOpen = ref(false);
+const pickerEl = ref<HTMLElement | null>(null);
+const regionEl = ref<HTMLElement | null>(null);
 
 const account = ref("");
 const password = ref("");
-const saved = ref<Saved[]>([]);
-const menuOpen = ref(false);
-const accountField = ref<HTMLElement | null>(null);
-const running = ref(false);
-const errorMsg = ref("");
-// 切走時這一頁會被卸載，但視窗可能還開著；那時候的回覆不該再動這一頁。
-let disposed = false;
 
-// 記住的帳密：最後用的那組直接填好，其他的收在下拉裡（同帳密登入頁）。
+const running = ref(false);
+const stage = ref<Stage>({ stage: "working" });
+const code = ref("");
+const codeSent = ref(false);
+const codeInput = ref<HTMLInputElement | null>(null);
+const errorMsg = ref("");
+// 切走時這一頁會被卸載，但登入可能還在跑；那時候的回覆不該再動這一頁。
+let disposed = false;
+let unlisten: UnlistenFn | null = null;
+
 onMounted(async () => {
   document.addEventListener("pointerdown", closeMenuOutside);
+  const stop = await listen<Stage>("gamapass-stage", (e) => onStage(e.payload));
+  if (disposed) { stop(); return; }
+  unlisten = stop;
+  await loadSaved();
+});
+
+async function loadSaved() {
   try {
     saved.value = await invoke<Saved[]>("saved_gamapass");
     if (disposed) return;
     const wanted = localStorage.getItem(LAST_KEY);
-    const last = saved.value.find((s) => s.account === wanted) ?? saved.value[saved.value.length - 1];
-    if (last) pick(last);
-  } catch { /* 沒記住就空著 */ }
-});
+    chosen.value = saved.value.find((s) => s.account === wanted) ?? saved.value[saved.value.length - 1] ?? null;
+  } catch { /* 沒記住就只剩新增 */ }
+}
 
-// 3：點到別處就收起來。選單蓋在密碼欄上，不收的話「點密碼欄」會點到選單的某一列，
-// 帳密就被無聲換掉。
+// 點到別處就收起來：選單蓋在下面的欄位上，不收的話點欄位會點到選單的某一列。
 function closeMenuOutside(e: PointerEvent) {
-  if (menuOpen.value && !accountField.value?.contains(e.target as Node)) menuOpen.value = false;
+  if (menuOpen.value && !pickerEl.value?.contains(e.target as Node)) menuOpen.value = false;
 }
 
 onUnmounted(() => {
   disposed = true;
+  unlisten?.();
   document.removeEventListener("pointerdown", closeMenuOutside);
-  invoke("gamapass_cancel").catch(() => { /* 視窗早就關了 */ });
+  invoke("gamapass_cancel").catch(() => { /* 早就結束了 */ });
 });
 
-const hasAccount = computed(() => account.value.trim().length > 0);
-const canLogin = computed(() => hasAccount.value && password.value.length > 0);
+const canAdd = computed(() => account.value.trim().length > 0 && password.value.length > 0);
 
 function pick(entry: Saved) {
-  account.value = entry.account;
-  password.value = entry.password;
+  chosen.value = entry;
   menuOpen.value = false;
 }
 
@@ -72,31 +93,42 @@ async function forget(entry: Saved) {
     return;
   }
   saved.value = saved.value.filter((s) => s !== entry);
+  if (chosen.value === entry) chosen.value = saved.value[saved.value.length - 1] ?? null;
   if (saved.value.length === 0) menuOpen.value = false;
-  // 刪掉的正是欄位裡那組，就把欄位也清掉——留著會讓人以為它還記著。
-  if (entry.account === account.value) {
-    account.value = "";
-    password.value = "";
+}
+
+function onStage(next: Stage) {
+  if (disposed || !running.value) return;
+  stage.value = next;
+  if (next.stage === "code") {
+    code.value = "";
+    codeSent.value = false;
+    nextTick(() => codeInput.value?.focus());
   }
 }
 
-// passkey 一樣帶帳號過去（不然使用者要在對方頁面重打一次），只是不帶密碼：
-// 帳號填完、過了那一步就把視窗交給他，因為 passkey 的憑證綁在對方網域上，
-// 只有他們自己的頁面問得到。
-async function run(withPassword: boolean) {
-  if (withPassword ? !canLogin.value : !hasAccount.value) return;
+// 登入視窗需要人的時候會貼在這一塊上：標題列與底部按鈕列之間，主視窗的 CSS px。
+function readRegion() {
+  const r = regionEl.value!.getBoundingClientRect();
+  return { x: r.left, y: r.top, width: r.width, height: r.height };
+}
+
+async function login(entry: Saved) {
+  if (running.value) return;
   errorMsg.value = "";
   menuOpen.value = false;
+  stage.value = { stage: "working" };
   running.value = true;
   emit("busy", true);
   try {
     const result = await invoke<Result>("gamapass_login", {
-      account: account.value.trim(),
-      password: withPassword ? password.value : null,
+      account: entry.account,
+      password: entry.password,
+      region: readRegion(),
     });
     if (disposed) return;
     if (result.status === "approved") {
-      try { localStorage.setItem(LAST_KEY, account.value.trim()); } catch { /* 記不住就算了 */ }
+      try { localStorage.setItem(LAST_KEY, entry.account); } catch { /* 記不住就算了 */ }
       emit("success", {
         token: result.token,
         games: result.games,
@@ -116,19 +148,63 @@ async function run(withPassword: boolean) {
   }
 }
 
+function addAndLogin() {
+  if (canAdd.value) login({ account: account.value.trim(), password: password.value });
+}
+
+// 送出後等後端的下一個事件：收了就回到「登入中」，不收就再問一次並帶著對方的說法。
+async function sendCode() {
+  const digits = code.value.replace(/\D/g, "");
+  if (digits.length !== CODE_LENGTH || codeSent.value) return;
+  codeSent.value = true;
+  try {
+    await invoke("gamapass_code", { code: digits });
+  } catch (e) {
+    codeSent.value = false;
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 function onCancel() {
-  if (running.value) invoke("gamapass_cancel").catch(() => { /* 已經關了 */ });
+  if (running.value) invoke("gamapass_cancel").catch(() => { /* 已經結束了 */ });
   else emit("cancel");
 }
 </script>
 
 <template>
   <div class="gp-page">
-    <div class="gp-main">
+    <div ref="regionEl" class="gp-main">
       <template v-if="running">
-        <div class="spinner-lg"></div>
-        <span class="status-txt">登入中…</span>
-        <span class="hint">登入視窗會跳出來，可以看著它把你填的東西打進去。</span>
+        <template v-if="stage.stage === 'code'">
+          <div class="gp-hd">
+            <h2>輸入驗證碼</h2>
+            <p>{{ stage.sentTo ? `驗證碼已傳送至 ${stage.sentTo}` : "遊戲橘子傳了一組驗證碼給你" }}</p>
+          </div>
+          <div class="form">
+            <input
+              ref="codeInput"
+              v-model="code"
+              class="field code"
+              type="text"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              :maxlength="CODE_LENGTH"
+              :disabled="codeSent"
+              @input="sendCode"
+            />
+            <div v-if="codeSent" class="hint">確認中…</div>
+            <div v-else-if="stage.error" class="err">{{ stage.error }}</div>
+            <div v-else-if="errorMsg" class="err">{{ errorMsg }}</div>
+          </div>
+        </template>
+
+        <!-- 登入視窗會蓋在這一塊上；這行字只在它還沒貼上來的那一瞬間看得到。 -->
+        <span v-else-if="stage.stage === 'user'" class="status-txt">請在畫面中完成這一步</span>
+
+        <template v-else>
+          <div class="spinner-lg"></div>
+          <span class="status-txt">登入中…</span>
+        </template>
       </template>
 
       <template v-else>
@@ -137,55 +213,57 @@ function onCancel() {
           <p>用遊戲橘子的帳號登入</p>
         </div>
 
-        <div class="form">
-          <div ref="accountField" class="field-wrap">
-            <input
-              v-model="account"
-              class="field"
-              type="text"
-              inputmode="email"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="手機號碼或電子郵件"
-              @keydown.esc="menuOpen = false"
-            />
-            <button
-              type="button"
-              class="field-icon"
-              :class="{ on: menuOpen }"
-              title="已儲存的帳號"
-              :disabled="saved.length === 0"
-              @click="menuOpen = !menuOpen"
-            >
-              <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
-                <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-            <ul v-if="menuOpen" class="menu">
-              <li v-for="entry in saved" :key="entry.account" class="menu-row" @click="pick(entry)">
-                <span class="menu-name">{{ entry.account }}</span>
-                <button type="button" class="menu-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
-              </li>
-            </ul>
+        <div v-if="saved.length" class="form">
+          <div class="label">已記住的帳號</div>
+          <div class="row">
+            <div ref="pickerEl" class="field-wrap grow">
+              <button type="button" class="field picker" :class="{ on: menuOpen }" @click="menuOpen = !menuOpen">
+                <span class="menu-name">{{ chosen?.account ?? "選擇帳號" }}</span>
+                <svg viewBox="0 0 16 16" fill="none" width="12" height="12">
+                  <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <ul v-if="menuOpen" class="menu">
+                <li v-for="entry in saved" :key="entry.account" class="menu-row" @click="pick(entry)">
+                  <span class="menu-name">{{ entry.account }}</span>
+                  <button type="button" class="menu-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
+                </li>
+              </ul>
+            </div>
+            <button class="btn-solid" :disabled="!chosen" @click="chosen && login(chosen)">登入</button>
           </div>
+        </div>
+
+        <div class="form">
+          <div class="label">新增帳號</div>
+          <input
+            v-model="account"
+            class="field"
+            type="text"
+            inputmode="email"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="手機號碼或電子郵件"
+          />
           <input
             v-model="password"
             class="field"
             type="password"
             autocomplete="off"
             placeholder="密碼"
-            @keyup.enter="run(true)"
+            @keyup.enter="addAndLogin"
           />
+          <button class="btn-add" :disabled="!canAdd" @click="addAndLogin">新增並登入</button>
           <div v-if="errorMsg" class="err">{{ errorMsg }}</div>
+          <div class="hint left">
+            第一次登入可能要輸入驗證碼，之後選帳號就能直接登入。帳號若開了「優先使用 Passkey」，請先到 gamapass 會員中心關掉，否則每次都要驗證。
+          </div>
         </div>
-
-        <button class="btn-passkey" :disabled="!hasAccount" @click="run(false)">改用 passkey（不用密碼）</button>
       </template>
     </div>
 
     <div class="bottom-bar">
       <button class="btn-ghost" @click="onCancel">取消</button>
-      <button v-if="!running" class="btn-solid" :disabled="!canLogin" @click="run(true)">登入</button>
     </div>
   </div>
 </template>
@@ -202,8 +280,10 @@ function onCancel() {
 .gp-hd p  { font-size: 13px; color: var(--text2); margin-top: 4px; }
 
 .form { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 280px; }
+.label { font-size: 12px; color: var(--text3); }
+.row { display: flex; gap: 8px; align-items: stretch; }
+.grow { flex: 1; min-width: 0; }
 .field-wrap { position: relative; }
-.field-wrap .field { padding-right: 40px; }
 .field {
   width: 100%;
   padding: 11px 12px;
@@ -216,14 +296,11 @@ function onCancel() {
 .field:focus { outline: none; border-color: var(--primary-border); }
 .err { font-size: 12px; color: var(--red); line-height: 1.6; }
 
-.field-icon {
-  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
-  width: 28px; height: 28px; border: none; border-radius: 7px;
-  background: none; color: var(--text3);
-  transition: background 0.15s, color 0.15s;
-}
-.field-icon:hover:not(:disabled), .field-icon.on { color: var(--text2); background: var(--glass-hover); }
-.field-icon:disabled { opacity: 0.35; cursor: default; }
+.picker { display: flex; align-items: center; gap: 8px; text-align: left; }
+.picker svg { flex-shrink: 0; color: var(--text3); }
+.picker.on { border-color: var(--primary-border); }
+/* 字距會加在最後一個字後面，左邊補同樣的寬度才置中。 */
+.code { text-align: center; font-size: 20px; letter-spacing: 0.5em; padding-left: calc(12px + 0.5em); }
 
 .menu {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 10;
@@ -250,26 +327,21 @@ function onCancel() {
 }
 .menu-del:hover { background: rgba(255,69,58,0.15); color: var(--red); }
 
-.extras { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.btn-passkey {
-  padding: 9px 16px;
+.btn-add {
+  padding: 10px 16px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: none;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text2);
   transition: background 0.15s, color 0.15s;
 }
-.btn-passkey:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
-.btn-passkey:disabled { opacity: 0.4; cursor: default; }
-.link {
-  padding: 0; border: none; background: none;
-  font-size: 12px; color: var(--text3); text-decoration: underline;
-}
-.link:hover { color: var(--text2); }
+.btn-add:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+.btn-add:disabled { opacity: 0.4; cursor: default; }
 
 .status-txt { font-size: 13px; color: var(--text2); }
-.hint { font-size: 12px; color: var(--text3); text-align: center; max-width: 240px; line-height: 1.6; }
+.hint { font-size: 12px; color: var(--text3); text-align: center; line-height: 1.6; }
+.hint.left { text-align: left; }
 
 /* 同掃碼頁的等待指示器（scoped 樣式各自為政，共用的只有 main.css 的 token）。 */
 .spinner-lg {

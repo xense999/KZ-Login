@@ -1,20 +1,24 @@
-//! GamaPass login window.
+//! GamaPass login, carried out inside the app.
 //!
 //! A GamaPass account cannot be signed in over HTTP the way a beanfun account
-//! can — the password check, the reCAPTCHA token and the passkey all belong to
-//! Gamania's own page and only work on their origin. So the page is opened in a
-//! window of its own and an injected script fills it in: what the user typed
-//! into our form is typed into theirs, in front of them. Our form is where the
-//! typing happens; this window is where it lands.
+//! can — the password check and the reCAPTCHA token belong to Gamania's own
+//! page and only work on their origin. So their page is opened in a window the
+//! user does not see, and an injected script drives it with what was typed into
+//! our form.
 //!
-//! Whatever the script cannot do — a second factor, a passkey, a wrong password
-//! — the user does in that same window, because it is already on screen. There
-//! is nothing hidden to surface and no cover to lift.
+//! What makes this worth doing out of sight is that Gamania remembers a device:
+//! a *password* login with 保持登入狀態 ticked leaves a session on their side,
+//! and the next visit lands on an account list where one click signs in — no
+//! password, no second factor. That state lives in this window's cookies, which
+//! is why only beanfun's are cleared between logins. A passkey login is never
+//! remembered (their page does not send the flag with it), so passkeys are
+//! declined here rather than offered.
 //!
-//! The window is two windows, the way the account browser is: a shell that
-//! draws the frame and title bar, and the page itself pinned inside it. Their
-//! page cannot host a title bar of ours, and a native frame would make this
-//! read as some other program that just appeared.
+//! Two things can still need the person. A verification code is asked for in
+//! our own page and typed into theirs. Anything else the script does not
+//! recognise — an image challenge, a wrong password, a redesign — brings the
+//! window out over the login page's own content area, as it is, to be dealt
+//! with by hand.
 //!
 //! The login's result stays in that window. Unlike QR — where the sign-in
 //! happens on a phone and our own client can still finish on the session key —
@@ -24,39 +28,53 @@
 //! returns to beanfun whether the sign-in succeeded or failed.
 
 use reqwest_cookie_store::CookieStoreMutex;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, Runtime, Url, WebviewUrl, WebviewWindow,
+    AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
-use crate::{browser, overlay};
+use crate::browser;
+use crate::overlay::{self, Region};
 
-const SHELL_LABEL_PREFIX: &str = "gamapass-shell-";
-const VIEW_LABEL_PREFIX: &str = "gamapass-view-";
-/// Short enough that the page keeps up when the shell is dragged.
+const LABEL_PREFIX: &str = "gamapass-";
+/// Short enough that the window keeps up when the main window is dragged.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
-/// How often the cookies are read. Far rarer than the poll: each read waits on
-/// a callback that runs on the main thread, and a login takes seconds at best.
-const HARVEST_EVERY: Duration = Duration::from_millis(600);
-/// Long enough to read a mail or open an authenticator app on the way through.
+/// How often the page is asked where it is and the cookies are read. Far rarer
+/// than the poll: each waits on a callback that runs on the main thread, and a
+/// login takes seconds at best.
+const ASK_EVERY: Duration = Duration::from_millis(600);
+/// Long enough to wait for a text message and type it in.
 const TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Window size in CSS pixels, and the shell's own furniture — kept in step with
-/// `GamaPassShell.vue`, which draws them.
-const WINDOW_SIZE: (f64, f64) = (480.0, 760.0);
-const TITLEBAR_H: f64 = 42.0;
-const EDGE: f64 = 3.0;
+/// Where the window waits while it is not needed. It has to be a shown window:
+/// a hidden one stops painting, the page's transitions never finish, and the
+/// dialogs the script is waiting for never open.
+const OFFSCREEN: (f64, f64) = (-20000.0, -20000.0);
 
-/// Where the finished login leaves its cookies. Read in this order; the token
-/// is normally on the portal itself.
-const HARVEST_URLS: &[&str] = &[
+/// On top of [`overlay::BROWSER_ARGS`]: keep the page running at full speed
+/// while it is parked off screen, where Chromium would otherwise count it as
+/// covered and throttle it.
+const KEEP_AWAKE_ARGS: &str = "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding";
+/// Chromium takes one `--disable-features` list, so this one is appended to
+/// the list in [`overlay::BROWSER_ARGS`] rather than passed beside it.
+const KEEP_AWAKE_FEATURE: &str = "CalculateNativeWinOcclusion";
+
+/// Left over from the previous login, these would let the portal short-cut
+/// this one. Gamania's own cookies are deliberately not on the list — they are
+/// what makes it remember the device.
+const STALE_COOKIE_URLS: &[&str] = &[
     "https://tw.beanfun.com/",
     "https://login.beanfun.com/",
     "https://tw.newlogin.beanfun.com/",
 ];
+
+/// Where the finished login leaves its cookies. Read in this order; the token
+/// is normally on the portal itself.
+const HARVEST_URLS: &[&str] = STALE_COOKIE_URLS;
 
 /// The cookie that *is* the login.
 const TOKEN_COOKIE: &str = "bfWebToken";
@@ -68,12 +86,29 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// What the script should put into Gamania's form.
 pub struct Fill {
     pub account: String,
-    /// `None` for passkey: the account still goes in and the step is still
-    /// advanced — so the user is not made to type it a second time — but the
-    /// window is then handed over. A passkey cannot work any other way: the
-    /// credential is bound to Gamania's origin, so only their page can ask for
-    /// it, and the system's prompt needs that window on screen.
-    pub password: Option<String>,
+    pub password: String,
+}
+
+/// Where the login stands, as far as the person is concerned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum Stage {
+    /// The script is getting on with it; nothing to do.
+    Working,
+    /// Gamania sent a verification code and is waiting for it. `error` is what
+    /// their page said about the last one, if it turned it down; `attempt`
+    /// counts the codes typed so far, so that being turned down twice with the
+    /// same words still reads as a change.
+    Code {
+        #[serde(default, rename = "sentTo")]
+        sent_to: String,
+        #[serde(default)]
+        error: String,
+        #[serde(default)]
+        attempt: u32,
+    },
+    /// The script has let go; the window is out and the page is theirs.
+    User,
 }
 
 /// How a [`wait_for_login`] ended.
@@ -81,18 +116,22 @@ pub enum Outcome {
     /// Signed in. Carries every cookie the window ended up with, the token
     /// among them — the caller writes them into its own jar.
     Completed { token: String, cookies: Vec<(String, String)> },
-    /// The window was closed, or nothing happened for [`TIMEOUT`].
+    /// Cancelled (see [`cancel`]), or nothing happened for [`TIMEOUT`].
     Cancelled,
 }
 
 /// Open beanfun's login page for `skey` and wait until the portal takes over
-/// again with the user signed in.
+/// again with the user signed in. `on_stage` hears about every change of
+/// [`Stage`]; `region` is where the window goes if it has to come out.
 pub async fn wait_for_login<R: Runtime>(
     app: &AppHandle<R>,
     skey: &str,
     jar: &Arc<CookieStoreMutex>,
     fill: Fill,
+    region: Region,
+    on_stage: impl Fn(&Stage),
 ) -> Result<Outcome, String> {
+    let main = app.get_webview_window("main").ok_or("找不到主視窗")?;
     let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
         .parse()
         .map_err(|e| format!("登入頁網址錯誤：{e}"))?;
@@ -103,138 +142,120 @@ pub async fn wait_for_login<R: Runtime>(
         .join("gamapass-webview");
 
     cancel(app);
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let shell_label = format!("{SHELL_LABEL_PREFIX}{id}");
-    let view_label = format!("{VIEW_LABEL_PREFIX}{id}");
-
-    let shell = WebviewWindowBuilder::new(app, &shell_label, WebviewUrl::App("gamapass.html".into()))
-        .title("GamaPass 登入")
-        .inner_size(WINDOW_SIZE.0, WINDOW_SIZE.1)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .resizable(false)
-        // ★不要置頂：Windows 安全性（輸入 PIN）那個框是系統自己的程式畫的，不是
-        // 掛在我們視窗底下的東西——置頂反而會蓋住它。要讓它出得來，靠的是把焦點
-        // 給網頁那顆視窗（見下面的 set_focus）。
-        .visible(false)
-        .build()
-        .map_err(|e| format!("登入視窗開不起來：{e}"))?;
-    // 螢幕正中間，不是主視窗中間：主視窗待在右下角，登入視窗跟著擠過去會半個
-    // 掉出畫面，而且要看的東西都在那裡。
-    let _ = shell.center();
+    let label = format!("{LABEL_PREFIX}{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
 
     // 先開空白頁再導過去：cookie 要在第一個真正的請求之前就位，不然 beanfun 綁在
     // 這條 session 上的 nonce 對不起來。
     let blank: Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
-    let view = WebviewWindowBuilder::new(app, &view_label, WebviewUrl::External(blank))
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
         .decorations(false)
         .shadow(false)
         .resizable(false)
         .skip_taskbar(true)
-        .visible(false)
-        .owner(&shell)
+        // 一開始就以「不搶焦點」的方式顯示在畫面外：事後再 `show()` 會把它啟用，
+        // 主視窗的鍵盤焦點就被帶走了。
+        .focused(false)
+        .position(OFFSCREEN.0, OFFSCREEN.1)
+        // 尺寸先照著之後要貼的那一塊：現身時版面才不會當著使用者的面重排一次。
+        .inner_size(region.width, region.height)
+        .owner(&main)
         .map_err(|e| e.to_string())?
         // Its own WebView2 environment, like the captcha window: one user-data
-        // folder cannot host two. Reused every time, so nothing piles up.
+        // folder cannot host two. Reused every time — that is where Gamania's
+        // memory of this device lives.
         .data_directory(data_dir)
-        .additional_browser_args(overlay::BROWSER_ARGS)
+        .additional_browser_args(&browser_args())
         .initialization_script(&init_script(&fill))
         .build()
         .map_err(|e| format!("登入視窗開不起來：{e}"))?;
 
-    overlay::disable_tracking_prevention(&view);
-    browser::seed_and_navigate(&view, jar, url)?;
-    place_view(&shell, &view);
-    let _ = shell.show();
-    let _ = view.show();
-    // 焦點要給網頁那顆，不是外殼：Windows 的安全性驗證（指紋／PIN）跳出來時會
-    // 掛在發起它的視窗上，那顆沒有焦點的話，框就冒在別人後面。
-    let _ = view.set_focus();
-    allow_foreground();
+    overlay::disable_tracking_prevention(&window);
+    browser::seed_and_navigate(&window, jar, STALE_COOKIE_URLS, url)?;
 
     let started = Instant::now();
-    let mut last_harvest = Instant::now();
+    let mut last_ask = Instant::now();
+    let mut stage = Stage::Working;
     let outcome = loop {
         if started.elapsed() >= TIMEOUT {
             break Outcome::Cancelled;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
-        // 使用者關掉外殼就是取消，沒有第二種取消方式。
-        let (Some(shell), Some(view)) = (
-            app.get_webview_window(&shell_label),
-            app.get_webview_window(&view_label),
-        ) else {
+        let Some(window) = app.get_webview_window(&label) else {
             break Outcome::Cancelled;
         };
-        if last_harvest.elapsed() >= HARVEST_EVERY {
-            last_harvest = Instant::now();
-            if let Some(done) = harvest(&view) {
+        if last_ask.elapsed() >= ASK_EVERY {
+            last_ask = Instant::now();
+            if let Some(done) = harvest(&window) {
                 break done;
             }
+            // 放手之後就不再收回來：頁面已經交給使用者了，中途又把它藏起來只會讓
+            // 他打到一半的東西憑空消失。
+            if stage != Stage::User {
+                if let Some(now) = ask_stage(&window).filter(|now| *now != stage) {
+                    if now == Stage::User {
+                        overlay::place(&window, &main, region);
+                        let _ = window.set_focus();
+                    }
+                    stage = now;
+                    on_stage(&stage);
+                }
+            }
         }
-        // 每個 tick 都貼一次，外殼被拖動時才跟得上。
-        place_view(&shell, &view);
-        // 授權會隨著使用者去點別的東西而失效，所以每一輪都補一次——PIN 框可能在
-        // 這中間任何一刻才跳出來。
-        allow_foreground();
+        // 每個 tick 都貼一次，主視窗被拖動時才跟得上。
+        if stage == Stage::User {
+            overlay::place(&window, &main, region);
+        }
     };
 
-    // 只有「使用者自己放棄」才在這裡收掉視窗。判定完成之後還有收尾要做，收尾
-    // 失敗時那個畫面就是唯一的線索——先關掉等於把現場清乾淨了。成功的那條路由
-    // 呼叫端關（`cancel`）。
+    // 只有「放棄」才在這裡收掉視窗。判定完成之後還有收尾要做，收尾失敗時那個
+    // 畫面就是唯一的線索——先關掉等於把現場清乾淨了。成功的那條路由呼叫端關
+    // （`cancel`）。
     if matches!(outcome, Outcome::Cancelled) {
         cancel(app);
     }
     Ok(outcome)
 }
 
+/// Type the verification code into Gamania's page. Whether it was right shows
+/// up as the next [`Stage`]: on with the login, or `Code` again with an error.
+pub fn submit_code<R: Runtime>(app: &AppHandle<R>, code: &str) -> Result<(), String> {
+    let digits: String = code.chars().filter(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return Err("請輸入驗證碼".into());
+    }
+    let window = app
+        .webview_windows()
+        .into_iter()
+        .find_map(|(label, window)| label.starts_with(LABEL_PREFIX).then_some(window))
+        .ok_or("登入已經結束了")?;
+    window
+        .eval(format!("window.__kzCode && window.__kzCode(\"{digits}\")"))
+        .map_err(|e| format!("驗證碼送不進去：{e}"))
+}
+
 /// Close an open GamaPass window; a pending [`wait_for_login`] then cancels.
 pub fn cancel<R: Runtime>(app: &AppHandle<R>) {
     for (label, window) in app.webview_windows() {
-        if label.starts_with(SHELL_LABEL_PREFIX) || label.starts_with(VIEW_LABEL_PREFIX) {
+        if label.starts_with(LABEL_PREFIX) {
             let _ = window.destroy();
         }
     }
 }
 
-/// 讓系統的憑證介面（PIN／指紋那個框）有權把自己帶到最前面。少了這一步它只能
-/// 在工作列閃，要使用者自己點才看得到。
-fn allow_foreground() {
-    #[cfg(windows)]
-    crate::win::allow_foreground_for_any();
+fn browser_args() -> String {
+    let shared = overlay::BROWSER_ARGS.replacen(
+        "--disable-features=",
+        &format!("--disable-features={KEEP_AWAKE_FEATURE},"),
+        1,
+    );
+    format!("{shared} {KEEP_AWAKE_ARGS}")
 }
 
-/// 把網頁那顆視窗貼進外殼畫出來的框裡（邊框內、標題列下方）。外殼的標題列是自己
-/// 畫的，所以系統文字倍率放大的是它的內容——換算要跟著（同帳號瀏覽器）。
-fn place_view<R: Runtime>(shell: &WebviewWindow<R>, view: &WebviewWindow<R>) {
-    let (Ok(pos), Ok(size), Ok(scale)) =
-        (shell.outer_position(), shell.inner_size(), shell.scale_factor())
-    else {
-        return;
-    };
-    #[cfg(windows)]
-    let px_per_css = scale * crate::win::text_scale_factor();
-    #[cfg(not(windows))]
-    let px_per_css = scale;
-
-    let edge = (EDGE * px_per_css).round() as i32;
-    let top = (TITLEBAR_H * px_per_css).round() as i32;
-    let w = size.width as i32 - edge * 2;
-    let h = size.height as i32 - top - edge;
-    if w <= 0 || h <= 0 {
-        return;
-    }
-    // 沒變就不要動：這個函式每 80ms 跑一次，最長跑十分鐘，而它動的正是使用者
-    // 正在打字、系統驗證框也掛在上面的那顆視窗。
-    let want_pos = PhysicalPosition::new(pos.x + edge, pos.y + top);
-    let want_size = tauri::PhysicalSize::new(w as u32, h as u32);
-    if view.outer_position().ok() != Some(want_pos) {
-        let _ = view.set_position(want_pos);
-    }
-    if view.inner_size().ok() != Some(want_size) {
-        let _ = view.set_size(want_size);
-    }
+/// What the script last said about itself. `None` while there is nothing to
+/// hear — the page is between documents, or on a host the script stays off.
+fn ask_stage<R: Runtime>(window: &WebviewWindow<R>) -> Option<Stage> {
+    let json = browser::eval_json(window, "window.__kz || null")?;
+    serde_json::from_str::<Option<Stage>>(&json).ok().flatten()
 }
 
 /// The script the window runs on every document it loads. It runs on two hosts:
@@ -242,12 +263,10 @@ fn place_view<R: Runtime>(shell: &WebviewWindow<R>, view: &WebviewWindow<R>) {
 /// Gamania's own, where the credentials go. Anywhere else it returns at once —
 /// what was typed must never reach a page that merely happens to load here.
 fn init_script(fill: &Fill) -> String {
-    let account = fill.account.as_str();
-    let password = fill.password.as_deref().unwrap_or("");
     let json = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     // 一次掃完：分兩次 replace 的話，第二次會掃到第一次剛填進去的內容——帳號裡
     // 只要出現 `__PASSWORD__` 這串字，整段腳本就壞在語法上、而且是無聲的。
-    let (account, password) = (json(account), json(password));
+    let (account, password) = (json(&fill.account), json(&fill.password));
     AUTOFILL_JS
         .split("__ACCOUNT__")
         .map(|part| part.replace("__PASSWORD__", &password))
@@ -255,35 +274,52 @@ fn init_script(fill: &Fill) -> String {
         .join(&account)
 }
 
-/// Fills Gamania's own form with what the user typed into ours, and submits.
+/// Drives Gamania's pages with what the user typed into ours.
 ///
-/// Fields are found by type and buttons by their label rather than by any
-/// selector from their markup: the page is a framework build whose class names
-/// are generated, so anything more precise would break on their next deploy.
+/// Every tick it looks at where the page is and does the one thing that page
+/// needs, so it does not matter in which order their flow arrives: the account
+/// list when the device is remembered, the two-step form when it is not.
 ///
-/// Nothing here tries to look like a human or to get past a check. If Gamania
-/// asks for a second factor, or anything at all that we did not expect, it asks
-/// for the window to be shown and the page is handed to the user as it is.
+/// Fields are found by type and buttons by their label rather than by
+/// generated class names, which change with every deploy of theirs. The few
+/// selectors used are hand-written ones read out of their source
+/// (`.use-gama-pass`, `.input-verification-code`, the ARIA roles).
+///
+/// Nothing here tries to look like a human or to get past a check. Whatever it
+/// does not recognise, it reports as `user` and leaves alone.
 const AUTOFILL_JS: &str = r##"(() => {
   const ON_BEANFUN = location.hostname === "login.beanfun.com";
   const ON_GAMANIA = location.hostname === "accounts.gamania.com";
   if (!ON_BEANFUN && !ON_GAMANIA) return;
 
   const ACC = __ACCOUNT__;
-  const PW = __PASSWORD__;   // 空的＝passkey：帳號照填，密碼那一步交給使用者
-  if (!ACC) return;
+  const PW = __PASSWORD__;
+  if (!ACC || !PW) return;
 
-  const step = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
-  const mark = (k) => { try { sessionStorage.setItem(k, "1"); } catch (e) {} };
+  // passkey 在這裡一律婉拒，等同使用者在系統的框上按取消：用它登入不會被記住，
+  // 而且這顆視窗在畫面外，系統的框會憑空冒出來。開了 passkey 優先的帳號會因此
+  // 走到對方的替代驗證，那一頁交給使用者。
+  try {
+    if (navigator.credentials) {
+      const refuse = () => Promise.reject(new DOMException("declined", "NotAllowedError"));
+      navigator.credentials.get = refuse;
+      navigator.credentials.create = refuse;
+    }
+    if (window.PublicKeyCredential) {
+      PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
+    }
+  } catch (e) {}
+
+  const recall = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
+  const note = (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) {} };
 
   // offsetParent 對 fixed 定位的元素一律是 null，改看有沒有實際畫出來的方框。
   const visible = (el) => !!el && !el.disabled && el.getClientRects().length > 0;
-  const accountField = () =>
-    [...document.querySelectorAll("input")].find(
-      (i) => visible(i) && ["text", "tel", "email"].includes((i.type || "").toLowerCase()));
-  const passwordField = () =>
-    [...document.querySelectorAll("input")].find(
-      (i) => visible(i) && (i.type || "").toLowerCase() === "password");
+  const inputs = (types) => [...document.querySelectorAll("input")].filter(
+    (i) => visible(i) && types.includes((i.type || "").toLowerCase()));
+  const passwordField = () => inputs(["password"])[0];
+  const accountField = () => inputs(["text", "tel", "email"])[0];
+  const codeBoxes = () => [...document.querySelectorAll(".input-verification-code input")].filter(visible);
 
   // 直接指定 value，框架的狀態不會跟著動——畫面上看得到字，它內部還當成空的，
   // 於是「下一步」一直是停用的，按了也沒反應。execCommand 走的是真正的輸入路徑，
@@ -300,19 +336,16 @@ const AUTOFILL_JS: &str = r##"(() => {
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
-    return el.value === value;
+    // 對方可能會重排格式（去空白、補國碼），所以只看有沒有收下，不比對全文。
+    return el.value !== "";
   };
 
-  // 兩邊的按鈕都不是 <button>：一邊是自訂元件、一邊是框架產生的版面，所以
-  // 不限標籤，找「文字對得上、而且自己底下沒有更小的元素也對得上」的那一個
-  // ——也就是最貼著文字的那層。點它，事件照樣冒泡到綁著 click 的外層。
   // 停用中的按鈕點了也沒用，而且它停用通常代表「欄位的值它還沒收到」——那時候
   // 該做的是重填，不是一直點。這些頁面用 class 表示停用，不是 disabled 屬性。
   const disabled = (el) => {
     for (let n = el; n && n !== document.body; n = n.parentElement) {
       if (n.disabled || n.getAttribute("aria-disabled") === "true") return true;
-      if (/disabled/i.test(n.className || "")) return true;
+      if (/disabled/i.test(n.className || "")) return true;
     }
     return false;
   };
@@ -327,30 +360,36 @@ const AUTOFILL_JS: &str = r##"(() => {
     el.click();
   };
 
-  // 文字對得上的元素可能不只一個（說明文字、彈窗裡的字），所以先挑看起來像按鈕
-  // 的那些；都不像才退回「最貼著文字的那一層」。
-  const clickLabelled = (text, selector) => {
+  // 兩邊的按鈕都不見得是 <button>，所以不限標籤，找「文字對得上、而且自己底下
+  // 沒有更小的元素也對得上」的那一層——最貼著文字的那層。點它，事件照樣冒泡到
+  // 綁著 click 的外層。`exact` 是給短標籤用的：「登入」兩個字到處都是。
+  const labelled = (text, exact) => {
     const want = text.toLowerCase();
-    if (selector) {
-      const direct = [...document.querySelectorAll(selector)].filter((el) => visible(el) && !disabled(el));
-      if (direct.length === 1) { press(direct[0]); return true; }
-    }
+    const hit = (el) => {
+      const t = (el.textContent || "").trim().toLowerCase();
+      return exact ? t === want : t.includes(want);
+    };
     const all = [...document.querySelectorAll("button, [role=button], a, div, span, li, label")]
-      .filter((el) => visible(el) && (el.textContent || "").trim().toLowerCase().includes(want))
-      .filter((el) => ![...el.children].some(
-        (c) => (c.textContent || "").toLowerCase().includes(want)))
+      .filter((el) => visible(el) && hit(el))
+      .filter((el) => ![...el.children].some(hit))
       .filter((el) => !disabled(el));
     const looksClickable = (el) =>
       el.tagName === "BUTTON" || el.tagName === "A" || el.getAttribute("role") === "button" ||
-      /btn|button/i.test(el.className || "") ||
+      /btn|button/i.test(el.className || "") ||
       getComputedStyle(el).cursor === "pointer";
-    const hit = all.find(looksClickable) || all[all.length - 1];
-    if (!hit) return false;
-    press(hit);
+    return all.find(looksClickable) || all[all.length - 1] || null;
+  };
+  // 同一顆按鈕不連按：一次沒反應多半是頁面還在忙，連按等於多送幾次請求。
+  const pressOnce = (key, el, every) => {
+    if (!el) return false;
+    const at = Number(recall(key) || 0);
+    if (at && Date.now() - at < (every || 2500)) return true;
+    note(key, String(Date.now()));
+    press(el);
     return true;
   };
 
-  // 使用者看著這個視窗，所以直接告訴他程式在做什麼、停在哪一步。
+  // 現身之後使用者看得到這一行，所以直接告訴他為什麼輪到他。
   const say = (text) => {
     let tag = document.getElementById("__kz_tag");
     if (!tag) {
@@ -366,60 +405,199 @@ const AUTOFILL_JS: &str = r##"(() => {
     if (tag.textContent !== text) tag.textContent = text;
   };
 
-  const started = Date.now();
-  const timer = setInterval(() => {
-    // 卡住就不要再等了：手縮回來，讓使用者自己接著操作這一頁。
-    if (Date.now() - started > 20000) { clearInterval(timer); say("這一步請你自己來"); return; }
+  const report = (stage, extra) => { window.__kz = Object.assign({ stage }, extra || {}); };
+  report("working");
+
+  // 放手：之後這一頁是使用者的。passkey 的推銷照樣替他婉拒——那是唯一一個
+  // 按錯了就回不來的地方。
+  let handedOver = false;
+  const handOver = (why) => { handedOver = true; say(why); report("user"); };
+
+  // 登入成功後對方會問要不要改用 passkey。答應了，這個帳號以後就只走 passkey，
+  // 再也到不了密碼那一頁，也就再也不會被記住。
+  const declinePasskey = () => {
+    const keep = labelled("繼續使用密碼", true);
+    if (keep) return pressOnce("__kz_keep_pw", keep);
+    const later = labelled("稍後再說", true);
+    if (!later) return false;
+    for (let n = later.parentElement; n && n !== document.body; n = n.parentElement) {
+      if (/passkey/i.test(n.textContent || "")) return pressOnce("__kz_later", later);
+    }
+    return false;
+  };
+
+  // 清單上的帳號是遮起來的（`+886 922 *** *93`）。把星號當成缺口：剩下的幾段
+  // 依序對得上帳號的頭跟尾，就是它。手機號碼對方會換成國碼開頭。
+  const forms = (() => {
+    const a = ACC.trim().toLowerCase();
+    const out = [a];
+    if (/^09\d{8}$/.test(a)) out.push("+886" + a.slice(1));
+    return out;
+  })();
+  const matchesMask = (shown) => {
+    const mask = shown.replace(/\s+/g, "").toLowerCase();
+    const parts = mask.split(/\*+/).filter(Boolean);
+    if (!parts.length) return false;
+    return forms.some((form) => {
+      // 頭尾沒被遮住的那一端才要求貼齊。
+      if (!mask.startsWith("*") && !form.startsWith(parts[0])) return false;
+      if (!mask.endsWith("*") && !form.endsWith(parts[parts.length - 1])) return false;
+      let from = 0;
+      for (const part of parts) {
+        const at = form.indexOf(part, from);
+        if (at < 0) return false;
+        from = at + part.length;
+      }
+      return true;
+    });
+  };
+  const rememberedRow = () => {
+    const rows = [...document.querySelectorAll("#main [role=button]")].filter(visible).filter((row) =>
+      [...row.querySelectorAll("*")].some((el) =>
+        !el.children.length && (el.textContent || "").includes("*") && matchesMask(el.textContent)));
+    // 兩列都對得上就不猜：寧可走一次密碼，也不要登進別人的帳號。
+    return rows.length === 1 ? rows[0] : null;
+  };
+
+  // 圖形驗證的框是 reCAPTCHA 自己排的（約 400×580），常被擺到畫面外；把它固定在
+  // 視窗正中並等比縮到放得進去（同 captcha 視窗的做法）。
+  const challenge = () => {
+    const frame = document.querySelector("iframe[src*='recaptcha'][src*='bframe']");
+    return frame && frame.offsetWidth && frame.offsetHeight ? frame : null;
+  };
+  const fitChallenge = (frame) => {
+    const w = frame.offsetWidth, h = frame.offsetHeight, m = 6;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const k = Math.min(1, (vw - m * 2) / w, (vh - m * 2) / h);
+    const set = (prop, value) => frame.style.setProperty(prop, value, "important");
+    set("position", "fixed");
+    set("left", Math.round((vw - w * k) / 2) + "px");
+    set("top", Math.round((vh - h * k) / 2) + "px");
+    set("transform", "scale(" + k + ")");
+    set("transform-origin", "0 0");
+  };
+
+  // 驗證碼由我們的頁面問，問到了從這裡打進去。第一格收到整串數字時，對方的
+  // 元件會自己分到四格裡。
+  window.__kzCode = (code) => {
+    const box = codeBoxes()[0];
+    if (!box) return;
+    note("__kz_code_at", String(Date.now()));
+    note("__kz_code_n", String(Number(recall("__kz_code_n") || 0) + 1));
+    fill(box, code);
+  };
+  const codeError = () => {
+    const el = document.querySelector(".input-verification-code .color-red");
+    return el ? (el.textContent || "").trim() : "";
+  };
+  const codeSentTo = () => {
+    const el = [...document.querySelectorAll("#main div, #header div")].find((d) =>
+      visible(d) && !d.children.length && /^\+?[\d\s*]{6,}$|@/.test((d.textContent || "").trim()));
+    return el ? el.textContent.trim() : "";
+  };
+
+  // 同一頁待太久就是卡住了：可能是密碼錯、可能是沒見過的畫面。
+  let where = "", since = Date.now();
+  const stuck = (key, limit) => {
+    if (key !== where) { where = key; since = Date.now(); }
+    return Date.now() - since > limit;
+  };
+
+  setInterval(() => {
+    const frame = ON_GAMANIA && challenge();
+    if (frame) fitChallenge(frame);
+    if (ON_GAMANIA && declinePasskey()) return;
+    if (handedOver) return;
+    if (frame) return handOver("請完成圖形驗證");
+
+    const path = location.pathname.replace(/\/+$/, "").toLowerCase();
 
     // beanfun 的登入頁：按下它自己的「使用 gamapass」，讓它用自己的 session 去
     // 要跳轉網址。我們代打的話，回程的 nonce 會對不起來。
     if (ON_BEANFUN) {
-      // 按下去之後頁面應該就離開這裡了。還在，就是那一下沒生效——重挑一次目標再按。
+      if (path !== "/login/index") {
+        // 登完繞回來會經過這個網域；停在這裡不走，就是 beanfun 不收這次登入。
+        if (stuck("bf:" + path, 8000)) handOver("beanfun 沒有完成這次登入");
+        return;
+      }
       // 多按幾次等於多跟它要幾組跳轉網址，所以有上限，到頂就交給使用者。
-      const at = Number(step("__kz_goto_at") || 0);
-      if (at && Date.now() - at < 3500) { say("已按下使用 gamapass，等它跳轉"); return; }
-      const tries = Number(step("__kz_goto_n") || 0);
-      if (tries >= 3) { clearInterval(timer); say("按不動「使用 gamapass」，請你自己點"); return; }
-      say(tries ? `再試一次「使用 gamapass」（第 ${tries + 1} 次）` : "找「使用 gamapass」按鈕");
-      if (clickLabelled("gamapass", ".use-gama-pass")) {
-        try {
-          sessionStorage.setItem("__kz_goto_at", String(Date.now()));
-          sessionStorage.setItem("__kz_goto_n", String(tries + 1));
-        } catch (e) {}
+      const tries = Number(recall("__kz_goto_n") || 0);
+      const at = Number(recall("__kz_goto_at") || 0);
+      if (at && Date.now() - at < 3500) return;
+      if (tries >= 3) return handOver("按不動「使用 gamapass」，請你自己點");
+      const go = document.querySelector(".use-gama-pass") || labelled("gamapass");
+      if (go && visible(go)) {
+        note("__kz_goto_at", String(Date.now()));
+        note("__kz_goto_n", String(tries + 1));
+        press(go);
       }
       return;
     }
 
-    if (!step("__kz_acc")) {
-      say("填帳號");
+    // 要驗證碼：哪一頁問的都一樣處理。剛送出的那幾秒不回報，免得舊的錯誤訊息
+    // 還掛在畫面上就被當成這一次的結果。
+    if (codeBoxes().length) {
+      if (Date.now() - Number(recall("__kz_code_at") || 0) < 2500) return;
+      return report("code", {
+        sentTo: codeSentTo(), error: codeError(), attempt: Number(recall("__kz_code_n") || 0),
+      });
+    }
+    report("working");
+
+    if (path === "/login/select-account") {
+      // 記住的那一筆過期了，對方會跳一個框說要重新登入；按掉它就回到登入頁。
+      if (/已過期/.test(document.body.textContent || "")) {
+        const ok = labelled("確定", true);
+        if (ok) { note("__kz_expired", "1"); return void pressOnce("__kz_expired_ok", ok); }
+      }
+      const row = recall("__kz_expired") ? null : rememberedRow();
+      if (row) { pressOnce("__kz_row", row, 6000); }
+      else if (document.querySelector("#main [role=button]")) {
+        pressOnce("__kz_other", labelled("使用其他帳號登入"));
+      }
+      if (stuck(path, 20000)) handOver("選不到帳號，請你自己點");
+      return;
+    }
+
+    // 對方跳了一個要人按「確定」的框：密碼錯、帳號被鎖、或別的我們沒料到的話。
+    // 不替使用者按掉——那些字是寫給他看的。
+    const notice = [...document.querySelectorAll("[role=dialog], .el-message-box")].find(visible);
+    if (notice && labelled("確定", true)) return handOver("請看畫面上的訊息");
+
+    if (path === "/login") {
       const acc = accountField();
-      if (acc && !passwordField() && fill(acc, ACC)) mark("__kz_acc");
+      if (acc && (!recall("__kz_acc") || !acc.value)) {
+        if (fill(acc, ACC)) note("__kz_acc", "1");
+        return;
+      }
+      // 沒勾這個，對方就不會記住這台裝置，下次又得從頭驗一遍。
+      const keep = [...document.querySelectorAll("[role=checkbox]")].find(
+        (el) => visible(el) && /保持登入/.test(el.textContent || ""));
+      if (keep && keep.getAttribute("aria-checked") !== "true") { press(keep); return; }
+      if (acc) pressOnce("__kz_next", labelled("下一步", true));
+      if (stuck(path, 15000)) {
+        handOver(recall("__kz_next")
+          ? "這個帳號可能開了 passkey 優先：請改用驗證碼登入，之後到會員中心關掉它"
+          : "這一步請你自己來");
+      }
       return;
     }
-    // passkey：帳號帶進去就收手。游標一進帳號欄，那頁就會問要不要用金鑰，系統的
-    // 詢問框蓋上來之後頁面是動不了的——再去按「下一步」只會空等到逾時。
-    if (!PW) { clearInterval(timer); say("帳號填好了，請用 passkey 登入"); return; }
-    if (!step("__kz_next")) {
-      if (passwordField()) { mark("__kz_next"); return; }
-      say("按下一步");
-      clickLabelled("下一步");
-      return;
-    }
-    if (!step("__kz_pw")) {
-      say("填密碼");
+
+    if (path === "/login/input-password") {
       const pw = passwordField();
-      if (pw && fill(pw, PW)) mark("__kz_pw");
+      if (!recall("__kz_sent")) {
+        if (pw && fill(pw, PW)) {
+          const go = labelled("登入", true);
+          if (go) { note("__kz_sent", "1"); press(go); }
+        }
+      }
+      // 送出後還留在這一頁：密碼不對，或是對方有話要說。
+      if (stuck(path, 10000)) handOver("登入沒有成功，請看畫面上的訊息");
       return;
     }
-    if (!step("__kz_login")) {
-      say("按登入");
-      if (clickLabelled("登入")) mark("__kz_login");
-      return;
-    }
-    // 送出了。再往下一律是人的事：二階段、密碼錯了、或是我們沒想到的畫面。
-    // 真的成功的話，頁面會離開這個網域，這支腳本也就不再跑了。
-    clearInterval(timer);
-    say("已送出，等它回應");
+
+    // 其餘的頁面（授權中轉、登入完成的過場）只是路過。停太久才是有事。
+    if (stuck(path, 15000)) handOver("這一步請你自己來");
   }, 300);
 })();"##;
 
@@ -446,4 +624,37 @@ fn harvest<R: Runtime>(window: &WebviewWindow<R>) -> Option<Outcome> {
         }
     }
     Some(Outcome::Completed { token, cookies: all })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{browser_args, init_script, Fill, Stage};
+
+    #[test]
+    fn reads_what_the_script_reports() {
+        let parse = |s: &str| serde_json::from_str::<Option<Stage>>(s).unwrap();
+        assert_eq!(parse("null"), None);
+        assert_eq!(parse(r#"{"stage":"working"}"#), Some(Stage::Working));
+        assert_eq!(parse(r#"{"stage":"user"}"#), Some(Stage::User));
+        assert_eq!(
+            parse(r#"{"stage":"code","sentTo":"+886 922 313 293","error":"","attempt":1}"#),
+            Some(Stage::Code { sent_to: "+886 922 313 293".into(), error: String::new(), attempt: 1 })
+        );
+    }
+
+    /// 帳號裡出現佔位字串時，第二次替換不可以掃到第一次填進去的內容。
+    #[test]
+    fn placeholders_in_the_account_stay_literal() {
+        let js = init_script(&Fill { account: "__PASSWORD__".into(), password: "pw".into() });
+        assert!(js.contains(r#"const ACC = "__PASSWORD__";"#));
+        assert!(js.contains(r#"const PW = "pw";"#));
+    }
+
+    /// Chromium 只認最後一個 `--disable-features`，所以只能有一個。
+    #[test]
+    fn keeps_a_single_feature_list() {
+        let args = browser_args();
+        assert_eq!(args.matches("--disable-features=").count(), 1);
+        assert!(args.contains("CalculateNativeWinOcclusion,"));
+    }
 }

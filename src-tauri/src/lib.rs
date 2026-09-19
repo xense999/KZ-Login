@@ -223,8 +223,8 @@ fn captcha_cancel<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 
 // ─── GamaPass Login ───────────────────────────────────────────────────────────
 
-/// How a GamaPass login ended. `Cancelled` is the user closing the window (or
-/// the wait timing out) — an ordinary outcome, not an error.
+/// How a GamaPass login ended. `Cancelled` is the user giving up (or the wait
+/// timing out) — an ordinary outcome, not an error.
 #[derive(serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum GamapassLoginResult {
@@ -232,24 +232,34 @@ enum GamapassLoginResult {
     Cancelled,
 }
 
+/// The event the login page hears each [`gamapass::Stage`] on.
+const GAMAPASS_STAGE_EVENT: &str = "gamapass-stage";
+
 /// Sign in with a GamaPass account. The account and password are the ones typed
-/// into our own form; they are handed to the window to put into Gamania's
-/// fields, and remembered once the login works (see `credentials`). Without a
-/// password the account still goes in, and the window is then handed to the
-/// user for a passkey — that path stores nothing, having no password to store.
+/// into our own form (or remembered from it); they are handed to a window the
+/// user does not see, which puts them into Gamania's fields, and they are
+/// remembered once the login works (see `credentials`). `region` is where that
+/// window comes out if the page needs the person after all.
 ///
-/// The tail is the QR login's: the login is tied to the session key we minted
-/// rather than to whoever's cookie jar performed it.
+/// The command awaits the whole login. What happens meanwhile — a verification
+/// code being asked for, the page being handed over — reaches the login page as
+/// `gamapass-stage` events.
 #[tauri::command]
 async fn gamapass_login<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     account: String,
-    password: Option<String>,
+    password: String,
+    region: overlay::Region,
 ) -> Result<GamapassLoginResult, String> {
+    use tauri::Emitter;
+
     let account = account.trim().to_owned();
     if account.is_empty() {
         return Err("請先輸入手機號碼或電子郵件".into());
+    }
+    if password.is_empty() {
+        return Err("請先輸入密碼".into());
     }
 
     // Starting this abandons a paused password login, and its password.
@@ -262,13 +272,12 @@ async fn gamapass_login<R: tauri::Runtime>(
     // and presses its GamaPass button itself.
     beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
 
-    let fill = gamapass::Fill {
-        account: account.clone(),
-        password: password.filter(|p| !p.is_empty()),
+    let fill = gamapass::Fill { account: account.clone(), password: password.clone() };
+    let on_stage = |stage: &gamapass::Stage| {
+        let _ = app.emit_to("main", GAMAPASS_STAGE_EVENT, stage);
     };
-    let fill_password = fill.password.clone();
 
-    match gamapass::wait_for_login(&app, &skey, &cookie_store, fill).await? {
+    match gamapass::wait_for_login(&app, &skey, &cookie_store, fill, region, on_stage).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
         gamapass::Outcome::Completed { token, cookies } => {
             // The sign-in happened in that window, so its cookies are the live
@@ -279,16 +288,20 @@ async fn gamapass_login<R: tauri::Runtime>(
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
             state.session_stores.lock().await.insert(token.clone(), cookie_store);
             // Saving is a convenience; failing to save must not undo a good
-            // login. Only a password is worth keeping — a passkey login has
-            // none, and must not wipe the one already saved.
-            if let Some(password) = fill_password {
-                if let Err(e) = credentials::remember(&app, &account, &password, credentials::LoginKind::Gamapass) {
-                    eprintln!("[credentials] {e}");
-                }
+            // login.
+            if let Err(e) = credentials::remember(&app, &account, &password, credentials::LoginKind::Gamapass) {
+                eprintln!("[credentials] {e}");
             }
             Ok(GamapassLoginResult::Approved { token, games })
         }
     }
+}
+
+/// The verification code the login page asked for, on its way into Gamania's
+/// page. Whether it was accepted comes back as the next `gamapass-stage`.
+#[tauri::command]
+fn gamapass_code<R: tauri::Runtime>(app: tauri::AppHandle<R>, code: String) -> Result<(), String> {
+    gamapass::submit_code(&app, &code)
 }
 
 /// Close the GamaPass window; the pending `gamapass_login` then resolves as
@@ -535,19 +548,6 @@ mod win {
     /// True when a MapleStory client window is currently open.
     pub fn is_game_running() -> bool {
         unsafe { !find_game_window().is_null() }
-    }
-
-    /// Let any other process put a window in front, for as long as this process
-    /// keeps the foreground privilege.
-    ///
-    /// Windows normally only lets the process the user is working in raise a
-    /// window. The passkey prompt is drawn by the system's own credential UI —
-    /// a different process — so without this it can only blink in the taskbar
-    /// and wait to be clicked.
-    pub fn allow_foreground_for_any() {
-        use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
-        // ASFW_ANY: any process may take the foreground.
-        unsafe { AllowSetForegroundWindow(u32::MAX) };
     }
 
     /// Executable name of the game client, as Task Manager lists it. Also what
@@ -1417,7 +1417,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, gamapass_login, gamapass_cancel, saved_logins, saved_gamapass, forget_saved_login, forget_gamapass, reorder_saved_logins, get_otp,
+            qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, gamapass_login, gamapass_code, gamapass_cancel, saved_logins, saved_gamapass, forget_saved_login, forget_gamapass, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,
             game_running, launch_game, kill_game,
             prime_game_zone, launch_uri_of, otp_of, verify_hidden_key,

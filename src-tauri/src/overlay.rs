@@ -42,6 +42,10 @@ pub fn place<R: Runtime>(window: &WebviewWindow<R>, main: &WebviewWindow<R>, reg
     let (Ok(origin), Ok(scale)) = (main.inner_position(), main.scale_factor()) else {
         return;
     };
+    // `region` 是主視窗頁面量出來的 CSS px，而那一頁被系統的文字大小一起放大了
+    // （見 `win::text_scale_factor`）——DPI 的倍率裡不含它，要另外乘回去。
+    #[cfg(windows)]
+    let scale = scale * crate::win::text_scale_factor();
     let pos = PhysicalPosition::new(
         origin.x + (region.x * scale).round() as i32,
         origin.y + (region.y * scale).round() as i32,

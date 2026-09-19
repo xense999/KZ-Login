@@ -960,11 +960,17 @@ fn open_tab<R: Runtime>(
 /// 這條 session 上的，webview 沒帶著同一批 cookie 過去，OAuth 繞一圈回來時
 /// beanfun 認不得自己發的 nonce，回「參數(nonce)驗證失敗」。
 ///
-/// **先清空再注入**：那個 webview 的資料夾是重複使用的，上一次登入留下的 token
-/// 還在裡面，portal 會拿舊的那條短路掉這一次的流程。
+/// **先清掉 `stale` 這幾個網址底下的舊 cookie 再注入**：那個 webview 的資料夾是
+/// 重複使用的，上一次登入留下的 token 還在裡面，portal 會拿舊的那條短路掉這一次
+/// 的流程。★只清這幾個網址的，不是整個清空——對方網域上「保持登入狀態」留下的
+/// 登入態也住在同一個資料夾裡，那正是下次不必再驗證的原因。
+///
+/// 讀 cookie 是非同步的，所以順序靠回呼串起來：全部刪完才注入、注入完才導向。
+/// 各做各的話，晚到的刪除會把剛注入的那批一起帶走。
 pub(crate) fn seed_and_navigate<R: Runtime>(
     window: &WebviewWindow<R>,
     jar: &Arc<CookieStoreMutex>,
+    stale: &'static [&'static str],
     target: Url,
 ) -> Result<(), String> {
     let cookies = cookies_from_jar(jar);
@@ -972,42 +978,95 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
     let nav_target = window.clone();
     window
         .with_webview(move |platform| {
-            // 注入在主執行緒非同步跑，錯誤回不到呼叫端；印出來至少查得到——
-            // 「登入繞回來說 nonce 不對」的成因就在這幾行的結果裡。
-            if let Err(e) = clear_cookies(&platform) {
-                eprintln!("[browser] 舊 cookie 清不掉：{e}");
-            }
-            match inject_cookies(&platform, &cookies) {
-                Ok(n) if n == expected => {}
-                Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
-                Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
-            }
-            let _ = nav_target.navigate(target);
+            let seed = move |platform: &tauri::webview::PlatformWebview| {
+                // 注入在主執行緒非同步跑，錯誤回不到呼叫端；印出來至少查得到——
+                // 「登入繞回來說 nonce 不對」的成因就在這幾行的結果裡。
+                match inject_cookies(platform, &cookies) {
+                    Ok(n) if n == expected => {}
+                    Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
+                    Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
+                }
+                let _ = nav_target.navigate(target);
+            };
+            clear_cookies_then(platform, stale, seed);
         })
         .map_err(|e| format!("注入登入資訊失敗：{e}"))
 }
 
+/// 逐顆讀出來再刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
+/// 那支的第一個參數是 cookie 的 name，「這個網域下全部」不是它的語意。
+///
+/// 任何一步失敗都照樣往下走：清不掉頂多是這一次被舊 token 短路，卡在這裡不導向
+/// 則是整個登入開不起來。
 #[cfg(windows)]
-fn clear_cookies(platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
+fn clear_cookies_then(
+    platform: tauri::webview::PlatformWebview,
+    urls: &'static [&'static str],
+    then: impl FnOnce(&tauri::webview::PlatformWebview) + 'static,
+) {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use webview2_com::GetCookiesCompletedHandler;
     use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
-    use windows_core::Interface;
+    use windows_core::{Interface, HSTRING, PCWSTR};
 
-    unsafe {
-        let manager: ICoreWebView2CookieManager = platform
+    let manager: Option<ICoreWebView2CookieManager> = unsafe {
+        platform
             .controller()
             .CoreWebView2()
             .and_then(|core| core.cast::<ICoreWebView2_2>())
             .and_then(|core2| core2.CookieManager())
-            .map_err(|e| format!("取不到 cookie manager：{e}"))?;
-        manager
-            .DeleteAllCookies()
-            .map_err(|e| format!("清除 cookie 失敗：{e}"))
+            .map_err(|e| eprintln!("[browser] 取不到 cookie manager，舊 cookie 沒清：{e}"))
+            .ok()
+    };
+    let Some(manager) = manager.filter(|_| !urls.is_empty()) else {
+        then(&platform);
+        return;
+    };
+
+    // 這些回呼全部跑在主執行緒上，所以用 Rc 就夠了。
+    let pending = Rc::new(Cell::new(urls.len()));
+    let then = Rc::new(RefCell::new(Some((platform, then))));
+    let settle = move |pending: &Cell<usize>| {
+        pending.set(pending.get() - 1);
+        if pending.get() == 0 {
+            if let Some((platform, then)) = then.borrow_mut().take() {
+                then(&platform);
+            }
+        }
+    };
+
+    for url in urls {
+        let uri = HSTRING::from(*url);
+        let deleter = manager.clone();
+        let (pending_cb, settle_cb) = (pending.clone(), settle.clone());
+        let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
+            if let Some(list) = list {
+                let mut count = 0u32;
+                let _ = unsafe { list.Count(&mut count) };
+                for i in 0..count {
+                    if let Ok(cookie) = unsafe { list.GetValueAtIndex(i) } {
+                        let _ = unsafe { deleter.DeleteCookie(&cookie) };
+                    }
+                }
+            }
+            settle_cb(&pending_cb);
+            Ok(())
+        }));
+        if let Err(e) = unsafe { manager.GetCookies(PCWSTR(uri.as_ptr()), &handler) } {
+            eprintln!("[browser] 讀 {url} 的 cookie 失敗，沒清成：{e}");
+            settle(&pending);
+        }
     }
 }
 
 #[cfg(not(windows))]
-fn clear_cookies(_platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
-    Ok(())
+fn clear_cookies_then(
+    platform: tauri::webview::PlatformWebview,
+    _urls: &'static [&'static str],
+    then: impl FnOnce(&tauri::webview::PlatformWebview) + 'static,
+) {
+    then(&platform);
 }
 
 /// 切到某個分頁：顯示它、藏起其他的，並把它的網址推給網址列。
@@ -1254,6 +1313,42 @@ pub(crate) fn read_cookies<R: Runtime>(
     _url: &str,
 ) -> Result<Vec<(String, String)>, String> {
     Ok(Vec::new())
+}
+
+/// 在 `window` 的頁面裡跑一段腳本，拿回它的結果（JSON 字串）。
+///
+/// 給 `gamapass` 用：那顆視窗零 IPC，頁面沒有辦法主動告訴我們什麼，所以由這邊
+/// 去問。問不到（頁面正在換、逾時）一律回 `None`，呼叫端下一輪再問就是了。
+#[cfg(windows)]
+pub(crate) fn eval_json<R: Runtime>(window: &WebviewWindow<R>, script: &str) -> Option<String> {
+    use std::sync::mpsc;
+    use webview2_com::ExecuteScriptCompletedHandler;
+    use windows_core::{HSTRING, PCWSTR};
+
+    let (tx, rx) = mpsc::sync_channel::<Option<String>>(1);
+    let script = HSTRING::from(script);
+    window
+        .with_webview(move |platform| unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                let _ = tx.send(None);
+                return;
+            };
+            let reply = tx.clone();
+            let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
+                let _ = reply.send(result.ok().map(|_| json));
+                Ok(())
+            }));
+            if core.ExecuteScript(PCWSTR(script.as_ptr()), &handler).is_err() {
+                let _ = tx.send(None);
+            }
+        })
+        .ok()?;
+    rx.recv_timeout(std::time::Duration::from_secs(2)).ok().flatten()
+}
+
+#[cfg(not(windows))]
+pub(crate) fn eval_json<R: Runtime>(_window: &WebviewWindow<R>, _script: &str) -> Option<String> {
+    None
 }
 
 // ─── Cookie 注入（WebView2） ──────────────────────────────────────────────────
