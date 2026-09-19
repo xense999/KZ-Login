@@ -32,6 +32,8 @@
 
 <img width="294" height="448" alt="QR Code 掃碼登入" src="https://github.com/user-attachments/assets/03b2e139-2e8e-4e44-8336-5d74f37a1283" />　<img width="294" height="448" alt="帳號密碼登入" src="https://github.com/user-attachments/assets/ef28a828-444b-4c52-b28e-040838b9d5cb" />
 
+<img width="294" height="448" alt="GamaPass 登入－尚未記住帳號" src="https://github.com/user-attachments/assets/d28e85e6-8818-4b6c-80ec-26149d13f3d7" />　<img width="294" height="448" alt="GamaPass 登入－已記住的帳號" src="https://github.com/user-attachments/assets/da005e74-2018-4b63-8825-16252b967abc" />
+
 **設定**
 
 <img width="294" height="448" alt="設定" src="https://github.com/user-attachments/assets/9641ae26-d935-434f-ba1d-6bc90bd1ffdd" />
@@ -95,5 +97,3 @@
 ## License
 
 MIT
-<img width="420" height="640" alt="image" src="https://github.com/user-attachments/assets/d28e85e6-8818-4b6c-80ec-26149d13f3d7" />
-<img width="420" height="640" alt="image" src="https://github.com/user-attachments/assets/da005e74-2018-4b63-8825-16252b967abc" />
