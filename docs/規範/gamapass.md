@@ -7,13 +7,19 @@
 ## 公開介面
 
 ```rust
-pub struct Fill { account: String, password: String }
+pub struct Fill { account: String, password: String, fresh: bool }
 pub enum Stage { Working, Code { sent_to, error, attempt }, User }
-pub enum Outcome { Completed { token, cookies }, Cancelled }
-pub async fn wait_for_login(app, skey: &str, jar, fill: Fill, region: overlay::Region, on_stage: impl Fn(&Stage)) -> Result<Outcome, String>
+pub enum Outcome { Completed { token, cookies, password_checked: bool }, Cancelled }
+pub fn ticket() -> u64
+pub async fn wait_for_login(app, skey: &str, jar, fill: Fill, region: overlay::Region, ticket: u64, on_stage: impl Fn(&Stage)) -> Result<Outcome, String>
 pub fn submit_code(app, code: &str) -> Result<(), String>
-pub fn cancel(app)
+pub fn cancel(app)          // 放棄進行中的登入（含還沒開窗的）
+pub fn close_windows(app)   // 登入結束後收視窗；不算取消
 ```
+
+- `fresh`＝新增的帳號：密碼還沒被對方驗過，所以**不走選帳號那條捷徑**，一定經過密碼頁。
+- `password_checked`＝腳本真的把密碼送進了對方的密碼頁、而且中途沒有交給使用者。只有這種登入才值得把密碼記下來。
+- `ticket` 要在指令的第一步就拿（任何網路請求之前），之後交給 `wait_for_login`。
 
 - 呼叫者：`commands` 的 `gamapass_login`、`gamapass_code`、`gamapass_cancel`（登入頁的「取消」）。
 - `Completed` 代表視窗的 cookie 裡出現了 `bfWebToken`，token 與整批 cookie 一起帶回來；呼叫端用 `beanfun::adopt_cookies` 收進自己的 jar。
@@ -70,6 +76,12 @@ pub fn cancel(app)
 
 ## 不變量
 
+- **只有對方驗過的密碼才記。** 選帳號那條捷徑完全不看密碼——打錯的密碼也登得進去；使用者接手完成的登入，登進去的甚至可能是別的帳號。這兩種都不呼叫 `credentials::remember`（`password_checked = false`）。同理，新增帳號（`fresh`）不准走捷徑：否則任何人隨便打一組密碼就能登進對方還記著的帳號，那組假密碼還會被存起來。
+- **舊 token 不算數。** 資料夾是重用的，清 beanfun 的舊 cookie 又是盡力而為的非同步動作；所以開窗當下先記下既有的 `bfWebToken`，`harvest` 只認跟它不同的那一顆。否則清除慢了或失敗了，上一次登入的 token 會被當成這一次成功，而且登進去的是上一個帳號。
+- **取消要追得上還沒開窗的登入。** `cancel` 會把計數器加一；登入從第一步就握著當時的值（`ticket`），開窗前、每個 tick 都對一次，對不上就放棄。只靠「關視窗」的話，在拿 session key 那一兩秒按下的取消會落空，接著密碼照打、簡訊照發。
+- **收尾只關自己那一顆視窗。** 取消的那條路只 `destroy` 自己的 label；這時候可能已經有下一次登入的視窗開著了。開始新的登入時收掉舊視窗用的是 `close_windows`，不是 `cancel`——後者會讓自己的 `ticket` 當場作廢。
+- 讀 cookie 與問腳本都是同步等主執行緒的回呼（頁面正在換的時候會等到逾時），一律丟到 `spawn_blocking`，不佔 runtime 的 worker。
+
 - **`accounts.gamania.com` 的 cookie 永遠不清。** 那是對方記住這台裝置的依據；清了，每次登入都得從頭驗一遍。要清的只有 beanfun 的（上次留下的 token 會讓 portal 短路掉這一次），而且要**刪完才注入、注入完才導向**——各做各的話，晚到的刪除會把剛注入的那批一起帶走。
 - **一律走密碼、一律勾「保持登入狀態」、一律婉拒 passkey。** 腳本把 `navigator.credentials.get/create` 換成直接回 `NotAllowedError`（等同使用者在系統的框上按取消）：passkey 登入不會被記住，而且視窗在畫面外，系統的框會憑空冒出來。開了 passkey 優先的帳號會因此走到對方的替代驗證，那一頁交給使用者（`user`），並在畫面上說明原因。
 - **視窗是「顯示中但停在畫面外」，不是隱藏。** 隱藏的 WebView 不繪製，對方頁面的轉場不會結束、對話框不會打開。另外帶 `CalculateNativeWinOcclusion` 等參數，免得 Chromium 把畫面外的視窗當成被遮住而降速。
@@ -78,7 +90,7 @@ pub fn cancel(app)
 - 注入的腳本在 `login.beanfun.com` 與 `accounts.gamania.com` 兩個 host 上跑（前者只按那顆「使用 gamapass」），**但帳密只會填進 `accounts.gamania.com`**——別的頁面碰巧載進這個視窗時，一個字都不會被打出去。
 - 腳本不偽裝自動化痕跡、不碰任何驗證挑戰；對方要驗就交給使用者。
 - 欄位靠 `input` 的 type 找、按鈕靠文字找；用到的少數選擇器是對方原始碼裡手寫的穩定名字（`.use-gama-pass`、`.input-verification-code`、ARIA role），不用框架產生的 class——那種名字改版就會變。
-- 選帳號時，遮罩對得上的列**恰好一列**才點；兩列都對得上就不猜，改走密碼。
+- 選帳號時，遮罩對得上的列**恰好一列**才點；兩列都對得上就不猜，改走密碼。★已知的殘餘風險：遮罩只露出國碼＋前三碼＋後兩碼，如果使用者有兩個號碼這幾碼都一樣，而要登的那個剛好被對方擠出清單（上限 5 組）或過期，剩下那一列會被誤認。對方的清單不給完整號碼，這邊沒有別的依據可比；發生的條件很窄，先記在這裡。
 - 視窗**不掛任何 capability**（零 IPC），同 `captcha`：載入的是外部網站，給它 IPC 等於把 app 的指令開放給那個頁面。腳本的回報由後端主動去問（`browser::eval_json`），驗證碼由後端 `eval` 進去。
 - 使用固定、可重用的獨立 WebView2 資料夾（app local data 底下的 `gamapass-webview`），不可與主視窗或 captcha 視窗共用。**刪掉這個資料夾＝對方忘記這台裝置。**
 - label 每次換號（`gamapass-<n>`）：tauri 的 label 簿記要等 `Destroyed` 才清，用固定 label 會撞號。

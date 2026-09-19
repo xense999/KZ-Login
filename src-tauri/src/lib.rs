@@ -250,9 +250,14 @@ async fn gamapass_login<R: tauri::Runtime>(
     state: tauri::State<'_, AppState>,
     account: String,
     password: String,
+    fresh: bool,
     region: overlay::Region,
 ) -> Result<GamapassLoginResult, String> {
     use tauri::Emitter;
+
+    // Before anything that takes time: a cancel pressed while the session key
+    // is still being fetched has no window to close, only this to invalidate.
+    let ticket = gamapass::ticket();
 
     let account = account.trim().to_owned();
     if account.is_empty() {
@@ -272,25 +277,29 @@ async fn gamapass_login<R: tauri::Runtime>(
     // and presses its GamaPass button itself.
     beanfun::open_login_page(&client, &skey).await.map_err(map_err)?;
 
-    let fill = gamapass::Fill { account: account.clone(), password: password.clone() };
+    let fill = gamapass::Fill { account: account.clone(), password: password.clone(), fresh };
     let on_stage = |stage: &gamapass::Stage| {
         let _ = app.emit_to("main", GAMAPASS_STAGE_EVENT, stage);
     };
 
-    match gamapass::wait_for_login(&app, &skey, &cookie_store, fill, region, on_stage).await? {
+    match gamapass::wait_for_login(&app, &skey, &cookie_store, fill, region, ticket, on_stage).await? {
         gamapass::Outcome::Cancelled => Ok(GamapassLoginResult::Cancelled),
-        gamapass::Outcome::Completed { token, cookies } => {
+        gamapass::Outcome::Completed { token, cookies, password_checked } => {
             // The sign-in happened in that window, so its cookies are the live
             // session — ours has to carry them from here on, or the very next
             // request is an anonymous one.
             beanfun::adopt_cookies(&cookie_store, &cookies).map_err(map_err)?;
-            gamapass::cancel(&app);
+            gamapass::close_windows(&app);
             let games = beanfun::get_game_accounts(&client, &token).await.unwrap_or_default();
             state.session_stores.lock().await.insert(token.clone(), cookie_store);
-            // Saving is a convenience; failing to save must not undo a good
-            // login.
-            if let Err(e) = credentials::remember(&app, &account, &password, credentials::LoginKind::Gamapass) {
-                eprintln!("[credentials] {e}");
+            // Only a password Gamania itself accepted is worth keeping: a login
+            // through its account list never looks at the password, and one the
+            // user finished by hand may not even be this account. Saving is a
+            // convenience; failing to save must not undo a good login.
+            if password_checked {
+                if let Err(e) = credentials::remember(&app, &account, &password, credentials::LoginKind::Gamapass) {
+                    eprintln!("[credentials] {e}");
+                }
             }
             Ok(GamapassLoginResult::Approved { token, games })
         }

@@ -27,6 +27,9 @@ type Stage =
 const LAST_KEY = "kusei:gamapass_last";
 // 對方的驗證碼固定四位數。
 const CODE_LENGTH = 4;
+// 送出驗證碼後等這麼久還沒有下文，就讓使用者再打一次：後端只在狀態「變了」的
+// 時候才通知，而對方頁面當下若沒收下那串數字，狀態就不會變。
+const CODE_REPLY_MS = 8000;
 
 const saved = ref<Saved[]>([]);
 const chosen = ref<Saved | null>(null);
@@ -46,6 +49,7 @@ const errorMsg = ref("");
 // 切走時這一頁會被卸載，但登入可能還在跑；那時候的回覆不該再動這一頁。
 let disposed = false;
 let unlisten: UnlistenFn | null = null;
+let codeTimer: number | undefined;
 
 onMounted(async () => {
   document.addEventListener("pointerdown", closeMenuOutside);
@@ -72,6 +76,7 @@ function closeMenuOutside(e: PointerEvent) {
 onUnmounted(() => {
   disposed = true;
   unlisten?.();
+  clearTimeout(codeTimer);
   document.removeEventListener("pointerdown", closeMenuOutside);
   invoke("gamapass_cancel").catch(() => { /* 早就結束了 */ });
 });
@@ -99,6 +104,7 @@ async function forget(entry: Saved) {
 
 function onStage(next: Stage) {
   if (disposed || !running.value) return;
+  clearTimeout(codeTimer);
   stage.value = next;
   if (next.stage === "code") {
     code.value = "";
@@ -113,7 +119,9 @@ function readRegion() {
   return { x: r.left, y: r.top, width: r.width, height: r.height };
 }
 
-async function login(entry: Saved) {
+// `fresh`：新增的帳號。它的密碼還沒被對方驗過，所以後端不走「點記住的帳號」那條
+// 捷徑——那條不看密碼，打錯的密碼也會登入成功、然後被我們存起來。
+async function login(entry: Saved, fresh: boolean) {
   if (running.value) return;
   errorMsg.value = "";
   menuOpen.value = false;
@@ -124,6 +132,7 @@ async function login(entry: Saved) {
     const result = await invoke<Result>("gamapass_login", {
       account: entry.account,
       password: entry.password,
+      fresh,
       region: readRegion(),
     });
     if (disposed) return;
@@ -141,6 +150,7 @@ async function login(entry: Saved) {
   } catch (e: unknown) {
     if (!disposed) errorMsg.value = e instanceof Error ? e.message : String(e);
   } finally {
+    clearTimeout(codeTimer);
     if (!disposed) {
       running.value = false;
       emit("busy", false);
@@ -149,7 +159,7 @@ async function login(entry: Saved) {
 }
 
 function addAndLogin() {
-  if (canAdd.value) login({ account: account.value.trim(), password: password.value });
+  if (canAdd.value) login({ account: account.value.trim(), password: password.value }, true);
 }
 
 // 送出後等後端的下一個事件：收了就回到「登入中」，不收就再問一次並帶著對方的說法。
@@ -157,9 +167,19 @@ async function sendCode() {
   const digits = code.value.replace(/\D/g, "");
   if (digits.length !== CODE_LENGTH || codeSent.value) return;
   codeSent.value = true;
+  errorMsg.value = "";
+  clearTimeout(codeTimer);
+  codeTimer = window.setTimeout(() => {
+    if (disposed || !codeSent.value) return;
+    code.value = "";
+    codeSent.value = false;
+    errorMsg.value = "沒有收到回應，請再輸入一次";
+    nextTick(() => codeInput.value?.focus());
+  }, CODE_REPLY_MS);
   try {
     await invoke("gamapass_code", { code: digits });
   } catch (e) {
+    clearTimeout(codeTimer);
     codeSent.value = false;
     errorMsg.value = e instanceof Error ? e.message : String(e);
   }
@@ -230,7 +250,7 @@ function onCancel() {
                 </li>
               </ul>
             </div>
-            <button class="btn-solid" :disabled="!chosen" @click="chosen && login(chosen)">登入</button>
+            <button class="btn-solid" :disabled="!chosen" @click="chosen && login(chosen, false)">登入</button>
           </div>
         </div>
 
