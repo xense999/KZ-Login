@@ -986,13 +986,16 @@ fn open_tab<R: Runtime>(
         };
         let expected = cookies.len();
         let nav_target = tab.clone();
-        // ★注入之前，先把儲存區裡**同名**的舊 cookie 都拿掉，不管它掛在哪個網域。
+        // ★注入之前，先把儲存區裡**同名卻掛在別處**的舊 cookie 拿掉。
         // 這個資料夾是所有帳號、所有 session 共用的，而注入只蓋得掉「名稱＋網域＋
         // 路徑」都一樣的那一顆：上一個 session 若把 `bfUID` 留在 `tw.beanfun.com`，
         // 這一次注進 `.beanfun.com` 的那顆蓋不到它，beanfun 就同時收到新舊兩個
         // `bfUID`，判成未登入（2026-09-19 實機：GamaPass 登入留下的錯位 cookie
         // 讓之後的 QR 登入開出來全是未登入）。要進來的那批才是現在登入的人。
+        // 位置完全相同的那顆**不刪**，注入會直接蓋掉它——見 `CookieSlots`。
         let names: std::collections::HashSet<String> = cookies.iter().map(|c| c.name.clone()).collect();
+        let slots = CookieSlots::of(&cookies);
+        let slots_for_all = slots.clone();
         tab.with_webview(move |platform| {
             let seed = move |platform: &tauri::webview::PlatformWebview| {
                 // 注入在主執行緒非同步跑，錯誤沒辦法回傳給呼叫端；印出來至少實機
@@ -1002,17 +1005,17 @@ fn open_tab<R: Runtime>(
                     Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
                     Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
                 }
-                let _ = nav_target.navigate(target);
+                when_cookies_settle(platform, move || {
+                    let _ = nav_target.navigate(target);
+                });
             };
-            // 換了帳號：整個清空（見 `COOKIE_OWNER`）。清空是排進同一條佇列的，
-            // 緊接著的注入一定在它後面。同一個帳號：只換掉同名的，他在這個瀏覽器裡
-            // 登過的其他網站不受影響。
+            // 換了帳號：整個清空（見 `COOKIE_OWNER`）。同一個帳號：只換掉同名的，
+            // 他在這個瀏覽器裡登過的其他網站不受影響。
             match tidy {
-                // ★不用 `DeleteAllCookies`：它回來時還沒真的清，也沒有完成通知，晚到的
-                // 清空會把緊接著注入的那批一起帶走——開出來未登入、重新整理也沒用。
-                // 改成跟 `SameNames` 同一條路：讀出來逐顆刪，全部處理完才注入。
+                // ★不用 `DeleteAllCookies`：它跟逐顆刪一樣會晚到，而且什麼都刪，沒辦法
+                // 把注入要用的位置排除在外。
                 Tidy::Everything { account } => {
-                    clear_cookies_then(platform, EVERY_COOKIE, |_| true, move |platform, clean| {
+                    clear_cookies_then(platform, EVERY_COOKIE, move |name, domain, path| !slots_for_all.holds(name, domain, path), move |platform, clean| {
                         if clean {
                             if let Ok(mut owner) = COOKIE_OWNER.lock() {
                                 *owner = Some(account);
@@ -1022,7 +1025,12 @@ fn open_tab<R: Runtime>(
                     });
                 }
                 Tidy::SameNames => {
-                    clear_cookies_then(platform, SESSION_COOKIE_URLS, move |name| names.contains(name), move |platform, _| seed(platform));
+                    clear_cookies_then(
+                        platform,
+                        SESSION_COOKIE_URLS,
+                        move |name, domain, path| names.contains(name) && !slots.holds(name, domain, path),
+                        move |platform, _| seed(platform),
+                    );
                 }
                 Tidy::Keep => seed(&platform),
             }
@@ -1045,8 +1053,7 @@ fn open_tab<R: Runtime>(
 /// 的流程。★只清這幾個網址的，不是整個清空——對方網域上「保持登入狀態」留下的
 /// 登入態也住在同一個資料夾裡，那正是下次不必再驗證的原因。
 ///
-/// 讀 cookie 是非同步的，所以順序靠回呼串起來：全部刪完才注入、注入完才導向。
-/// 各做各的話，晚到的刪除會把剛注入的那批一起帶走。
+/// 注入要用的位置不刪（見 `CookieSlots`），注入會直接蓋掉。
 pub(crate) fn seed_and_navigate<R: Runtime>(
     window: &WebviewWindow<R>,
     jar: &Arc<CookieStoreMutex>,
@@ -1055,6 +1062,7 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
 ) -> Result<(), String> {
     let cookies = cookies_from_jar(jar);
     let expected = cookies.len();
+    let slots = CookieSlots::of(&cookies);
     let nav_target = window.clone();
     diag(window.app_handle(), &format!("登入視窗 {} 清掉 beanfun 登入網址的 cookie 後注入 {expected} 顆", window.label()));
     window
@@ -1067,14 +1075,47 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
                     Ok(n) => eprintln!("[browser] cookie 注入只成功 {n}/{expected} 顆"),
                     Err(e) => eprintln!("[browser] cookie 注入失敗（0/{expected} 顆）：{e}"),
                 }
-                let _ = nav_target.navigate(target);
+                when_cookies_settle(platform, move || {
+                    let _ = nav_target.navigate(target);
+                });
             };
-            clear_cookies_then(platform, stale, |_| true, move |platform, _| seed(platform));
+            clear_cookies_then(
+                platform,
+                stale,
+                move |name, domain, path| !slots.holds(name, domain, path),
+                move |platform, _| seed(platform),
+            );
         })
         .map_err(|e| format!("注入登入資訊失敗：{e}"))
 }
 
-/// 逐顆讀出來、`doomed(名稱)` 說要刪的才刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
+/// 注入那批 cookie 會落在哪些位置（名稱＋網域＋路徑）。清舊 cookie 時這些位置
+/// **一律不刪**。
+///
+/// ★`DeleteCookie` 送出去之後不保證比後面的 `AddOrUpdateCookie` 早生效。2026-09-20
+/// 實機紀錄：同一個帳號連開四次，一、三次有登入，二、四次沒有——沒登入的那兩次，
+/// 儲存區裡 `bfWebToken`／`bfUID`／`bfSecretCode` 整顆不見：上一次成功注入的那顆
+/// 這次被排了刪除，刪除卻落在新注入之後，把剛寫進去的帶走了（而上一次失敗時
+/// 儲存區沒有東西可刪，所以下一次又好了，於是一好一壞輪流）。位置相同的那顆根本
+/// 不必刪，注入會蓋掉它；不刪，晚到的刪除就碰不到注入的東西。
+#[derive(Clone)]
+struct CookieSlots(std::collections::HashSet<(String, String, String)>);
+
+impl CookieSlots {
+    fn of(cookies: &[WebviewCookie]) -> Self {
+        Self(cookies.iter().map(|c| Self::slot(&c.name, &c.domain, &c.path)).collect())
+    }
+
+    fn slot(name: &str, domain: &str, path: &str) -> (String, String, String) {
+        (name.to_string(), domain.to_ascii_lowercase(), path.to_string())
+    }
+
+    fn holds(&self, name: &str, domain: &str, path: &str) -> bool {
+        self.0.contains(&Self::slot(name, domain, path))
+    }
+}
+
+/// 逐顆讀出來、`doomed(名稱, 網域, 路徑)` 說要刪的才刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
 /// 那支的第一個參數是 cookie 的 name，「這個網域下全部」不是它的語意。
 ///
 /// `then` 的第二個參數＝每個網址都真的讀到了（讀不到的那幾個等於沒清）。
@@ -1085,7 +1126,7 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
 fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
     urls: &'static [&'static str],
-    doomed: impl Fn(&str) -> bool + Clone + 'static,
+    doomed: impl Fn(&str, &str, &str) -> bool + Clone + 'static,
     then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
 ) {
     use std::cell::{Cell, RefCell};
@@ -1137,10 +1178,20 @@ fn clear_cookies_then(
                 for i in 0..count {
                     let Ok(cookie) = (unsafe { list.GetValueAtIndex(i) }) else { continue };
                     let mut name = windows_core::PWSTR::null();
-                    if unsafe { cookie.Name(&mut name) }.is_err() {
+                    let mut domain = windows_core::PWSTR::null();
+                    let mut path = windows_core::PWSTR::null();
+                    if unsafe { cookie.Name(&mut name) }.is_err()
+                        || unsafe { cookie.Domain(&mut domain) }.is_err()
+                        || unsafe { cookie.Path(&mut path) }.is_err()
+                    {
                         continue;
                     }
-                    if doomed(&webview2_com::take_pwstr(name)) {
+                    let (name, domain, path) = (
+                        webview2_com::take_pwstr(name),
+                        webview2_com::take_pwstr(domain),
+                        webview2_com::take_pwstr(path),
+                    );
+                    if doomed(&name, &domain, &path) {
                         let _ = unsafe { deleter.DeleteCookie(&cookie) };
                     }
                 }
@@ -1156,11 +1207,58 @@ fn clear_cookies_then(
     }
 }
 
+/// 等前面排進去的 cookie 寫入都處理完才呼叫 `then`：讀一次 cookie，回呼回來時
+/// 先前的寫入已經過了同一個 cookie manager。問不到就直接往下走。
+#[cfg(windows)]
+fn when_cookies_settle(platform: &tauri::webview::PlatformWebview, then: impl FnOnce() + 'static) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use webview2_com::GetCookiesCompletedHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
+    use windows_core::{Interface, HSTRING, PCWSTR};
+
+    let then = Rc::new(RefCell::new(Some(then)));
+    let fire = {
+        let then = then.clone();
+        move || {
+            if let Some(then) = then.borrow_mut().take() {
+                then();
+            }
+        }
+    };
+    let manager: Option<ICoreWebView2CookieManager> = unsafe {
+        platform
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.cast::<ICoreWebView2_2>())
+            .and_then(|core2| core2.CookieManager())
+            .ok()
+    };
+    let Some(manager) = manager else {
+        fire();
+        return;
+    };
+    let uri = HSTRING::from(HOME_URL);
+    let fire_cb = fire.clone();
+    let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, _list| {
+        fire_cb();
+        Ok(())
+    }));
+    if unsafe { manager.GetCookies(PCWSTR(uri.as_ptr()), &handler) }.is_err() {
+        fire();
+    }
+}
+
+#[cfg(not(windows))]
+fn when_cookies_settle(_platform: &tauri::webview::PlatformWebview, then: impl FnOnce() + 'static) {
+    then();
+}
+
 #[cfg(not(windows))]
 fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
     _urls: &'static [&'static str],
-    _doomed: impl Fn(&str) -> bool + Clone + 'static,
+    _doomed: impl Fn(&str, &str, &str) -> bool + Clone + 'static,
     then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
 ) {
     then(&platform, true);
@@ -1628,6 +1726,22 @@ fn inject_cookies(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_injected_slot_is_never_cleared_but_a_misplaced_twin_is() {
+        let slots = CookieSlots::of(&[WebviewCookie {
+            name: "bfUID".into(),
+            value: "v".into(),
+            domain: ".beanfun.com".into(),
+            path: "/".into(),
+            secure: true,
+            http_only: true,
+        }]);
+        assert!(slots.holds("bfUID", ".BEANFUN.com", "/"));
+        assert!(!slots.holds("bfUID", "tw.beanfun.com", "/"));
+        assert!(!slots.holds("bfUID", ".beanfun.com", "/sub"));
+        assert!(!slots.holds("other", ".beanfun.com", "/"));
+    }
 
     fn seen(name: &str, domain: &str, http_only: bool) -> SeenCookie {
         SeenCookie {
