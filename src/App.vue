@@ -12,6 +12,7 @@ import ToastPop from "./components/ToastPop.vue";
 import { toast } from "./composables/useToast";
 import { useAccountsStore, sameLoginAccount, type LoginMethod, type LoginResult } from "./stores/accounts";
 import { useTheme } from "./composables/useTheme";
+import { useMinimizeMode } from "./composables/useMinimizeMode";
 
 type Page = "main" | "login" | "success" | "settings";
 
@@ -65,7 +66,8 @@ function cancelLogin() {
   page.value = "main";
 }
 
-function minimize() { Window.getCurrent().minimize(); }
+// 收進通知列還是一般最小化由後端照設定決定
+function minimize() { invoke("minimize_main").catch(console.error); }
 function close() { Window.getCurrent().close(); }
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
@@ -128,6 +130,7 @@ onMounted(async () => {
   // mid-session only shows up next time. Fire-and-forget: it never fails, and
   // nothing here depends on it.
   invoke("apply_icon_theme", { theme: useTheme().theme.value });
+  useMinimizeMode().syncMinimizeMode().catch(console.error);
   keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
 });
 

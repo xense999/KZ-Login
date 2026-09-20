@@ -7,6 +7,7 @@ mod overlay;
 mod hidden;
 mod icon;
 mod keyhook;
+mod tray;
 
 use beanfun::{GameAccount, LoginPage, LoginStep, QrInit, QrPollOutcome, SessionState};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -1235,6 +1236,20 @@ fn apply_icon_theme(app: tauri::AppHandle, theme: String) {
     icon::apply(&app, t);
 }
 
+// ─── Tray ────────────────────────────────────────────────────────────────────
+
+/// Whether the main window's minimize button hides it to the tray instead of the
+/// taskbar. The choice lives in the frontend (localStorage) and is pushed here on launch.
+#[tauri::command]
+fn set_minimize_to_tray(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    tray::set_enabled(&app, on)
+}
+
+#[tauri::command]
+fn minimize_main(app: tauri::AppHandle) -> Result<(), String> {
+    tray::minimize_main(&app)
+}
+
 // ─── App self-update ──────────────────────────────────────────────────────────
 
 /// Check GitHub for a newer app release. Current version comes from Tauri's
@@ -1458,7 +1473,7 @@ pub fn run() {
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
             check_app_update, update_app, update_app_inplace,
-            apply_icon_theme
+            apply_icon_theme, set_minimize_to_tray, minimize_main
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
@@ -1468,6 +1483,10 @@ pub fn run() {
                 sweep_old_exe();
                 let pkg = app.package_info();
                 sync_installed_version(&pkg.name, &pkg.version.to_string());
+            }
+            // 建不出來不擋啟動：之後開「縮小到通知列」會回錯誤，縮小維持一般最小化
+            if let Err(e) = tray::init(app.handle()) {
+                eprintln!("tray init failed: {e}");
             }
             // 開場固定在主螢幕工作區右下角：每次啟動都回這個位置、不記憶拖動後的座標。
             // 用工作區（扣掉工作列）而非螢幕尺寸，否則會被工作列蓋掉一截；用 outer_size
@@ -1501,8 +1520,8 @@ pub fn run() {
 
                 // 關掉主視窗＝結束整個程式。沒有這段的話，只要帳號瀏覽器還開著，
                 // event loop 就認為還有視窗活著而不退出——而主視窗一關就再也叫不
-                // 回來（沒有系統匣、沒有 single instance、沒有任何 show 回主視窗的
-                // 路徑）。帳號瀏覽器留下的幽靈條目更是永遠不會消失，那時連進程都
+                // 回來（系統匣只會 show 還活著的視窗、沒有 single instance）。
+                // 帳號瀏覽器留下的幽靈條目更是永遠不會消失，那時連進程都
                 // 退不掉，會一直留在背景。
                 // ★代價（使用者拍板接受）：exit 不會觸發任何視窗的 CloseRequested，
                 // 帳號瀏覽器的視窗幾何（browser-window.json）因此存不到——先關主視窗

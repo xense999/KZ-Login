@@ -9,6 +9,7 @@ import { toast } from "../composables/useToast";
 import { useTheme } from "../composables/useTheme";
 import { useMainAction, type MainAction } from "../composables/useMainAction";
 import { useDiscordShare } from "../composables/useDiscord";
+import { useMinimizeMode } from "../composables/useMinimizeMode";
 import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
 
 const AUTHOR_DISCORD = "xense999";
@@ -32,11 +33,25 @@ function chooseMainAction(a: MainAction) {
   toast(`右下角按鈕已切換成 ${MAIN_ACTION_LABEL[a]}`);
 }
 
-const WEBHOOK_KEY = "kusei:discord_webhook";
+const { minimizeToTray, setMinimizeToTray } = useMinimizeMode();
+
+async function toggleMinimizeToTray() {
+  try {
+    await setMinimizeToTray(!minimizeToTray.value);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  }
+}
+
+const WEBHOOK_KEY ="kusei:discord_webhook";
 
 const webhookUrl = ref("");
 const gamePath = ref("");
 const saved = ref(false);
+
+const systemOpen = ref(false);
+const notifyOpen = ref(false);
+const gamePathOpen = ref(false);
 
 const showAbout = ref(false);
 const appVersion = ref("");
@@ -227,7 +242,7 @@ async function supportAuthor() {
   <div class="settings-page">
 
     <div class="scroll-area">
-      <div class="card">
+      <div class="card lg">
         <div class="row">
           <span class="row-title tappable" @click="onThemeTitleTap">主題</span>
           <div class="seg">
@@ -237,58 +252,93 @@ async function supportAuthor() {
         </div>
       </div>
 
-      <div class="card">
-        <div class="row">
-          <span class="row-title">按鈕設定</span>
-          <div class="seg">
-            <button :class="{ active: mainAction === 'proxy' }" @click="chooseMainAction('proxy')"
-              title="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
-            <button :class="{ active: mainAction === 'game' }" @click="chooseMainAction('game')"
-              title="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
+      <!-- 設一次就不太會再動的幾張：平常只露標題，點標題列才展開 -->
+      <div class="card lg" :class="{ unfolded: systemOpen }">
+        <div class="row foldhead" @click="systemOpen = !systemOpen">
+          <span class="row-title">系統設定</span>
+          <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+            <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <template v-if="systemOpen">
+          <div class="row-sep"></div>
+          <div class="row">
+            <span class="row-title">按鈕設定</span>
+            <div class="seg">
+              <button :class="{ active: mainAction === 'proxy' }" @click="chooseMainAction('proxy')"
+                title="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
+              <button :class="{ active: mainAction === 'game' }" @click="chooseMainAction('game')"
+                title="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-title">縮小到通知列</span>
+            <button
+              class="pill-switch"
+              role="switch"
+              :class="{ on: minimizeToTray }"
+              :aria-checked="minimizeToTray"
+              title="開啟後，按縮小鈕會把主視窗收進右下角通知列；點圖示叫回來，對圖示按右鍵可結束。關閉鈕不受影響，一律直接結束"
+              @click="toggleMinimizeToTray"
+            >
+              <span class="pill-knob"></span>
+            </button>
+          </div>
+        </template>
+      </div>
+
+      <div class="card lg" :class="{ unfolded: notifyOpen }">
+        <div class="row foldhead" @click="notifyOpen = !notifyOpen">
+          <span class="row-title tappable" @click="onNotifyTitleTap" title="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
+          <div class="foldend">
+            <button
+              v-if="unlocked"
+              class="pill-switch"
+              :class="{ on: shareKeyToDiscord && !shareKeyDisabled }"
+              :disabled="shareKeyDisabled"
+              :title="shareKeyHint"
+              @click.stop="toggleShareKey"
+            >
+              <span class="pill-knob"></span>
+            </button>
+            <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+              <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </div>
         </div>
+        <template v-if="notifyOpen">
+          <div class="row-sep"></div>
+          <div class="path-row">
+            <input
+              v-model="webhookUrl"
+              class="path-input"
+              placeholder="https://discord.com/api/webhooks/..."
+              spellcheck="false"
+              title="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
+            />
+          </div>
+        </template>
       </div>
 
-      <div class="card">
-        <div class="row col switch-row">
-          <span class="row-title" @click="onNotifyTitleTap" title="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
-          <button
-            v-if="unlocked"
-            class="pill-switch"
-            :class="{ on: shareKeyToDiscord && !shareKeyDisabled }"
-            :disabled="shareKeyDisabled"
-            :title="shareKeyHint"
-            @click="toggleShareKey"
-          >
-            <span class="pill-knob"></span>
-          </button>
-        </div>
-        <div class="row-sep"></div>
-        <div class="path-row">
-          <input
-            v-model="webhookUrl"
-            class="path-input"
-            placeholder="https://discord.com/api/webhooks/..."
-            spellcheck="false"
-            title="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
-          />
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="row col">
+      <div class="card lg" :class="{ unfolded: gamePathOpen }">
+        <div class="row foldhead" @click="gamePathOpen = !gamePathOpen">
           <span class="row-title">遊戲路徑</span>
+          <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+            <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
         </div>
-        <div class="row-sep"></div>
-        <div class="path-row">
-          <input
-            v-model="gamePath"
-            class="path-input"
-            placeholder="GGM 找不到遊戲時才需設定…"
-            spellcheck="false"
-          />
-          <button class="btn-browse" @click="browse">瀏覽</button>
-        </div>
+        <template v-if="gamePathOpen">
+          <div class="row-sep"></div>
+          <div class="path-row">
+            <input
+              v-model="gamePath"
+              class="path-input"
+              placeholder="GGM 找不到遊戲時才需設定…"
+              spellcheck="false"
+            />
+            <button class="btn-browse" @click="browse">瀏覽</button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -416,30 +466,43 @@ async function supportAuthor() {
   padding: 15px 16px;
   min-height: 52px;
 }
-.row.col {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  padding: 15px 16px 12px;
-  min-height: unset;
-}
-
-/* 標題與開關同列，但沿用 .row.col 的內距，跟隔壁「遊戲路徑」卡片高度一致 */
-.row.col.switch-row {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
 /* 連點解鎖時不要把標題反白選起來 */
-.switch-row .row-title,
 .row-title.tappable {
   user-select: none;
+}
+
+.foldhead {
+  cursor: pointer;
+  user-select: none;
+}
+.foldend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.foldchev {
+  flex: none;
+  color: var(--text3);
+  transition: transform 0.15s;
+}
+.unfolded .foldchev {
+  transform: rotate(180deg);
 }
 
 .row-title {
   font-size: 14px;
   font-weight: 400;
   color: var(--text);
+}
+
+/* 跟久世管理器設定頁同一組尺寸 */
+.lg .row {
+  min-height: 56px;
+  padding: 10px 16px;
+}
+.lg .seg button {
+  height: 30px;
+  padding: 0 16px;
 }
 
 /* ── 膠囊開關 ── */

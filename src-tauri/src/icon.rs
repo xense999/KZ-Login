@@ -50,6 +50,14 @@ pub fn apply(app: &AppHandle, theme: IconTheme) {
         let _ = writeln!(log, "theme={:?} icon={}", theme, theme.icon_file());
 
         set_window_icon(&app, theme, &mut log);
+        match tauri::image::Image::from_bytes(theme.bytes()).and_then(|img| crate::tray::set_icon(&app, img)) {
+            Ok(()) => {
+                let _ = writeln!(log, "tray: ok");
+            }
+            Err(e) => {
+                let _ = writeln!(log, "tray: {e}");
+            }
+        }
 
         match ensure_icon_file(&app, theme, &mut log) {
             Some(ico) => {

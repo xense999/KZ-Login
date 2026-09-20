@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # image-ico：執行期用 Image::from_path 讀 .ico 換視窗圖示（見 icon 模組）
-tauri = { version = "2", features = ["image-ico"] }
+tauri = { version = "2", features = ["image-ico", "tray-icon"] }
 tauri-plugin-store = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
