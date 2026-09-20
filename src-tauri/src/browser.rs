@@ -768,8 +768,6 @@ pub fn open<R: Runtime>(
         } else {
             Tidy::Everything { account: account_id.to_string() }
         };
-        let kind = if state.tidy == Tidy::SameNames { "只換同名" } else { "整個清空" };
-        diag(app, &format!("開啟瀏覽器 組={generation} 整理={kind} 注入：{}", inventory.join(", ")));
     }
 
     // 工具列視窗先隱藏著開，套用記住的幾何、排好版面才顯示——否則會先閃一下預設
@@ -928,16 +926,9 @@ fn open_tab<R: Runtime>(
             true
         })
         // 每次頁面載入完再記一次（重新導向後的最終網址以這份為準）
-        .on_page_load(move |window, payload| {
+        .on_page_load(move |_window, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 tab_loaded(&app_for_load, id, payload.url().as_str());
-                if payload.url().host_str().is_some_and(is_beanfun_domain) {
-                    // 網址的參數不寫（SSO 的 skey／登入碼都在那裡）
-                    let mut bare = payload.url().clone();
-                    bare.set_query(None);
-                    bare.set_fragment(None);
-                    diag_cookie_store(&app_for_load, &window, id, bare.as_str());
-                }
             }
         })
         // 網頁要求開新視窗：帶尺寸的（金流小視窗）交給 WebView2 原生開、保
@@ -999,7 +990,6 @@ fn open_tab<R: Runtime>(
         // 位置完全相同的那顆**不刪**，注入會直接蓋掉它——見 `CookieSlots`。
         let names: std::collections::HashSet<String> = cookies.iter().map(|c| c.name.clone()).collect();
         let slots = CookieSlots::of(&cookies);
-        let slots_for_all = slots.clone();
         tab.with_webview(move |platform| {
             let seed = move |platform: &tauri::webview::PlatformWebview| {
                 // 注入在主執行緒非同步跑，錯誤沒辦法回傳給呼叫端；印出來至少實機
@@ -1016,10 +1006,8 @@ fn open_tab<R: Runtime>(
             // 換了帳號：整個清空（見 `COOKIE_OWNER`）。同一個帳號：只換掉同名的，
             // 他在這個瀏覽器裡登過的其他網站不受影響。
             match tidy {
-                // ★不用 `DeleteAllCookies`：它跟逐顆刪一樣會晚到，而且什麼都刪，沒辦法
-                // 把注入要用的位置排除在外。
                 Tidy::Everything { account } => {
-                    clear_cookies_then(platform, EVERY_COOKIE, move |name, domain, path| !slots_for_all.holds(name, domain, path), move |platform, clean| {
+                    wipe_cookies_then(platform, move |platform, clean| {
                         // 沒清乾淨＝裡面混著兩個人的東西，不是任何人的；下次不管開誰都要再清。
                         if let Ok(mut owner) = COOKIE_OWNER.lock() {
                             *owner = clean.then_some(account);
@@ -1067,7 +1055,6 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
     let expected = cookies.len();
     let slots = CookieSlots::of(&cookies);
     let nav_target = window.clone();
-    diag(window.app_handle(), &format!("登入視窗 {} 清掉 beanfun 登入網址的 cookie 後注入 {expected} 顆", window.label()));
     window
         .with_webview(move |platform| {
             let seed = move |platform: &tauri::webview::PlatformWebview| {
@@ -1137,7 +1124,7 @@ fn cookie_manager(
 }
 
 /// 刪除送出去之後最多再讀幾輪來確認它真的生效了。
-const CLEAR_VERIFY_ROUNDS: u32 = 8;
+const CLEAR_VERIFY_ROUNDS: u32 = 30;
 
 /// 逐顆讀出來、`doomed(名稱, 網域, 路徑)` 說要刪的才刪，**確認它們真的不見了**才呼叫
 /// `then`。不用 `DeleteCookiesWithDomainAndPath`：那支的第一個參數是 cookie 的 name，
@@ -1170,10 +1157,52 @@ fn clear_cookies_then(
         manager,
         urls,
         doomed: Box::new(doomed),
+        wipe: false,
         sent: Default::default(),
+        wiped: Default::default(),
         then: std::cell::RefCell::new(Some(Box::new(move |clean| then(&platform, clean)))),
     });
     Sweep::round(sweep, 0);
+}
+
+/// 整個儲存區清空，**確認空了**才呼叫 `then`（第二個參數＝真的空了）。換帳號用。
+///
+/// 這裡用 `DeleteAllCookies` 而不是逐顆刪：網頁內嵌框架（首頁的 YouTube 播放器）
+/// 留下的分割 cookie，`DeleteCookie` 刪不到（2026-09-20 實機：`.youtube.com` 那五顆
+/// 讀了幾十輪都還在）。它一樣沒有完成通知、會晚到，所以兩條：
+/// - 送出之後一直讀到儲存區空了才往下走；
+/// - **本來就是空的就不送**——那種情況沒有東西可以拿來確認它落地了沒，晚到的清空
+///   會把剛注入的那批帶走。
+#[cfg(windows)]
+fn wipe_cookies_then(
+    platform: tauri::webview::PlatformWebview,
+    then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
+) {
+    let manager = match cookie_manager(&platform) {
+        Ok(manager) => manager,
+        Err(e) => {
+            eprintln!("[browser] {e}，儲存區沒清");
+            return then(&platform, false);
+        }
+    };
+    let sweep = std::rc::Rc::new(Sweep {
+        manager,
+        urls: EVERY_COOKIE,
+        doomed: Box::new(|_, _, _| true),
+        wipe: true,
+        sent: Default::default(),
+        wiped: Default::default(),
+        then: std::cell::RefCell::new(Some(Box::new(move |clean| then(&platform, clean)))),
+    });
+    Sweep::round(sweep, 0);
+}
+
+#[cfg(not(windows))]
+fn wipe_cookies_then(
+    platform: tauri::webview::PlatformWebview,
+    then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
+) {
+    then(&platform, true);
 }
 
 /// 一次清除的進度。回呼全部跑在主執行緒上，所以用 `Rc` 就夠了。
@@ -1182,6 +1211,10 @@ struct Sweep {
     manager: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CookieManager,
     urls: &'static [&'static str],
     doomed: Box<dyn Fn(&str, &str, &str) -> bool>,
+    /// 整個清空：不逐顆刪，改送一次 `DeleteAllCookies`（見 `wipe_cookies_then`）。
+    wipe: bool,
+    /// 那一次 `DeleteAllCookies` 送過了沒。
+    wiped: std::cell::Cell<bool>,
     /// 已經送過刪除的位置，不再送第二次。
     sent: std::cell::RefCell<std::collections::HashSet<(String, String, String)>>,
     then: std::cell::RefCell<Option<Box<dyn FnOnce(bool)>>>,
@@ -1204,9 +1237,11 @@ impl Sweep {
 
         let pending = Rc::new(Cell::new(sweep.urls.len()));
         let left = Rc::new(Cell::new(0usize));
+        let stuck = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
         let unread = Rc::new(Cell::new(false));
         let settle = {
             let (sweep, pending, left, unread) = (sweep.clone(), pending.clone(), left.clone(), unread.clone());
+            let stuck = stuck.clone();
             move || {
                 pending.set(pending.get() - 1);
                 if pending.get() > 0 {
@@ -1217,9 +1252,15 @@ impl Sweep {
                 } else if left.get() == 0 {
                     sweep.finish(true);
                 } else if attempt + 1 >= CLEAR_VERIFY_ROUNDS {
-                    eprintln!("[browser] 還有 {} 顆舊 cookie 刪不掉", left.get());
+                    eprintln!("[browser] 還有 {} 顆舊 cookie 刪不掉：{}", left.get(), stuck.borrow().join(", "));
                     sweep.finish(false);
                 } else {
+                    if sweep.wipe && !sweep.wiped.replace(true) {
+                        if let Err(e) = unsafe { sweep.manager.DeleteAllCookies() } {
+                            eprintln!("[browser] 儲存區清不掉：{e}");
+                            return sweep.finish(false);
+                        }
+                    }
                     Sweep::round(sweep.clone(), attempt + 1);
                 }
             }
@@ -1228,6 +1269,7 @@ impl Sweep {
         for url in sweep.urls {
             let uri = HSTRING::from(*url);
             let (sweep_cb, left_cb, unread_cb, settle_cb) = (sweep.clone(), left.clone(), unread.clone(), settle.clone());
+            let stuck_cb = stuck.clone();
             let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
                 match list {
                     None => unread_cb.set(true),
@@ -1254,7 +1296,8 @@ impl Sweep {
                                 continue;
                             }
                             left_cb.set(left_cb.get() + 1);
-                            if sweep_cb.sent.borrow_mut().insert(CookieSlots::slot(&name, &domain, &path)) {
+                            stuck_cb.borrow_mut().push(format!("{name}@{domain}{path}"));
+                            if !sweep_cb.wipe && sweep_cb.sent.borrow_mut().insert(CookieSlots::slot(&name, &domain, &path)) {
                                 let _ = unsafe { sweep_cb.manager.DeleteCookie(&cookie) };
                             }
                         }
@@ -1642,65 +1685,6 @@ pub(crate) fn eval_json<R: Runtime>(window: &WebviewWindow<R>, script: &str) -> 
 #[cfg(not(windows))]
 pub(crate) fn eval_json<R: Runtime>(_window: &WebviewWindow<R>, _script: &str) -> Option<String> {
     None
-}
-
-// ─── 診斷紀錄 ─────────────────────────────────────────────────────────────────
-
-/// 「開出來有時沒登入」的現場紀錄。release 版沒有 console，`eprintln!` 等於不存在，
-/// 所以寫成檔案（設定資料夾底下）。**不寫 cookie 的值**——只寫名稱、網域、路徑、
-/// 旗標，以及儲存區裡那顆跟我們注入的那顆是不是同一個值。
-const DIAG_FILE: &str = "browser-diag.log";
-const DIAG_MAX_BYTES: u64 = 512 * 1024;
-
-fn diag<R: Runtime>(app: &AppHandle<R>, text: &str) {
-    use std::io::Write;
-    let Ok(dir) = app.path().app_config_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(DIAG_FILE);
-    if std::fs::metadata(&path).map(|m| m.len() > DIAG_MAX_BYTES).unwrap_or(false) {
-        let _ = std::fs::remove_file(&path);
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "[{now} pid={}] {text}", std::process::id());
-    }
-}
-
-/// 頁面載入完之後，把儲存區裡 beanfun 登入網址底下的 cookie 跟注入的那批對一次。
-/// 讀 cookie 要等主執行緒回呼，而這裡就是主執行緒，所以丟到別的執行緒去等。
-fn diag_cookie_store<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, tab: u64, url: &str) {
-    let injected = STATE.lock().map(|s| s.cookies.clone()).unwrap_or_default();
-    let (app, window, url) = (app.clone(), window.clone(), url.to_string());
-    std::thread::spawn(move || {
-        let mut lines = vec![format!("載入完成 tab={tab} {url}")];
-        for site in SESSION_COOKIE_URLS {
-            let seen = read_cookies(&window, site).unwrap_or_default();
-            lines.push(format!("  {site}（{} 顆）", seen.len()));
-            for c in seen {
-                let same_name: Vec<&WebviewCookie> =
-                    injected.iter().filter(|i| i.name == c.name).collect();
-                let verdict = if same_name.is_empty() {
-                    "不在注入批次"
-                } else if same_name.iter().any(|i| i.value == c.value) {
-                    "同注入值"
-                } else {
-                    "★值不同"
-                };
-                lines.push(format!(
-                    "    {} @{} {}{}{} {verdict}",
-                    c.name,
-                    c.domain,
-                    c.path,
-                    if c.http_only { " HttpOnly" } else { "" },
-                    if c.secure { " Secure" } else { "" },
-                ));
-            }
-        }
-        diag(&app, &lines.join("\n"));
-    });
 }
 
 // ─── Cookie 注入（WebView2） ──────────────────────────────────────────────────
