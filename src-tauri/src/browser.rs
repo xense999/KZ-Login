@@ -101,6 +101,9 @@ pub(crate) const SESSION_COOKIE_URLS: &[&str] = &[
     "https://tw.newlogin.beanfun.com/",
 ];
 
+/// 給 `GetCookies` 空網址＝儲存區裡每一顆，不分網域。換帳號整個清空時用。
+const EVERY_COOKIE: &[&str] = &[""];
+
 /// 瀏覽器開啟後與「+」新分頁的起始頁。
 const HOME_URL: &str = "https://tw.beanfun.com/";
 
@@ -1005,19 +1008,21 @@ fn open_tab<R: Runtime>(
             // 緊接著的注入一定在它後面。同一個帳號：只換掉同名的，他在這個瀏覽器裡
             // 登過的其他網站不受影響。
             match tidy {
+                // ★不用 `DeleteAllCookies`：它回來時還沒真的清，也沒有完成通知，晚到的
+                // 清空會把緊接著注入的那批一起帶走——開出來未登入、重新整理也沒用。
+                // 改成跟 `SameNames` 同一條路：讀出來逐顆刪，全部處理完才注入。
                 Tidy::Everything { account } => {
-                    match delete_all_cookies(&platform) {
-                        Ok(()) => {
+                    clear_cookies_then(platform, EVERY_COOKIE, |_| true, move |platform, clean| {
+                        if clean {
                             if let Ok(mut owner) = COOKIE_OWNER.lock() {
                                 *owner = Some(account);
                             }
                         }
-                        Err(e) => eprintln!("[browser] 換帳號時 cookie 清不掉：{e}"),
-                    }
-                    seed(&platform);
+                        seed(platform);
+                    });
                 }
                 Tidy::SameNames => {
-                    clear_cookies_then(platform, SESSION_COOKIE_URLS, move |name| names.contains(name), seed);
+                    clear_cookies_then(platform, SESSION_COOKIE_URLS, move |name| names.contains(name), move |platform, _| seed(platform));
                 }
                 Tidy::Keep => seed(&platform),
             }
@@ -1064,34 +1069,15 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
                 }
                 let _ = nav_target.navigate(target);
             };
-            clear_cookies_then(platform, stale, |_| true, seed);
+            clear_cookies_then(platform, stale, |_| true, move |platform, _| seed(platform));
         })
         .map_err(|e| format!("注入登入資訊失敗：{e}"))
 }
 
-#[cfg(windows)]
-fn delete_all_cookies(platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
-    use windows_core::Interface;
-
-    unsafe {
-        let manager: ICoreWebView2CookieManager = platform
-            .controller()
-            .CoreWebView2()
-            .and_then(|core| core.cast::<ICoreWebView2_2>())
-            .and_then(|core2| core2.CookieManager())
-            .map_err(|e| format!("取不到 cookie manager：{e}"))?;
-        manager.DeleteAllCookies().map_err(|e| e.to_string())
-    }
-}
-
-#[cfg(not(windows))]
-fn delete_all_cookies(_platform: &tauri::webview::PlatformWebview) -> Result<(), String> {
-    Ok(())
-}
-
 /// 逐顆讀出來、`doomed(名稱)` 說要刪的才刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
 /// 那支的第一個參數是 cookie 的 name，「這個網域下全部」不是它的語意。
+///
+/// `then` 的第二個參數＝每個網址都真的讀到了（讀不到的那幾個等於沒清）。
 ///
 /// 任何一步失敗都照樣往下走：清不掉頂多是這一次被舊 token 短路，卡在這裡不導向
 /// 則是整個登入開不起來。
@@ -1100,7 +1086,7 @@ fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
     urls: &'static [&'static str],
     doomed: impl Fn(&str) -> bool + Clone + 'static,
-    then: impl FnOnce(&tauri::webview::PlatformWebview) + 'static,
+    then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
 ) {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -1118,18 +1104,20 @@ fn clear_cookies_then(
             .ok()
     };
     let Some(manager) = manager.filter(|_| !urls.is_empty()) else {
-        then(&platform);
+        then(&platform, false);
         return;
     };
 
     // 這些回呼全部跑在主執行緒上，所以用 Rc 就夠了。
     let pending = Rc::new(Cell::new(urls.len()));
+    let clean = Rc::new(Cell::new(true));
     let then = Rc::new(RefCell::new(Some((platform, then))));
+    let clean_at_end = clean.clone();
     let settle = move |pending: &Cell<usize>| {
         pending.set(pending.get() - 1);
         if pending.get() == 0 {
             if let Some((platform, then)) = then.borrow_mut().take() {
-                then(&platform);
+                then(&platform, clean_at_end.get());
             }
         }
     };
@@ -1138,8 +1126,11 @@ fn clear_cookies_then(
         let uri = HSTRING::from(*url);
         let deleter = manager.clone();
         let doomed = doomed.clone();
-        let (pending_cb, settle_cb) = (pending.clone(), settle.clone());
+        let (pending_cb, settle_cb, clean_cb) = (pending.clone(), settle.clone(), clean.clone());
         let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
+            if list.is_none() {
+                clean_cb.set(false);
+            }
             if let Some(list) = list {
                 let mut count = 0u32;
                 let _ = unsafe { list.Count(&mut count) };
@@ -1159,6 +1150,7 @@ fn clear_cookies_then(
         }));
         if let Err(e) = unsafe { manager.GetCookies(PCWSTR(uri.as_ptr()), &handler) } {
             eprintln!("[browser] 讀 {url} 的 cookie 失敗，沒清成：{e}");
+            clean.set(false);
             settle(&pending);
         }
     }
@@ -1169,9 +1161,9 @@ fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
     _urls: &'static [&'static str],
     _doomed: impl Fn(&str) -> bool + Clone + 'static,
-    then: impl FnOnce(&tauri::webview::PlatformWebview) + 'static,
+    then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
 ) {
-    then(&platform);
+    then(&platform, true);
 }
 
 /// 切到某個分頁：顯示它、藏起其他的，並把它的網址推給網址列。
