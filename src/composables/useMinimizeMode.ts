@@ -23,5 +23,15 @@ export function useMinimizeMode() {
       throw e;
     }
   }
-  return { minimizeToTray: current, setMinimizeToTray, syncMinimizeMode: push };
+  // 啟動時把記住的選擇推給後端。推不成＝後端還是一般最小化，開關就得跟著顯示「關」，
+  // 不然畫面說開著、行為卻是關的。localStorage 不動：下次啟動再試一次
+  async function syncMinimizeMode() {
+    try {
+      await push();
+    } catch (e) {
+      current.value = false;
+      throw e;
+    }
+  }
+  return { minimizeToTray: current, setMinimizeToTray, syncMinimizeMode };
 }

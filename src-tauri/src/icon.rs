@@ -1,14 +1,17 @@
-//! 應用程式圖標：依主題把對應的 .ico 套到執行中的視窗與桌面／開始選單／釘選工作列的捷徑上。
+//! 應用程式圖標：啟動時把桌面／開始選單／釘選工作列的捷徑圖示指回我們自己的 .ico。
 //!
-//! 只在啟動時套用一次（見 `docs/規範.md` 的 icon 條目）。這個時機同時解掉兩件事：
-//! NSIS 更新安裝會重建捷徑、洗掉自訂圖示——下次啟動會自動重套；也不必處理「切主題
-//! 當下捷徑檔正被 Explorer 佔用」的競態。
+//! 圖標只有一張（cream）。以前還有一張跟著暗色主題走的 navy，2026-09-20 使用者決定取消；
+//! 但啟動時重套的流程要留著——用過暗色主題的人，捷徑的圖示欄位現在還指著磁碟上的
+//! navy.ico，得靠這裡改寫回來。視窗圖示不必管：exe 內嵌的預設圖示就是 cream。
+//!
+//! 只在啟動時套用一次（見 `docs/規範.md` 的 icon 條目）。NSIS 更新安裝會重建捷徑、
+//! 洗掉自訂圖示——下次啟動會自動重套。
 //!
 //! 整個模組是盡力而為：任何一個目標失敗都不中斷、不回報給呼叫端、不影響登入功能，
 //! 只留一行到 log。release build 沒有 console，所以 log 一定要寫檔才存在。
 //!
-//! 兩張 .ico **編進 exe**，不走 `bundle.resources`。捷徑的圖示欄位需要一個留在磁碟上
-//! 的檔案，所以啟動時把它們寫到安裝目錄底下。這條路徑是被就地更新逼出來的：
+//! .ico **編進 exe**，不走 `bundle.resources`。捷徑的圖示欄位需要一個留在磁碟上
+//! 的檔案，所以啟動時把它寫到安裝目錄底下。這條路徑是被就地更新逼出來的：
 //! `update_app_inplace` 只換 exe 一個檔，任何額外的安裝檔案都到不了已經更新過的使用者
 //! 手上——v1.5.0 就是這樣整批失效的。exe 自己帶著，就地更新才帶得動。
 
@@ -17,49 +20,21 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum IconTheme {
-    Light,
-    Dark,
-}
+const ICON_FILE: &str = "cream.ico";
 
-impl IconTheme {
-    /// 主題對應的 .ico 檔名。這個映射是本模組的內部知識——前端只送主題，不決定用哪張圖。
-    fn icon_file(self) -> &'static str {
-        match self {
-            IconTheme::Light => "cream.ico",
-            IconTheme::Dark => "navy.ico",
-        }
-    }
+/// 系統匣圖示（tray 模組）也用這一張。
+pub(crate) const ICON_BYTES: &[u8] = include_bytes!("../icons/themed/cream.ico");
 
-    fn bytes(self) -> &'static [u8] {
-        match self {
-            IconTheme::Light => include_bytes!("../icons/themed/cream.ico"),
-            IconTheme::Dark => include_bytes!("../icons/themed/navy.ico"),
-        }
-    }
-}
-
-/// 把 `theme` 對應的圖標套到視窗與所有捷徑上。永不失敗——呼叫端不需要處理錯誤。
+/// 把圖標套到所有捷徑上。永不失敗——呼叫端不需要處理錯誤。
 ///
-/// 實際工作丟到背景執行緒：COM 初始化與四個檔案的讀寫不該擋住啟動流程。
-pub fn apply(app: &AppHandle, theme: IconTheme) {
+/// 實際工作丟到背景執行緒：COM 初始化與幾個檔案的讀寫不該擋住啟動流程。
+pub fn apply(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let mut log = String::new();
-        let _ = writeln!(log, "theme={:?} icon={}", theme, theme.icon_file());
+        let _ = writeln!(log, "icon={ICON_FILE}");
 
-        set_window_icon(&app, theme, &mut log);
-        match tauri::image::Image::from_bytes(theme.bytes()).and_then(|img| crate::tray::set_icon(&app, img)) {
-            Ok(()) => {
-                let _ = writeln!(log, "tray: ok");
-            }
-            Err(e) => {
-                let _ = writeln!(log, "tray: {e}");
-            }
-        }
-
-        match ensure_icon_file(&app, theme, &mut log) {
+        match ensure_icon_file(&app, &mut log) {
             Some(ico) => {
                 #[cfg(windows)]
                 set_shortcut_icons(&app, &ico, &mut log);
@@ -77,12 +52,11 @@ pub fn apply(app: &AppHandle, theme: IconTheme) {
 /// 把編進 exe 的 .ico 寫到磁碟上，回傳它的路徑——捷徑的圖示欄位指的是檔案，不是位元組。
 ///
 /// 內容相同就不重寫：使用者每次開程式都會走到這裡，沒必要每次都動檔案。
-fn ensure_icon_file(app: &AppHandle, theme: IconTheme, log: &mut String) -> Option<PathBuf> {
+fn ensure_icon_file(app: &AppHandle, log: &mut String) -> Option<PathBuf> {
     let dir = app_dir(app)?.join("icons");
-    let path = dir.join(theme.icon_file());
-    let want = theme.bytes();
+    let path = dir.join(ICON_FILE);
 
-    if std::fs::read(&path).is_ok_and(|got| got == want) {
+    if std::fs::read(&path).is_ok_and(|got| got == ICON_BYTES) {
         let _ = writeln!(log, "ico: 已是最新 {}", path.display());
         return Some(path);
     }
@@ -91,7 +65,7 @@ fn ensure_icon_file(app: &AppHandle, theme: IconTheme, log: &mut String) -> Opti
         let _ = writeln!(log, "ico: 建目錄失敗 {e}");
         return None;
     }
-    match std::fs::write(&path, want) {
+    match std::fs::write(&path, ICON_BYTES) {
         Ok(()) => {
             let _ = writeln!(log, "ico: 已寫出 {}", path.display());
             Some(path)
@@ -99,22 +73,6 @@ fn ensure_icon_file(app: &AppHandle, theme: IconTheme, log: &mut String) -> Opti
         Err(e) => {
             let _ = writeln!(log, "ico: 寫檔失敗 {e}");
             None
-        }
-    }
-}
-
-/// 視窗圖示直接吃 exe 裡的位元組——它不需要磁碟上有檔案，所以就算寫檔失敗也照樣會換。
-fn set_window_icon(app: &AppHandle, theme: IconTheme, log: &mut String) {
-    let Some(w) = app.get_webview_window("main") else {
-        let _ = writeln!(log, "window: 找不到 main 視窗");
-        return;
-    };
-    match tauri::image::Image::from_bytes(theme.bytes()).and_then(|img| w.set_icon(img)) {
-        Ok(()) => {
-            let _ = writeln!(log, "window: ok");
-        }
-        Err(e) => {
-            let _ = writeln!(log, "window: {e}");
         }
     }
 }
@@ -253,22 +211,11 @@ mod win {
 mod tests {
     use super::*;
 
+    /// 圖是 `include_bytes!` 進來的——檔案被清空不會是編譯錯誤，會變成執行期悄悄換不了圖示。
     #[test]
-    fn maps_theme_to_icon_file() {
-        assert_eq!(IconTheme::Light.icon_file(), "cream.ico");
-        assert_eq!(IconTheme::Dark.icon_file(), "navy.ico");
-    }
-
-    /// 兩張圖是 `include_bytes!` 進來的——路徑打錯或檔案被清空都不會是編譯錯誤，
-    /// 會變成執行期悄悄換不了圖示。
-    #[test]
-    fn embedded_icons_are_real_and_distinct() {
-        for t in [IconTheme::Light, IconTheme::Dark] {
-            let b = t.bytes();
-            assert!(b.len() > 4096, "{:?} 的圖檔太小，像是空的", t);
-            assert_eq!(&b[..4], &[0x00, 0x00, 0x01, 0x00], "{:?} 不是 .ico", t);
-        }
-        assert_ne!(IconTheme::Light.bytes(), IconTheme::Dark.bytes());
+    fn embedded_icon_is_real() {
+        assert!(ICON_BYTES.len() > 4096, "圖檔太小，像是空的");
+        assert_eq!(&ICON_BYTES[..4], &[0x00, 0x00, 0x01, 0x00], "不是 .ico");
     }
 
     #[test]

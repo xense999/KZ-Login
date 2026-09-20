@@ -12,7 +12,8 @@ import ToastPop from "./components/ToastPop.vue";
 import AppTooltip from "./components/AppTooltip.vue";
 import { toast } from "./composables/useToast";
 import { useAccountsStore, sameLoginAccount, type LoginMethod, type LoginResult } from "./stores/accounts";
-import { useTheme } from "./composables/useTheme";
+// 只為了副作用：這支一載入就把記住的主題套到頁面上。拿掉的話要等進設定頁才會變暗色
+import "./composables/useTheme";
 import { useMinimizeMode } from "./composables/useMinimizeMode";
 
 type Page = "main" | "login" | "success" | "settings";
@@ -127,10 +128,6 @@ async function confirmUpdate() {
 onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
-  // The app icon follows the theme, applied once per launch — switching theme
-  // mid-session only shows up next time. Fire-and-forget: it never fails, and
-  // nothing here depends on it.
-  invoke("apply_icon_theme", { theme: useTheme().theme.value });
   useMinimizeMode().syncMinimizeMode().catch(console.error);
   keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
 });

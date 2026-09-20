@@ -81,8 +81,8 @@ function tapGate(onReach: () => void) {
 const shareKeyDisabled = computed(() => !webhookUrl.value.trim());
 const shareKeyHint = computed(() =>
   shareKeyDisabled.value
-    ? "請先在下方填入 Discord Webhook 網址"
-    : "開啟後，按子帳號的「分享登入金鑰」時會同步把金鑰傳到上方設定的 Discord 頻道。"
+    ? "請先點開這張卡片，填入 Discord Webhook 網址"
+    : "開啟後，按子帳號的「分享登入金鑰」時會同步把金鑰傳到這張卡片裡設定的 Discord 頻道。"
 );
 
 const onNotifyTitleTap = tapGate(() => {
@@ -548,7 +548,7 @@ async function supportAuthor() {
 .row-sep {
   height: 1px;
   background: var(--border2);
-  margin: 0 16px;
+  margin: 0 8px;
 }
 
 /* ── 路徑輸入 ── */

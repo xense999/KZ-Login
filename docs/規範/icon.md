@@ -9,21 +9,22 @@
 ★ 本模組內部有一個私有子模組 `icon::win`（`windows` crate 包 COM）。它與 `lib.rs` 的 `crate::win`（`windows_sys` 包鍵鼠模擬與視窗量測）**同名但毫不相干**——不同 crate、不同職責、無重疊行為。不要合併它們。
 
 ```rust
-pub enum IconTheme { Light, Dark }
-pub fn apply(app: &AppHandle, theme: IconTheme)
+pub(crate) const ICON_BYTES: &[u8]   // 唯一的一張圖；tray 模組的系統匣圖示也用它
+pub fn apply(app: &AppHandle)
 ```
 
-`apply` 沒有回傳值，**永不失敗**。呼叫端（`commands` 的 `apply_icon_theme`）不需要、也不應該處理錯誤。
+`apply` 沒有回傳值，**永不失敗**。呼叫端（`app 生命週期` 的 `setup`）不需要、也不應該處理錯誤。
+
+★ **圖標只有一張（cream），不跟主題走**（2026-09-20 使用者定，取消原本暗色主題用的 navy）。啟動時重套的流程仍然保留：用過暗色主題的人，捷徑的圖示欄位還指著磁碟上的 `navy.ico`，靠這裡改寫回 cream；NSIS 更新重建捷徑後也靠它重套。視窗圖示不必處理——exe 內嵌的預設圖示就是 cream。
 
 ## 單一來源
 
-- **主題 → .ico 的映射**只寫在 `IconTheme::icon_file()`。前端只送主題字串，不決定用哪張圖；加第三種顏色時前端不用改。
-- **前端主題字彙**（`neutral` / `dark`）的翻譯只發生在 `commands` 的指令邊界。本模組不認得這兩個字串。
+- **用哪張圖**只寫在本模組的 `ICON_FILE` / `ICON_BYTES`。前端完全不參與。
 - **捷徑位置**只寫在 `shortcut_targets()`。
 
 ## 不變量
 
-- **只在啟動時套用一次**。切主題的當下不改任何東西，下次開啟才生效。這個時機同時解掉兩件事：NSIS 更新安裝會重建捷徑、洗掉自訂圖示——下次啟動自動重套；也不必處理「切主題當下捷徑檔正被 Explorer 佔用」的競態。
+- **只在啟動時套用一次**（後端 `setup` 直接呼叫，不經前端）。NSIS 更新安裝會重建捷徑、洗掉自訂圖示——下次啟動自動重套。
 - **失敗一律靜默**：不中斷、不跳 toast、不影響登入功能，只留一行到 log。
 - **log 每次啟動覆寫**（`%LOCALAPPDATA%\久世登入器\icon.log`），天然有界，不需要截斷邏輯。release build 沒有 console，所以 log 必須寫檔才存在。
 - **捷徑只改圖示欄位**，不重建捷徑、不動 target——使用者自己加的啟動參數或工作目錄要留著。
@@ -32,15 +33,15 @@ pub fn apply(app: &AppHandle, theme: IconTheme)
 ## 禁止
 
 - **不可硬拼 `%USERPROFILE%\Desktop`**。桌面路徑一律走 `SHGetKnownFolderPath(FOLDERID_Desktop)`——桌面被 OneDrive 重導向的使用者硬拼會全數落空。
-- **不可為此新增任何設定項**。圖標跟著現有主題走，設定頁不動。
+- **不可為此新增任何設定項**，也不可再讓圖標跟著主題走。
 - **不可主動刷新圖示快取**（`SHChangeNotify`），介面也不對釘選工作列的延遲做任何說明。這是刻意的取捨。
 - **不可嘗試改寫 exe 內嵌圖示**。那是編譯期資源，執行中的 exe 檔被系統鎖住；「關閉時替換 exe」方案已評估並否決（牽動自我更新流程、可能被防毒誤判）。
 - ★★ **不可把執行期需要的檔案放進 `bundle.resources`**。本程式優先走 `update_app_inplace`（只換 exe 一個檔，才不會被 NSIS 解除安裝流程拔掉工作列釘選），所以只有完整安裝才會送達的檔案，**永遠到不了已經更新過的使用者手上**。v1.5.0 就是這樣整批失效的：`icons/themed/*.ico` 走 resources，就地更新沒帶到，log 只留下一行「找不到圖標資源」。執行期要用的東西一律 `include_bytes!` 編進 exe。
 
 ## 圖標檔怎麼送到使用者機器上
 
-兩張 .ico 用 `include_bytes!` 編進 exe，啟動時寫到 `%LOCALAPPDATA%\久世登入器\icons\`（內容相同就不重寫）。
-捷徑的圖示欄位指向的是那兩個檔案，所以磁碟上必須真的有；視窗圖示則直接吃 exe 裡的位元組，寫檔失敗也照樣會換。
+.ico 用 `include_bytes!` 編進 exe，啟動時寫到 `%LOCALAPPDATA%\久世登入器\icons\`（內容相同就不重寫）。
+捷徑的圖示欄位指向的是那個檔案，所以磁碟上必須真的有。舊版寫出去的 `navy.ico` 留在使用者磁碟上不清（幾十 KB、沒有東西再指向它）。
 
 ★ 這條路徑是被就地更新逼出來的，理由見「禁止」段最後一條。
 
@@ -52,22 +53,21 @@ pub fn apply(app: &AppHandle, theme: IconTheme)
 
 | 檔案 | 用途 |
 |---|---|
-| `icons/bunny_cream_1024.png`、`icons/bunny_navy_1024.png` | **來源圖**。所有衍生檔都從這兩張產生 |
+| `icons/bunny_cream_1024.png` | **來源圖**。所有衍生檔都從這張產生 |
+| `icons/bunny_navy_1024.png` | 已取消的暗色版來源圖。來源美術素材不在 repo 內，這張是唯一的底，刻意留著；目前沒有任何東西用它 |
 | `icons/icon.ico` 與 `icons/*.png`、`icons/icon.icns` | 編譯期內嵌的預設圖示（= cream），由 `tauri icon` 產生 |
-| `icons/themed/cream.ico`、`icons/themed/navy.ico` | 執行期用，`include_bytes!` **編進 exe**；啟動時寫到 `%LOCALAPPDATA%\久世登入器\icons\` |
+| `icons/themed/cream.ico` | 執行期用，`include_bytes!` **編進 exe**；啟動時寫到 `%LOCALAPPDATA%\久世登入器\icons\` |
 
 設計：macOS 風格 squircle（超橢圓 n=5），952/1024 本體、垂直漸層、內緣頂部高光、雙層投影。
-兩色：cream `#FFF3DE`、navy `#2E3D59`。
+顏色：cream `#FFF3DE`（已取消的 navy 是 `#2E3D59`）。
 
-### 加一種新顏色
+### 重產 .ico
 
-1. 產一張 1024×1024 的 `icons/bunny_<色名>_1024.png`（來源美術素材不在 repo 內，見下）
-2. `npx tauri icon src-tauri/icons/bunny_<色名>_1024.png -o <暫存目錄>`，把產出的 `icon.ico` 複製成 `icons/themed/<色名>.ico`
-3. `IconTheme` 加一個 variant，`icon_file()` 與 `bytes()` 各補一行（`bytes()` 的 `include_bytes!` 就是它進到安裝檔的方式，不要動 `bundle.resources`）
+`npx tauri icon src-tauri/icons/bunny_cream_1024.png -o <暫存目錄>`，把產出的 `icon.ico` 複製成 `icons/themed/cream.ico`。
 
 `tauri icon` 產出的 .ico 含 16/24/32/48/64/256，沒有 128；缺的尺寸由 Windows 從最接近的那張縮。
 規格書 [#7](https://github.com/xense999/KZ-Login/issues/7) 原本寫要含 128，改掉是為了整條產線只用 repo 既有的 `npx tauri icon`——
 多一個尺寸不值得為同一個產物多養一套 Python 工具鏈。**沒有實測過 128 缺席在哪些檢視模式下看得出來**，
 若日後有人回報某個檢視下圖示糊掉，這裡是第一個要查的地方。
 
-**來源美術素材（那隻兔子的原圖）不在 repo 內。** 這兩張 1024 PNG 就是本 repo 的來源，改設計要從外部素材重新合成。
+**來源美術素材（那隻兔子的原圖）不在 repo 內。** 1024 PNG 就是本 repo 的來源，改設計要從外部素材重新合成。

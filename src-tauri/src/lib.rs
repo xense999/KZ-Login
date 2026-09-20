@@ -1219,23 +1219,6 @@ async fn browser_tab(
     browser::tab_command(&app, &action, id)
 }
 
-// ─── Icon ────────────────────────────────────────────────────────────────────
-
-/// Apply the app icon that matches the frontend theme. Fire-and-forget: the icon
-/// module never fails, so the frontend has nothing to handle.
-///
-/// The theme string is the frontend's vocabulary (`neutral` / `dark`); it is
-/// translated here so the icon module never learns about it.
-#[tauri::command]
-fn apply_icon_theme(app: tauri::AppHandle, theme: String) {
-    let t = if theme == "dark" {
-        icon::IconTheme::Dark
-    } else {
-        icon::IconTheme::Light
-    };
-    icon::apply(&app, t);
-}
-
 // ─── Tray ────────────────────────────────────────────────────────────────────
 
 /// Whether the main window's minimize button hides it to the tray instead of the
@@ -1473,7 +1456,7 @@ pub fn run() {
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
             check_app_update, update_app, update_app_inplace,
-            apply_icon_theme, set_minimize_to_tray, minimize_main
+            set_minimize_to_tray, minimize_main
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
@@ -1484,10 +1467,7 @@ pub fn run() {
                 let pkg = app.package_info();
                 sync_installed_version(&pkg.name, &pkg.version.to_string());
             }
-            // 建不出來不擋啟動：之後開「縮小到通知列」會回錯誤，縮小維持一般最小化
-            if let Err(e) = tray::init(app.handle()) {
-                eprintln!("tray init failed: {e}");
-            }
+            icon::apply(app.handle());
             // 開場固定在主螢幕工作區右下角：每次啟動都回這個位置、不記憶拖動後的座標。
             // 用工作區（扣掉工作列）而非螢幕尺寸，否則會被工作列蓋掉一截；用 outer_size
             // （含外框）不是設定檔尺寸，DPI 縮放時才不會少算。
