@@ -385,8 +385,8 @@ async fn run_password_login<R: tauri::Runtime>(
 mod win {
     use windows_sys::Win32::Foundation::{BOOL, CloseHandle, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MapVirtualKeyW, MAPVK_VK_TO_VSC,
@@ -405,6 +405,19 @@ mod win {
         SystemParametersInfoW, SPI_GETWORKAREA,
         WM_KEYDOWN, WM_KEYUP,
     };
+
+    /// Blocks until process `pid` has exited, or `timeout_ms` passes. A pid that
+    /// can no longer be opened is already gone.
+    pub fn wait_for_exit(pid: u32, timeout_ms: u32) {
+        unsafe {
+            let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if h.is_null() {
+                return;
+            }
+            WaitForSingleObject(h, timeout_ms);
+            CloseHandle(h);
+        }
+    }
 
     /// Primary monitor **work area** (screen minus taskbar) as screen-coordinate
     /// `(left, top, right, bottom)`. Uses `SPI_GETWORKAREA` rather than the raw
@@ -1370,7 +1383,10 @@ async fn update_app_inplace(app: tauri::AppHandle, url: String) -> Result<(), St
 
     // Spawned rather than shell-opened: CreateProcess inherits our elevation and
     // skips the SmartScreen prompt ShellExecute would raise on a fresh download.
+    // The new process must outlive us, but single-instance would turn it away
+    // while we still hold the lock — so it is told whom to wait for (see `run`).
     std::process::Command::new(&cur)
+        .arg(format!("{WAIT_PID_ARG}{}", std::process::id()))
         .spawn()
         .map_err(|e| format!("無法啟動新版本：{e}"))?;
     app.exit(0);
@@ -1440,9 +1456,32 @@ fn swallow_refresh_keys<R: tauri::Runtime>(win: &tauri::WebviewWindow<R>) {
 
 // ─── App Entry ────────────────────────────────────────────────────────────────
 
+/// In-place update hands its own pid to the new process through this argument.
+const WAIT_PID_ARG: &str = "--wait-pid=";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // 就地更新是「先開新的、再關舊的」。舊的還沒退乾淨時 single-instance 的鎖還在，
+    // 新的會被當成第二份直接關掉＝更新完程式憑空消失。所以新的先等舊的退場再往下走。
+    #[cfg(windows)]
+    if let Some(pid) = std::env::args().find_map(|a| a.strip_prefix(WAIT_PID_ARG)?.parse::<u32>().ok()) {
+        win::wait_for_exit(pid, 10_000);
+    }
+
+    let builder = tauri::Builder::default();
+    // 一次只開一份：第二份啟動時把已經開著的主視窗叫到前面，自己直接結束。
+    // single-instance 必須是第一個註冊的 plugin。
+    // ★dev 不套：鎖是照 identifier 認的，套了就沒辦法在安裝版開著時跑 dev。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }));
+
+    builder
         .manage(AppState {
             pending_qr: Mutex::new(None),
             pending_password: Mutex::new(None),
@@ -1501,7 +1540,7 @@ pub fn run() {
 
                 // 關掉主視窗＝結束整個程式。沒有這段的話，只要帳號瀏覽器還開著，
                 // event loop 就認為還有視窗活著而不退出——而主視窗一關就再也叫不
-                // 回來（沒有系統匣、沒有 single instance、沒有任何 show 回主視窗的
+                // 回來（沒有系統匣、沒有任何 show 回主視窗的
                 // 路徑）。帳號瀏覽器留下的幽靈條目更是永遠不會消失，那時連進程都
                 // 退不掉，會一直留在背景。
                 // ★代價（使用者拍板接受）：exit 不會觸發任何視窗的 CloseRequested，
