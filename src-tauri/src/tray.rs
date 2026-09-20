@@ -15,6 +15,7 @@
 //! 登入器可以多開：每個實例各有自己的系統匣圖示，各管各的主視窗。
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -62,6 +63,10 @@ fn build(app: &AppHandle) -> tauri::Result<()> {
 
 /// 關的時候先收旗標再拆圖示，中間不會有「旗標還開著、圖示已經沒了」的空檔。
 pub fn set_enabled(app: &AppHandle, on: bool) -> Result<(), String> {
+    // 「沒有才建」不是原子的：啟動同步還沒回來使用者就去切開關，兩邊會各建一顆，
+    // 關的時候只拆得掉一顆
+    static SWITCHING: Mutex<()> = Mutex::new(());
+    let _one_at_a_time = SWITCHING.lock().unwrap_or_else(|e| e.into_inner());
     if on {
         if app.tray_by_id(TRAY_ID).is_none() {
             build(app).map_err(|e| format!("通知列圖示建立失敗：{e}"))?;
@@ -89,7 +94,6 @@ pub fn minimize_main(app: &AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
