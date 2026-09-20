@@ -822,7 +822,7 @@ function cleanError(msg: string): string {
 
   <ExportProgress
     v-if="exportState"
-    :data-tip="EXPORT_TITLE[exportState.kind]"
+    :title="EXPORT_TITLE[exportState.kind]"
     :total="exportState.total"
     :done="exportState.done"
     :ok="exportState.ok"
