@@ -43,7 +43,7 @@ async function toggleMinimizeToTray() {
   }
 }
 
-const WEBHOOK_KEY ="kusei:discord_webhook";
+const WEBHOOK_KEY = "kusei:discord_webhook";
 
 const webhookUrl = ref("");
 const gamePath = ref("");
@@ -266,9 +266,9 @@ async function supportAuthor() {
             <span class="row-title">按鈕設定</span>
             <div class="seg">
               <button :class="{ active: mainAction === 'proxy' }" @click="chooseMainAction('proxy')"
-                title="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
+                data-tip="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
               <button :class="{ active: mainAction === 'game' }" @click="chooseMainAction('game')"
-                title="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
+                data-tip="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
             </div>
           </div>
           <div class="row">
@@ -278,7 +278,7 @@ async function supportAuthor() {
               role="switch"
               :class="{ on: minimizeToTray }"
               :aria-checked="minimizeToTray"
-              title="開啟後，按縮小鈕會把主視窗收進右下角通知列；點圖示叫回來，對圖示按右鍵可結束。關閉鈕不受影響，一律直接結束"
+              data-tip="開啟後，按縮小鈕會把主視窗收進右下角通知列；點圖示叫回來，對圖示按右鍵可結束。關閉鈕不受影響，一律直接結束"
               @click="toggleMinimizeToTray"
             >
               <span class="pill-knob"></span>
@@ -289,14 +289,14 @@ async function supportAuthor() {
 
       <div class="card lg" :class="{ unfolded: notifyOpen }">
         <div class="row foldhead" @click="notifyOpen = !notifyOpen">
-          <span class="row-title tappable" @click="onNotifyTitleTap" title="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
+          <span class="row-title tappable" @click="onNotifyTitleTap" data-tip="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
           <div class="foldend">
             <button
               v-if="unlocked"
               class="pill-switch"
               :class="{ on: shareKeyToDiscord && !shareKeyDisabled }"
               :disabled="shareKeyDisabled"
-              :title="shareKeyHint"
+              :data-tip="shareKeyHint"
               @click.stop="toggleShareKey"
             >
               <span class="pill-knob"></span>
@@ -314,7 +314,7 @@ async function supportAuthor() {
               class="path-input"
               placeholder="https://discord.com/api/webhooks/..."
               spellcheck="false"
-              title="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
+              data-tip="在 Discord 頻道設定 → 整合 → Webhook 中建立，複製連結後貼上。點選連結版本時會自動傳送登入連結到該頻道。"
             />
           </div>
         </template>
@@ -348,12 +348,12 @@ async function supportAuthor() {
       <button class="btn-save" :class="{ done: saved }" @click="save">
         {{ saved ? "已儲存 ✓" : "儲存" }}
       </button>
-      <button class="btn-heart" @click="supportAuthor" title="請作者喝杯咖啡">
+      <button class="btn-heart" @click="supportAuthor" data-tip="請作者喝杯咖啡">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
           <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
         </svg>
       </button>
-      <button class="btn-info" @click="showAbout = true" title="關於">
+      <button class="btn-info" @click="showAbout = true" data-tip="關於">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
           <circle cx="12" cy="12" r="9.25" stroke="currentColor" stroke-width="1.7"/>
           <path d="M12 11v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
@@ -366,7 +366,7 @@ async function supportAuthor() {
       <div class="about-window">
         <div class="about-titlebar">
           <span class="about-title">關於</span>
-          <button class="about-close" @click="showAbout = false" title="關閉">&#x2715;</button>
+          <button class="about-close" @click="showAbout = false" data-tip="關閉">&#x2715;</button>
         </div>
         <div class="about-body">
           <div class="about-card">

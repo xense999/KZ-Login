@@ -637,7 +637,7 @@ function cleanError(msg: string): string {
       >
         <!-- 頭像就是開啟帳號瀏覽器的按鈕；hover 才浮出地球圖示，平時保持頭像原貌 -->
         <button class="av" :disabled="!acc.token || openingBrowser.has(acc.id)"
-          :title="acc.token ? '開啟帳號瀏覽器' : '已斷線，請重新登入'"
+          :data-tip="acc.token ? '開啟帳號瀏覽器' : '已斷線，請重新登入'"
           :style="{ background: `hsl(${hue(acc.id)},40%,18%)`, color: `hsl(${hue(acc.id)},70%,70%)` }"
           @click.stop="openBrowser(acc)">
           <img src="/avatar.png" class="av-icon" />
@@ -663,7 +663,7 @@ function cleanError(msg: string): string {
           </template>
           <template v-else>
             <span class="acc-name">{{ acc.alias }}</span>
-            <button class="alias-rename-btn" @click.stop="startRenameAlias(acc.id, acc.alias)" title="重新命名">
+            <button class="alias-rename-btn" @click.stop="startRenameAlias(acc.id, acc.alias)" data-tip="重新命名">
               <svg viewBox="0 0 16 16" fill="none" width="11" height="11">
                 <path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"
                   stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -674,7 +674,7 @@ function cleanError(msg: string): string {
         <div class="acc-right">
           <button v-if="otpExportUnlocked && acc.token" class="btn-pill auto-btn"
             :disabled="exportState?.running" @click.stop="runExport(acc, 'otp')"
-            title="批次匯出子帳號密碼">
+            data-tip="批次匯出子帳號密碼">
             <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
               <circle cx="5.6" cy="10.4" r="3.1" stroke="currentColor" stroke-width="1.4"/>
               <path d="M7.9 8.1L13.5 2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -683,17 +683,17 @@ function cleanError(msg: string): string {
           </button>
           <button v-if="linkExportUnlocked && acc.token" class="btn-pill auto-btn acc-export"
             :disabled="exportState?.running" @click.stop="runExport(acc, 'link')"
-            title="批次匯出子帳號清單">
+            data-tip="批次匯出子帳號清單">
             <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
               <path d="M10.5 2.5H13.5V5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
               <path d="M13.5 2.5L8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
               <path d="M12 9.5v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
-          <div v-if="acc.token" class="dot on" title="已連線"></div>
+          <div v-if="acc.token" class="dot on" data-tip="已連線"></div>
           <template v-else>
-            <div class="dot off" title="已斷線，請重新登入"></div>
-            <button class="qr-rescan" @click.stop="$emit('reauth', acc.id)" title="重新登入">
+            <div class="dot off" data-tip="已斷線，請重新登入"></div>
+            <button class="qr-rescan" @click.stop="$emit('reauth', acc.id)" data-tip="重新登入">
               <svg viewBox="0 0 16 16" fill="none" width="15" height="15">
                 <path d="M5 1.5H2.5a1 1 0 0 0-1 1V5M11 1.5h2.5a1 1 0 0 1 1 1V5M5 14.5H2.5a1 1 0 0 1-1-1V11M11 14.5h2.5a1 1 0 0 0 1-1V11"
                   stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
@@ -722,7 +722,7 @@ function cleanError(msg: string): string {
             <div
               class="drag-handle"
               :class="{ 'last-used': store.lastUsedSn === game.sn }"
-              title="拖移排序"
+              data-tip="拖移排序"
               @pointerdown="onPointerDown($event, acc.id, idx)"
               @pointermove="onPointerMove($event, acc.id)"
               @pointerup="onPointerUp($event, acc.id)"
@@ -747,7 +747,7 @@ function cleanError(msg: string): string {
               </template>
               <template v-else>
                 <span class="game-nm">{{ displayName(game) }}</span>
-                <button class="rename-btn" @click.stop="startRename(acc.id, game.sn, displayName(game))" title="改名">
+                <button class="rename-btn" @click.stop="startRename(acc.id, game.sn, displayName(game))" data-tip="改名">
                   <svg viewBox="0 0 16 16" fill="none" width="11" height="11">
                     <path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"
                       stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -758,20 +758,20 @@ function cleanError(msg: string): string {
 
             <div class="btns">
               <button class="btn-pill" :class="{ done: copiedAccount.has(game.sn) }"
-                title="複製帳號 ID"
+                data-tip="複製帳號 ID"
                 @click.stop="copyAccountId(game.sid, game.sn)">
                 {{ copiedAccount.has(game.sn) ? "✓" : "帳號" }}
               </button>
               <button class="btn-pill" :class="{ done: copiedPwd.has(game.sn) }"
                 :disabled="!acc.token || loadingPwd.has(game.sn)"
-                title="取得並複製密碼 (OTP)"
+                data-tip="取得並複製密碼 (OTP)"
                 @click.stop="copyOtp(acc, game)">
                 <span v-if="loadingPwd.has(game.sn)" class="spin"></span>
                 <template v-else>{{ copiedPwd.has(game.sn) ? "✓" : "密碼" }}</template>
               </button>
               <button class="btn-pill auto-btn" :class="{ done: copiedOtp.has(game.sn) }"
                 :disabled="!acc.token || loadingOtp.has(game.sn)"
-                title="複製此帳號的分享登入金鑰"
+                data-tip="複製此帳號的分享登入金鑰"
                 @click.stop="shareLaunch(acc, game)">
                 <span v-if="loadingOtp.has(game.sn)" class="spin"></span>
                 <template v-else-if="copiedOtp.has(game.sn)">✓</template>
@@ -784,7 +784,7 @@ function cleanError(msg: string): string {
               <button class="btn-pill auto-btn"
                 :disabled="!acc.token || autoLogging.has(game.sn) || loadingPwd.has(game.sn)"
                 @click.stop="autoLogin(acc, game)"
-                title="快速登入">
+                data-tip="快速登入">
                 <span v-if="autoLogging.has(game.sn)" class="spin"></span>
                 <svg v-else viewBox="0 0 14 14" fill="none" width="12" height="12">
                   <path d="M6 2.5L11.5 7 6 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -822,7 +822,7 @@ function cleanError(msg: string): string {
 
   <ExportProgress
     v-if="exportState"
-    :title="EXPORT_TITLE[exportState.kind]"
+    :data-tip="EXPORT_TITLE[exportState.kind]"
     :total="exportState.total"
     :done="exportState.done"
     :ok="exportState.ok"
@@ -846,7 +846,7 @@ function cleanError(msg: string): string {
       新增帳號
     </button>
     <button v-if="mainAction === 'game'" class="btn-launch" :disabled="gameBusy" @click="launchGame"
-      title="開啟遊戲；遊戲已在執行時會詢問是否強制關閉">
+      data-tip="開啟遊戲；遊戲已在執行時會詢問是否強制關閉">
       <span v-if="gameBusy" class="spin"></span>
       <svg v-else viewBox="0 0 16 16" fill="none" width="14" height="14">
         <path d="M5 3.5l7 4.5-7 4.5V3.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
@@ -854,7 +854,7 @@ function cleanError(msg: string): string {
       啟動遊戲
     </button>
     <button v-else class="btn-launch" :disabled="proxyLaunching" @click="proxyLaunch"
-      title="讀取剪貼簿裡對方分享的登入連結並啟動遊戲">
+      data-tip="讀取剪貼簿裡對方分享的登入連結並啟動遊戲">
       <span v-if="proxyLaunching" class="spin"></span>
       <svg v-else viewBox="0 0 16 16" fill="none" width="14" height="14">
         <path d="M10.5 2.5H13.5V5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>

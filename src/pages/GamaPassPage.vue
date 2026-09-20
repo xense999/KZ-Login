@@ -335,7 +335,7 @@ function onCancel() {
             <ul v-if="menuOpen" class="menu">
               <li v-for="entry in saved" :key="entry.account" class="menu-row" @click="pick(entry)">
                 <span class="menu-name">{{ label(entry) }}</span>
-                <button type="button" class="menu-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
+                <button type="button" class="menu-del" data-tip="刪除這組帳密" @click.stop="forget(entry)">✕</button>
               </li>
             </ul>
           </div>

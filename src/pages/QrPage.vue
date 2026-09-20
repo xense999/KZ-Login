@@ -136,7 +136,7 @@ async function poll() {
         </template>
 
         <template v-else-if="status === 'waiting'">
-          <div class="qr-frame" @click="startQr" title="點擊刷新">
+          <div class="qr-frame" @click="startQr" data-tip="點擊刷新">
             <img :src="qrImage" class="qr-img" alt="QR Code" />
             <div class="qr-refresh">↺ 刷新</div>
           </div>

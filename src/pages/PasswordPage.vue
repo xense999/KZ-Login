@@ -204,7 +204,7 @@ async function submit() {
             type="button"
             class="pw-icon"
             :class="{ on: menuOpen }"
-            title="已儲存的帳號"
+            data-tip="已儲存的帳號"
             :disabled="busy || saved.length === 0"
             @click="menuOpen = !menuOpen"
           >
@@ -223,7 +223,7 @@ async function submit() {
             >
               <span
                 class="pw-grip"
-                title="拖移排序"
+                data-tip="拖移排序"
                 @pointerdown="onGripDown($event, idx)"
                 @pointermove="onGripMove"
                 @pointerup="onGripUp"
@@ -233,7 +233,7 @@ async function submit() {
                 <span class="pw-dot" :class="{ on: hasCard(entry.account) }"></span>
               </span>
               <span class="pw-row-name">{{ entry.account }}</span>
-              <button type="button" class="pw-row-del" title="刪除這組帳密" @click.stop="forget(entry)">✕</button>
+              <button type="button" class="pw-row-del" data-tip="刪除這組帳密" @click.stop="forget(entry)">✕</button>
             </li>
           </ul>
         </div>
@@ -251,7 +251,7 @@ async function submit() {
             type="button"
             class="pw-icon"
             :class="{ on: showPassword }"
-            :title="showPassword ? '隱藏密碼' : '顯示密碼'"
+            :data-tip="showPassword ? '隱藏密碼' : '顯示密碼'"
             :disabled="busy"
             @click="showPassword = !showPassword"
           >

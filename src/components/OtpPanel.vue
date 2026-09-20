@@ -54,7 +54,7 @@ async function copyOtp() {
     <!-- 帳號 -->
     <div class="cred-row">
       <span class="cred-lbl">帳號</span>
-      <span class="cred-val" :title="sid">{{ sid }}</span>
+      <span class="cred-val" :data-tip="sid">{{ sid }}</span>
       <button class="btn-copy" :class="{ done: copiedSid }" @click="copySid">
         {{ copiedSid ? "已複製" : "複製" }}
       </button>

@@ -9,6 +9,7 @@ import GamaPassPage from "./pages/GamaPassPage.vue";
 import SuccessPage from "./pages/SuccessPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import ToastPop from "./components/ToastPop.vue";
+import AppTooltip from "./components/AppTooltip.vue";
 import { toast } from "./composables/useToast";
 import { useAccountsStore, sameLoginAccount, type LoginMethod, type LoginResult } from "./stores/accounts";
 import { useTheme } from "./composables/useTheme";
@@ -256,6 +257,7 @@ function onAccountSaved() {
     </div>
 
     <ToastPop />
+    <AppTooltip />
   </div>
 </template>
 
