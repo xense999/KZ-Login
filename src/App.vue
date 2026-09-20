@@ -128,7 +128,10 @@ async function confirmUpdate() {
 onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
-  useMinimizeMode().syncMinimizeMode().catch(console.error);
+  // 失敗要說出來：開關會自己退回「關」，不講的話使用者只看到設定沒生效
+  useMinimizeMode().syncMinimizeMode().catch((e) => {
+    toast(`縮小到通知列無法啟用：${e instanceof Error ? e.message : String(e)}`, { kind: "error" });
+  });
   keepAliveTimer = setInterval(checkSessions, 8 * 60 * 1000);
 });
 

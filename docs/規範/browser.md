@@ -89,5 +89,5 @@
 - 守門只看工具列視窗；原生彈窗比它長壽時，開別的帳號會踩掉彈窗的登入態（彈窗通常短命，暫時接受）。
 - 上下頁走手打 COM（`GoBack`/`GoForward`）；上下頁鈕一律可按（問 `CanGoBack` 要嘛阻塞要嘛加事件管線，先不做 disabled 狀態）。
 - 拖動工具列時分頁靠 `Moved` 事件跟隨，理論上有一兩幀的延遲；實測貼合正確，手感待使用者驗收。
-- **先關主視窗＝不存瀏覽器幾何**：主視窗的 `CloseRequested` 走 `app.exit(0)` 結束整個程式（沒有系統匣也沒有 single-instance，主視窗一關就叫不回來，而幽靈視窗條目會讓進程連退都退不掉）。`exit` 直接停掉 event loop，不觸發任何視窗的 `CloseRequested`，所以這條路存不到 `browser-window.json`。使用者 2026-09-09 拍板接受（另一案「先存幾何再 exit」當場否決）。
+- **先關主視窗＝不存瀏覽器幾何**：主視窗的 `CloseRequested` 走 `app.exit(0)` 結束整個程式（系統匣只叫得回「藏起來」的主視窗、叫不回已經關掉的，也沒有 single-instance，主視窗一關就叫不回來，而幽靈視窗條目會讓進程連退都退不掉）。`exit` 直接停掉 event loop，不觸發任何視窗的 `CloseRequested`，所以這條路存不到 `browser-window.json`。使用者 2026-09-09 拍板接受（另一案「先存幾何再 exit」當場否決）。
 - **改完系統文字大小要重開程式**：倍率只在啟動時讀一次（`win::text_scale_factor` 用 `OnceLock` 快取，否則拖動時每個 `Moved` 都要開一次登錄檔）。改完設定直接開瀏覽器，`load_geometry` 套的會是**舊倍率**下記住的尺寸，可能偏大或偏小，手動拉一次即可。

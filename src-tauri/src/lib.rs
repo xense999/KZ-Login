@@ -1468,6 +1468,7 @@ pub fn run() {
                 sync_installed_version(&pkg.name, &pkg.version.to_string());
             }
             icon::apply(app.handle());
+            tray::init(app.handle());
             // 開場固定在主螢幕工作區右下角：每次啟動都回這個位置、不記憶拖動後的座標。
             // 用工作區（扣掉工作列）而非螢幕尺寸，否則會被工作列蓋掉一截；用 outer_size
             // （含外框）不是設定檔尺寸，DPI 縮放時才不會少算。
