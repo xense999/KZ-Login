@@ -58,17 +58,36 @@
   <a id="open" class="btn" href="#" style="display:none">手動開啟登入</a>
 
   <script>
-    // The deeplink is base64-encoded in the URL fragment (#) so the login code
-    // survives transport intact — no decodeURIComponent, no double-decode, and
-    // the GitHub server never receives it (fragments are not sent).
+    // Three link formats, newest first. Older app versions and links already
+    // sent out keep working because this page is shared by every version.
+    //   ?c=<base64url>  login code only; the fixed deeplink prefix is restored here
+    //   ?d=<base64url>  whole deeplink, used when the prefix is not the known one
+    //   #<base64>       legacy; LINE stops linkifying a long URL at the "#"
+    // Must stay in sync with DEEPLINK_PREFIX in src/pages/QrPage.vue.
+    var DEEPLINK_PREFIX = "gameplapp://gameplhost/deeplink?type=1&action=web&code=";
+
+    function fromBase64Url(s) {
+      s = s.replace(/-/g, "+").replace(/_/g, "/");
+      while (s.length % 4) s += "=";
+      return s;
+    }
+
     var dl = "";
     try {
-      var raw = location.hash.slice(1);
-      // UTF-8 safe base64 decode
-      dl = decodeURIComponent(escape(atob(raw)));
+      var q = new URLSearchParams(location.search);
+      if (q.get("c")) {
+        var code = fromBase64Url(q.get("c"));
+        if (/^[A-Za-z0-9+/]+=*$/.test(code)) dl = DEEPLINK_PREFIX + encodeURIComponent(code);
+      } else if (q.get("d")) {
+        dl = decodeURIComponent(escape(atob(fromBase64Url(q.get("d")))));
+      } else {
+        dl = decodeURIComponent(escape(atob(location.hash.slice(1))));
+      }
     } catch (_) {}
 
-    if (dl && dl.indexOf("://") > 0) {
+    // Only the app's own scheme: anything else decoded from a crafted link
+    // (javascript:, data:) would run on this origin.
+    if (dl.indexOf("gameplapp://") === 0) {
       var btn = document.getElementById("open");
       btn.href = dl;            // anchor keeps the URL untouched as a fallback
       btn.style.display = "inline-block";

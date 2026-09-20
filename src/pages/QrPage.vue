@@ -46,14 +46,31 @@ async function startQr() {
 
 const REDIRECT_BASE = "https://xense999.github.io/KZ-Login/redirect.html";
 
+// Must stay in sync with DEEPLINK_PREFIX in docs/redirect.html.
+const DEEPLINK_PREFIX = "gameplapp://gameplhost/deeplink?type=1&action=web&code=";
+
+function toBase64Url(b64: string) {
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Wrap the gameplapp:// deeplink in an https redirect page so it becomes a
+// clickable link in chat apps. No "#" and no "+/=" anywhere: LINE stops
+// linkifying a long URL at the "#", leaving the login code as dead text.
+// The known prefix is dropped and restored by the redirect page, which takes
+// the URL from ~526 to ~330 characters.
+function buildShareUrl(dl: string) {
+  if (dl.startsWith(DEEPLINK_PREFIX)) {
+    try {
+      const code = decodeURIComponent(dl.slice(DEEPLINK_PREFIX.length));
+      if (/^[A-Za-z0-9+/]+=*$/.test(code)) return `${REDIRECT_BASE}?c=${toBase64Url(code)}`;
+    } catch { /* malformed percent-encoding: fall through to the full form */ }
+  }
+  return `${REDIRECT_BASE}?d=${toBase64Url(btoa(unescape(encodeURIComponent(dl))))}`;
+}
+
 async function copyDeeplink() {
   if (!deeplink.value) return;
-  // Wrap the gameplapp:// deeplink in an https redirect page so it becomes a
-  // clickable link in Discord. The deeplink is base64-encoded in the URL
-  // fragment so the login code survives transport intact (no double-decode)
-  // and never reaches the GitHub server.
-  const b64 = btoa(unescape(encodeURIComponent(deeplink.value)));
-  const shareUrl = `${REDIRECT_BASE}#${b64}`;
+  const shareUrl = buildShareUrl(deeplink.value);
   await writeText(shareUrl);
 
   // 標題直接掛網址：整條標題都可點，手機上最好按，也不必把長網址攤在卡片裡。
