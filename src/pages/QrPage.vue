@@ -46,8 +46,11 @@ async function startQr() {
 
 const REDIRECT_BASE = "https://xense999.github.io/KZ-Login/redirect.html";
 
-// Must stay in sync with DEEPLINK_PREFIX in docs/redirect.html.
-const DEEPLINK_PREFIX = "gameplapp://gameplhost/deeplink?type=1&action=web&code=";
+// Must stay in sync with DEEPLINK_PREFIX in docs/redirect.html. Never edit
+// the value: the redirect page serves every app version, so "?c=" is bound to
+// this exact prefix forever. A new prefix needs a new parameter name.
+const DEEPLINK_SCHEME = "gameplapp://";
+const DEEPLINK_PREFIX ="gameplapp://gameplhost/deeplink?type=1&action=web&code=";
 
 function toBase64Url(b64: string) {
   return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -58,11 +61,18 @@ function toBase64Url(b64: string) {
 // linkifying a long URL at the "#", leaving the login code as dead text.
 // The known prefix is dropped and restored by the redirect page, which takes
 // the URL from ~526 to ~330 characters.
+// Returns null for a scheme the redirect page would refuse, so the failure
+// shows up here instead of on the recipient's phone.
 function buildShareUrl(dl: string) {
+  if (!dl.startsWith(DEEPLINK_SCHEME)) return null;
   if (dl.startsWith(DEEPLINK_PREFIX)) {
     try {
       const code = decodeURIComponent(dl.slice(DEEPLINK_PREFIX.length));
-      if (/^[A-Za-z0-9+/]+=*$/.test(code)) return `${REDIRECT_BASE}?c=${toBase64Url(code)}`;
+      // Canonically padded only: the page rebuilds padding from the length,
+      // so anything else would not come back character for character.
+      if (code.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(code)) {
+        return `${REDIRECT_BASE}?c=${toBase64Url(code)}`;
+      }
     } catch { /* malformed percent-encoding: fall through to the full form */ }
   }
   return `${REDIRECT_BASE}?d=${toBase64Url(btoa(unescape(encodeURIComponent(dl))))}`;
@@ -71,6 +81,10 @@ function buildShareUrl(dl: string) {
 async function copyDeeplink() {
   if (!deeplink.value) return;
   const shareUrl = buildShareUrl(deeplink.value);
+  if (!shareUrl) {
+    toast("登入連結格式不認得，無法產生分享連結，請改用 QR Code", { kind: "error" });
+    return;
+  }
   await writeText(shareUrl);
 
   // 標題直接掛網址：整條標題都可點，手機上最好按，也不必把長網址攤在卡片裡。

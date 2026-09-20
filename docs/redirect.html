@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
+  <meta name="referrer" content="no-referrer" />
   <title>久世登入器 — 開啟登入</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -63,7 +64,12 @@
     //   ?c=<base64url>  login code only; the fixed deeplink prefix is restored here
     //   ?d=<base64url>  whole deeplink, used when the prefix is not the known one
     //   #<base64>       legacy; LINE stops linkifying a long URL at the "#"
-    // Must stay in sync with DEEPLINK_PREFIX in src/pages/QrPage.vue.
+    // The query string reaches the GitHub Pages server, unlike the fragment —
+    // accepted: the code is short-lived, single-use, and already sits in the
+    // chat message it was sent through.
+    // Must stay in sync with DEEPLINK_PREFIX in src/pages/QrPage.vue. Never
+    // edit the value: "?c=" links from every app version depend on it. A new
+    // prefix needs a new parameter name.
     var DEEPLINK_PREFIX = "gameplapp://gameplhost/deeplink?type=1&action=web&code=";
 
     function fromBase64Url(s) {
@@ -77,7 +83,7 @@
       var q = new URLSearchParams(location.search);
       if (q.get("c")) {
         var code = fromBase64Url(q.get("c"));
-        if (/^[A-Za-z0-9+/]+=*$/.test(code)) dl = DEEPLINK_PREFIX + encodeURIComponent(code);
+        if (/^[A-Za-z0-9+/]+={0,2}$/.test(code)) dl = DEEPLINK_PREFIX + encodeURIComponent(code);
       } else if (q.get("d")) {
         dl = decodeURIComponent(escape(atob(fromBase64Url(q.get("d")))));
       } else {
