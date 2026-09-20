@@ -932,7 +932,11 @@ fn open_tab<R: Runtime>(
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 tab_loaded(&app_for_load, id, payload.url().as_str());
                 if payload.url().host_str().is_some_and(is_beanfun_domain) {
-                    diag_cookie_store(&app_for_load, &window, id, payload.url().as_str());
+                    // 網址的參數不寫（SSO 的 skey／登入碼都在那裡）
+                    let mut bare = payload.url().clone();
+                    bare.set_query(None);
+                    bare.set_fragment(None);
+                    diag_cookie_store(&app_for_load, &window, id, bare.as_str());
                 }
             }
         })
@@ -1016,10 +1020,9 @@ fn open_tab<R: Runtime>(
                 // 把注入要用的位置排除在外。
                 Tidy::Everything { account } => {
                     clear_cookies_then(platform, EVERY_COOKIE, move |name, domain, path| !slots_for_all.holds(name, domain, path), move |platform, clean| {
-                        if clean {
-                            if let Ok(mut owner) = COOKIE_OWNER.lock() {
-                                *owner = Some(account);
-                            }
+                        // 沒清乾淨＝裡面混著兩個人的東西，不是任何人的；下次不管開誰都要再清。
+                        if let Ok(mut owner) = COOKIE_OWNER.lock() {
+                            *owner = clean.then_some(account);
                         }
                         seed(platform);
                     });
@@ -1115,13 +1118,39 @@ impl CookieSlots {
     }
 }
 
-/// 逐顆讀出來、`doomed(名稱, 網域, 路徑)` 說要刪的才刪，全部處理完才呼叫 `then`。不用 `DeleteCookiesWithDomainAndPath`：
-/// 那支的第一個參數是 cookie 的 name，「這個網域下全部」不是它的語意。
+/// 這顆 webview 的 cookie manager。
+#[cfg(windows)]
+fn cookie_manager(
+    platform: &tauri::webview::PlatformWebview,
+) -> Result<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CookieManager, String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
+    use windows_core::Interface;
+
+    unsafe {
+        platform
+            .controller()
+            .CoreWebView2()
+            .and_then(|core| core.cast::<ICoreWebView2_2>())
+            .and_then(|core2| core2.CookieManager())
+            .map_err(|e| format!("取不到 cookie manager：{e}"))
+    }
+}
+
+/// 刪除送出去之後最多再讀幾輪來確認它真的生效了。
+const CLEAR_VERIFY_ROUNDS: u32 = 8;
+
+/// 逐顆讀出來、`doomed(名稱, 網域, 路徑)` 說要刪的才刪，**確認它們真的不見了**才呼叫
+/// `then`。不用 `DeleteCookiesWithDomainAndPath`：那支的第一個參數是 cookie 的 name，
+/// 「這個網域下全部」不是它的語意。
 ///
-/// `then` 的第二個參數＝每個網址都真的讀到了（讀不到的那幾個等於沒清）。
+/// ★`DeleteCookie` 沒有完成通知，也不保證比後面的寫入早生效（見 `CookieSlots`），
+/// 所以送出刪除之後要再讀，讀到那些 cookie 都不在了才往下走。同一顆 cookie **只送
+/// 一次刪除**：`.beanfun.com` 的 cookie 在三個網址底下都讀得到，各送一次的話，第一個
+/// 生效後看起來已經清乾淨，後面兩個卻還在路上，落在注入或網頁自己寫入之後。
 ///
-/// 任何一步失敗都照樣往下走：清不掉頂多是這一次被舊 token 短路，卡在這裡不導向
-/// 則是整個登入開不起來。
+/// `then` 的第二個參數＝要刪的確實都不在了。讀不到、或讀了 `CLEAR_VERIFY_ROUNDS`
+/// 輪還在，都是 `false`，但照樣往下走：清不掉頂多是這一次被舊 token 短路，卡在這裡
+/// 不導向則是整個登入開不起來。
 #[cfg(windows)]
 fn clear_cookies_then(
     platform: tauri::webview::PlatformWebview,
@@ -1129,80 +1158,116 @@ fn clear_cookies_then(
     doomed: impl Fn(&str, &str, &str) -> bool + Clone + 'static,
     then: impl FnOnce(&tauri::webview::PlatformWebview, bool) + 'static,
 ) {
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
-    use webview2_com::GetCookiesCompletedHandler;
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
-    use windows_core::{Interface, HSTRING, PCWSTR};
-
-    let manager: Option<ICoreWebView2CookieManager> = unsafe {
-        platform
-            .controller()
-            .CoreWebView2()
-            .and_then(|core| core.cast::<ICoreWebView2_2>())
-            .and_then(|core2| core2.CookieManager())
-            .map_err(|e| eprintln!("[browser] 取不到 cookie manager，舊 cookie 沒清：{e}"))
-            .ok()
-    };
-    let Some(manager) = manager.filter(|_| !urls.is_empty()) else {
-        then(&platform, false);
-        return;
-    };
-
-    // 這些回呼全部跑在主執行緒上，所以用 Rc 就夠了。
-    let pending = Rc::new(Cell::new(urls.len()));
-    let clean = Rc::new(Cell::new(true));
-    let then = Rc::new(RefCell::new(Some((platform, then))));
-    let clean_at_end = clean.clone();
-    let settle = move |pending: &Cell<usize>| {
-        pending.set(pending.get() - 1);
-        if pending.get() == 0 {
-            if let Some((platform, then)) = then.borrow_mut().take() {
-                then(&platform, clean_at_end.get());
-            }
+    let manager = match cookie_manager(&platform) {
+        Ok(manager) if !urls.is_empty() => manager,
+        Ok(_) => return then(&platform, false),
+        Err(e) => {
+            eprintln!("[browser] {e}，舊 cookie 沒清");
+            return then(&platform, false);
         }
     };
+    let sweep = std::rc::Rc::new(Sweep {
+        manager,
+        urls,
+        doomed: Box::new(doomed),
+        sent: Default::default(),
+        then: std::cell::RefCell::new(Some(Box::new(move |clean| then(&platform, clean)))),
+    });
+    Sweep::round(sweep, 0);
+}
 
-    for url in urls {
-        let uri = HSTRING::from(*url);
-        let deleter = manager.clone();
-        let doomed = doomed.clone();
-        let (pending_cb, settle_cb, clean_cb) = (pending.clone(), settle.clone(), clean.clone());
-        let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
-            if list.is_none() {
-                clean_cb.set(false);
-            }
-            if let Some(list) = list {
-                let mut count = 0u32;
-                let _ = unsafe { list.Count(&mut count) };
-                for i in 0..count {
-                    let Ok(cookie) = (unsafe { list.GetValueAtIndex(i) }) else { continue };
-                    let mut name = windows_core::PWSTR::null();
-                    let mut domain = windows_core::PWSTR::null();
-                    let mut path = windows_core::PWSTR::null();
-                    if unsafe { cookie.Name(&mut name) }.is_err()
-                        || unsafe { cookie.Domain(&mut domain) }.is_err()
-                        || unsafe { cookie.Path(&mut path) }.is_err()
-                    {
-                        continue;
-                    }
-                    let (name, domain, path) = (
-                        webview2_com::take_pwstr(name),
-                        webview2_com::take_pwstr(domain),
-                        webview2_com::take_pwstr(path),
-                    );
-                    if doomed(&name, &domain, &path) {
-                        let _ = unsafe { deleter.DeleteCookie(&cookie) };
-                    }
+/// 一次清除的進度。回呼全部跑在主執行緒上，所以用 `Rc` 就夠了。
+#[cfg(windows)]
+struct Sweep {
+    manager: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CookieManager,
+    urls: &'static [&'static str],
+    doomed: Box<dyn Fn(&str, &str, &str) -> bool>,
+    /// 已經送過刪除的位置，不再送第二次。
+    sent: std::cell::RefCell<std::collections::HashSet<(String, String, String)>>,
+    then: std::cell::RefCell<Option<Box<dyn FnOnce(bool)>>>,
+}
+
+#[cfg(windows)]
+impl Sweep {
+    fn finish(&self, clean: bool) {
+        if let Some(then) = self.then.borrow_mut().take() {
+            then(clean);
+        }
+    }
+
+    /// 每個網址讀一次：沒送過刪除的就送，順便數還剩幾顆該刪的。一顆都不剩才算完。
+    fn round(sweep: std::rc::Rc<Sweep>, attempt: u32) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use webview2_com::GetCookiesCompletedHandler;
+        use windows_core::{HSTRING, PCWSTR};
+
+        let pending = Rc::new(Cell::new(sweep.urls.len()));
+        let left = Rc::new(Cell::new(0usize));
+        let unread = Rc::new(Cell::new(false));
+        let settle = {
+            let (sweep, pending, left, unread) = (sweep.clone(), pending.clone(), left.clone(), unread.clone());
+            move || {
+                pending.set(pending.get() - 1);
+                if pending.get() > 0 {
+                    return;
+                }
+                if unread.get() {
+                    sweep.finish(false);
+                } else if left.get() == 0 {
+                    sweep.finish(true);
+                } else if attempt + 1 >= CLEAR_VERIFY_ROUNDS {
+                    eprintln!("[browser] 還有 {} 顆舊 cookie 刪不掉", left.get());
+                    sweep.finish(false);
+                } else {
+                    Sweep::round(sweep.clone(), attempt + 1);
                 }
             }
-            settle_cb(&pending_cb);
-            Ok(())
-        }));
-        if let Err(e) = unsafe { manager.GetCookies(PCWSTR(uri.as_ptr()), &handler) } {
-            eprintln!("[browser] 讀 {url} 的 cookie 失敗，沒清成：{e}");
-            clean.set(false);
-            settle(&pending);
+        };
+
+        for url in sweep.urls {
+            let uri = HSTRING::from(*url);
+            let (sweep_cb, left_cb, unread_cb, settle_cb) = (sweep.clone(), left.clone(), unread.clone(), settle.clone());
+            let handler = GetCookiesCompletedHandler::create(Box::new(move |_result, list| {
+                match list {
+                    None => unread_cb.set(true),
+                    Some(list) => {
+                        let mut count = 0u32;
+                        let _ = unsafe { list.Count(&mut count) };
+                        for i in 0..count {
+                            let Ok(cookie) = (unsafe { list.GetValueAtIndex(i) }) else { continue };
+                            let mut name = windows_core::PWSTR::null();
+                            let mut domain = windows_core::PWSTR::null();
+                            let mut path = windows_core::PWSTR::null();
+                            if unsafe { cookie.Name(&mut name) }.is_err()
+                                || unsafe { cookie.Domain(&mut domain) }.is_err()
+                                || unsafe { cookie.Path(&mut path) }.is_err()
+                            {
+                                continue;
+                            }
+                            let (name, domain, path) = (
+                                webview2_com::take_pwstr(name),
+                                webview2_com::take_pwstr(domain),
+                                webview2_com::take_pwstr(path),
+                            );
+                            if !(sweep_cb.doomed)(&name, &domain, &path) {
+                                continue;
+                            }
+                            left_cb.set(left_cb.get() + 1);
+                            if sweep_cb.sent.borrow_mut().insert(CookieSlots::slot(&name, &domain, &path)) {
+                                let _ = unsafe { sweep_cb.manager.DeleteCookie(&cookie) };
+                            }
+                        }
+                    }
+                }
+                settle_cb();
+                Ok(())
+            }));
+            if let Err(e) = unsafe { sweep.manager.GetCookies(PCWSTR(uri.as_ptr()), &handler) } {
+                eprintln!("[browser] 讀 {url} 的 cookie 失敗，沒清成：{e}");
+                unread.set(true);
+                settle();
+            }
         }
     }
 }
@@ -1214,8 +1279,7 @@ fn when_cookies_settle(platform: &tauri::webview::PlatformWebview, then: impl Fn
     use std::cell::RefCell;
     use std::rc::Rc;
     use webview2_com::GetCookiesCompletedHandler;
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
-    use windows_core::{Interface, HSTRING, PCWSTR};
+    use windows_core::{HSTRING, PCWSTR};
 
     let then = Rc::new(RefCell::new(Some(then)));
     let fire = {
@@ -1226,15 +1290,7 @@ fn when_cookies_settle(platform: &tauri::webview::PlatformWebview, then: impl Fn
             }
         }
     };
-    let manager: Option<ICoreWebView2CookieManager> = unsafe {
-        platform
-            .controller()
-            .CoreWebView2()
-            .and_then(|core| core.cast::<ICoreWebView2_2>())
-            .and_then(|core2| core2.CookieManager())
-            .ok()
-    };
-    let Some(manager) = manager else {
+    let Ok(manager) = cookie_manager(platform) else {
         fire();
         return;
     };
@@ -1481,23 +1537,17 @@ pub(crate) fn read_cookies<R: Runtime>(
     url: &str,
 ) -> Result<Vec<SeenCookie>, String> {
     use std::sync::mpsc;
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
     use webview2_com::GetCookiesCompletedHandler;
-    use windows_core::{Interface, HSTRING, PCWSTR};
+    use windows_core::{HSTRING, PCWSTR};
 
     let (tx, rx) = mpsc::sync_channel::<Vec<SeenCookie>>(1);
     let uri = HSTRING::from(url);
     window
         .with_webview(move |platform| unsafe {
-            let manager: ICoreWebView2CookieManager = match platform
-                .controller()
-                .CoreWebView2()
-                .and_then(|core| core.cast::<ICoreWebView2_2>())
-                .and_then(|core2| core2.CookieManager())
-            {
+            let manager = match cookie_manager(&platform) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!("[browser] 取不到 cookie manager：{e}");
+                    eprintln!("[browser] {e}");
                     let _ = tx.send(Vec::new());
                     return;
                 }
@@ -1662,21 +1712,9 @@ fn inject_cookies(
     platform: &tauri::webview::PlatformWebview,
     cookies: &[WebviewCookie],
 ) -> Result<usize, String> {
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2CookieManager, ICoreWebView2_2};
-    use windows_core::{Interface, HSTRING, PCWSTR};
+    use windows_core::{HSTRING, PCWSTR};
 
-    let manager: ICoreWebView2CookieManager = unsafe {
-        let core = platform
-            .controller()
-            .CoreWebView2()
-            .map_err(|e| format!("取不到 CoreWebView2：{e}"))?;
-        let core2 = core
-            .cast::<ICoreWebView2_2>()
-            .map_err(|e| format!("這個 WebView2 版本沒有 cookie manager：{e}"))?;
-        core2
-            .CookieManager()
-            .map_err(|e| format!("取不到 cookie manager：{e}"))?
-    };
+    let manager = cookie_manager(platform)?;
 
     // 給一個明確的到期時間，讓 cookie 變成 persistent 而不是 session cookie：
     // session cookie 只活在建立它的那顆 webview 裡，其他分頁與網頁彈出的子視窗

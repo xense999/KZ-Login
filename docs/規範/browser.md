@@ -17,7 +17,7 @@
 - `browser::tab_command(app, action, id)` — `new`／`activate`／`close`。
 - `browser::read_cookies(window, url) -> Vec<SeenCookie>` — 從某顆 webview 讀出 `url` 適用的 cookie，**連同它的網域、路徑與旗標**。給 `gamapass` 用：那條登入的 token 只落在那顆 webview 裡。`SeenCookie::as_set_cookie()` 把它還原成「當初的 Set-Cookie 那一行＋發它的網址」，交給 `beanfun::adopt_cookies` 照原樣收進 jar。
 - `browser::SESSION_COOKIE_URLS` — beanfun 的登入態散在哪三個網址底下。要清舊的（本模組、`gamapass`）、要撈新的（`gamapass`）都問這一份。
-- `browser::seed_and_navigate(window, jar, stale, target)` — 先刪掉 `stale` 那幾個網址底下的舊 cookie，再把 jar 的 cookie 注入，最後才導向；三步靠回呼串成先後，不是各做各的（讀 cookie 是非同步的，晚到的刪除會把剛注入的帶走）。**不是整個清空**：同一個資料夾裡還住著別的網域的登入態。給 `gamapass` 的登入視窗用；cookie 注入的實作歸屬仍在本模組，不另開第二套。
+- `browser::seed_and_navigate(window, jar, stale, target)` — 先刪掉 `stale` 那幾個網址底下的舊 cookie，再把 jar 的 cookie 注入，最後才導向；三步靠回呼串成先後，不是各做各的；怎麼刪才不會傷到注入的那批，見下面「注入之前先清」。**不是整個清空**：同一個資料夾裡還住著別的網域的登入態。給 `gamapass` 的登入視窗用；cookie 注入的實作歸屬仍在本模組，不另開第二套。
 - `browser::eval_json(window, script)` — 在某顆 webview 的頁面裡跑一段腳本、拿回結果（JSON 字串），問不到回 `None`。給 `gamapass` 用：那顆視窗零 IPC，頁面的狀態只能由後端去問。
 - command 包裝（`lib.rs`）：`open_account_browser(token, account_id, alias)`、`browser_navigate(action, url)`、`browser_tab(action, id)`。
 - 事件（→ 工具列 webview）：`browser://tabs`＝`[{id,title,active}]`；`browser://nav`＝`{url}`（作用中分頁的網址）。
@@ -39,11 +39,16 @@
 
 - **cookie 的網域不可以丟。** 撈回來的 cookie 之後會再被注入別的 webview；注入只蓋得掉「名稱＋網域＋路徑」都相同的那一顆，所以掛錯網域的複本蓋不掉別人、也不會被正確的那一顆蓋掉，兩顆一起送出去，beanfun 就判成未登入。v2.4.0 的 `adopt_cookies` 把撈回來的全部掛到 `tw.beanfun.com`，從 GamaPass 卡片開過一次瀏覽器後，那批錯位的 `bfUID`／`bfSecretCode` 就留在共用資料夾裡，連之後 QR 登入的瀏覽器都開成未登入，安裝版與 dev 一起壞（2026-09-19 實機，靠印出儲存區內容才看出同名 cookie 各有兩份）。
 - **注入之前先清。** cookie 儲存區是所有帳號、所有 session 共用的，要進來的那一批才是現在登入的人：
-  - 換了帳號（跟上次開的不是同一個，或程式剛啟動不知道上次是誰）→ **整個清空**再注入。beanfun 的登入 cookie 我們認得，但活動頁那類子網域會發自己的 session cookie，名字與網域都不在我們手上，留著就可能讓下一個帳號沿用上一個人的 session（2026-09-19 使用者定；代價是他在這個瀏覽器裡登過的第三方網站換帳號後要重登）。
-  - 同一個帳號 → 只刪 `SESSION_COOKIE_URLS` 底下**同名**的（不管掛在哪個網域）再注入，其他網站的登入不受影響。
-  - 順序靠回呼串起來：刪完才注入、注入完才導向。
+  - 換了帳號（跟上次開的不是同一個，或程式剛啟動不知道上次是誰）→ **整個清空**（注入要用的位置除外，見下）再注入。beanfun 的登入 cookie 我們認得，但活動頁那類子網域會發自己的 session cookie，名字與網域都不在我們手上，留著就可能讓下一個帳號沿用上一個人的 session（2026-09-19 使用者定；代價是他在這個瀏覽器裡登過的第三方網站換帳號後要重登）。
+  - 同一個帳號 → 只刪 `SESSION_COOKIE_URLS` 底下**同名卻掛在別處**的再注入，其他網站的登入不受影響。
+  - **`DeleteCookie` 沒有完成通知，也不保證比後面的寫入早生效**，所以三條一起守（`CookieSlots`、`clear_cookies_then`）：
+    1. **注入要用的位置（名稱＋網域＋路徑）一律不刪**——注入本來就會蓋掉它；不刪，晚到的刪除就碰不到注入的東西。
+    2. **同一顆 cookie 只送一次刪除**。`.beanfun.com` 的 cookie 在三個網址底下都讀得到，各送一次的話，第一個生效後看起來清乾淨了，其餘的還在路上。
+    3. **送出刪除後要再讀，確認不在了才注入**；注入後再等一次讀取回來才導向。
+    2026-09-20 實機：同一個帳號連開四次，一、三次有登入，二、四次沒有。沒登入的那兩次儲存區裡 `bfWebToken`／`bfUID`／`bfSecretCode` 整顆不見——上一次注入成功的那顆這次被排了刪除，刪除落在新注入之後。失敗的那次沒東西可刪，所以下一次又好了，一好一壞輪流（靠 `browser-diag.log` 才看到）。
+  - **不用 `DeleteAllCookies`**：一樣會晚到，而且什麼都刪，沒辦法把注入的位置排除在外。
   - **只有每次開啟的第一個分頁會刪**；之後的「+」分頁只注入。瀏覽期間網站自己發的同名 cookie（別的子網域的 `ASP.NET_SessionId` 之類）是使用者正在走的流程，刪了等於把那個流程的 session 砍斷。
-  - **儲存區的主人要等真的清空了才換**（`COOKIE_OWNER`）。在判斷的當下就登記的話，開到一半失敗、清空沒發生，下一次再開同一個帳號會被當成沒換帳號。
+  - **儲存區的主人要等確認清空了才換**（`COOKIE_OWNER`）；沒清乾淨就登記成「不知道是誰的」，下次不管開誰都再清一次。在判斷的當下就登記的話，開到一半失敗、清空沒發生，下一次再開同一個帳號會被當成沒換帳號。
   - 已知的限制：主人認的是卡片 id。同一張卡片被重新登入成**另一個** beanfun 帳號（只會發生在卡片底下沒有遊戲帳號可比對的時候）不會觸發整個清空。
 
 - **cookie 必須在分頁導向目標之前注入完成**：分頁一律以 `about:blank` 建立，注入完才 `navigate`。每次手動開分頁都重注一次（注入便宜、TTL 短）。
