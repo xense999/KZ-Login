@@ -765,6 +765,8 @@ pub fn open<R: Runtime>(
         } else {
             Tidy::Everything { account: account_id.to_string() }
         };
+        let kind = if state.tidy == Tidy::SameNames { "只換同名" } else { "整個清空" };
+        diag(app, &format!("開啟瀏覽器 組={generation} 整理={kind} 注入：{}", inventory.join(", ")));
     }
 
     // 工具列視窗先隱藏著開，套用記住的幾何、排好版面才顯示——否則會先閃一下預設
@@ -923,9 +925,12 @@ fn open_tab<R: Runtime>(
             true
         })
         // 每次頁面載入完再記一次（重新導向後的最終網址以這份為準）
-        .on_page_load(move |_window, payload| {
+        .on_page_load(move |window, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 tab_loaded(&app_for_load, id, payload.url().as_str());
+                if payload.url().host_str().is_some_and(is_beanfun_domain) {
+                    diag_cookie_store(&app_for_load, &window, id, payload.url().as_str());
+                }
             }
         })
         // 網頁要求開新視窗：帶尺寸的（金流小視窗）交給 WebView2 原生開、保
@@ -1046,6 +1051,7 @@ pub(crate) fn seed_and_navigate<R: Runtime>(
     let cookies = cookies_from_jar(jar);
     let expected = cookies.len();
     let nav_target = window.clone();
+    diag(window.app_handle(), &format!("登入視窗 {} 清掉 beanfun 登入網址的 cookie 後注入 {expected} 顆", window.label()));
     window
         .with_webview(move |platform| {
             let seed = move |platform: &tauri::webview::PlatformWebview| {
@@ -1496,6 +1502,65 @@ pub(crate) fn eval_json<R: Runtime>(window: &WebviewWindow<R>, script: &str) -> 
 #[cfg(not(windows))]
 pub(crate) fn eval_json<R: Runtime>(_window: &WebviewWindow<R>, _script: &str) -> Option<String> {
     None
+}
+
+// ─── 診斷紀錄 ─────────────────────────────────────────────────────────────────
+
+/// 「開出來有時沒登入」的現場紀錄。release 版沒有 console，`eprintln!` 等於不存在，
+/// 所以寫成檔案（設定資料夾底下）。**不寫 cookie 的值**——只寫名稱、網域、路徑、
+/// 旗標，以及儲存區裡那顆跟我們注入的那顆是不是同一個值。
+const DIAG_FILE: &str = "browser-diag.log";
+const DIAG_MAX_BYTES: u64 = 512 * 1024;
+
+fn diag<R: Runtime>(app: &AppHandle<R>, text: &str) {
+    use std::io::Write;
+    let Ok(dir) = app.path().app_config_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(DIAG_FILE);
+    if std::fs::metadata(&path).map(|m| m.len() > DIAG_MAX_BYTES).unwrap_or(false) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{now} pid={}] {text}", std::process::id());
+    }
+}
+
+/// 頁面載入完之後，把儲存區裡 beanfun 登入網址底下的 cookie 跟注入的那批對一次。
+/// 讀 cookie 要等主執行緒回呼，而這裡就是主執行緒，所以丟到別的執行緒去等。
+fn diag_cookie_store<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>, tab: u64, url: &str) {
+    let injected = STATE.lock().map(|s| s.cookies.clone()).unwrap_or_default();
+    let (app, window, url) = (app.clone(), window.clone(), url.to_string());
+    std::thread::spawn(move || {
+        let mut lines = vec![format!("載入完成 tab={tab} {url}")];
+        for site in SESSION_COOKIE_URLS {
+            let seen = read_cookies(&window, site).unwrap_or_default();
+            lines.push(format!("  {site}（{} 顆）", seen.len()));
+            for c in seen {
+                let same_name: Vec<&WebviewCookie> =
+                    injected.iter().filter(|i| i.name == c.name).collect();
+                let verdict = if same_name.is_empty() {
+                    "不在注入批次"
+                } else if same_name.iter().any(|i| i.value == c.value) {
+                    "同注入值"
+                } else {
+                    "★值不同"
+                };
+                lines.push(format!(
+                    "    {} @{} {}{}{} {verdict}",
+                    c.name,
+                    c.domain,
+                    c.path,
+                    if c.http_only { " HttpOnly" } else { "" },
+                    if c.secure { " Secure" } else { "" },
+                ));
+            }
+        }
+        diag(&app, &lines.join("\n"));
+    });
 }
 
 // ─── Cookie 注入（WebView2） ──────────────────────────────────────────────────
