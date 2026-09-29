@@ -56,6 +56,7 @@ const openCard = ref<FoldCard | null>(null);
 
 function toggleCard(c: FoldCard) {
   openCard.value = openCard.value === c ? null : c;
+  resMenuOpen.value = false;
 }
 
 const { gameResolution, setGameResolution } = useGameResolution();
@@ -278,7 +279,8 @@ async function supportAuthor() {
       </div>
 
       <!-- 設一次就不太會再動的幾張：平常只露標題，點標題列才展開 -->
-      <div class="card lg" :class="{ unfolded: openCard === 'system' }">
+      <!-- 遊戲解析度的下拉清單要浮出卡片外，這張不能裁切 -->
+      <div class="card lg unclipped" :class="{ unfolded: openCard === 'system' }">
         <div class="row foldhead" @click="toggleCard('system')">
           <span class="row-title">系統設定</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
@@ -309,30 +311,26 @@ async function supportAuthor() {
               <span class="pill-knob"></span>
             </button>
           </div>
-        </template>
-      </div>
-
-      <!-- 下拉清單要浮出卡片外，這張不能裁切 -->
-      <div class="card lg unclipped">
-        <div class="row">
-          <span class="row-title"
-            data-tip="快速登入填帳密時，照這個解析度找遊戲的帳號欄。&#10;・自動：照遊戲視窗大小，一般都用這個。&#10;・遊戲開了延伸介面、登出後快速登入點不到帳號欄時，改成遊戲設定裡的解析度。">遊戲解析度</span>
-          <div ref="resPickerEl" class="res-picker">
-            <button type="button" class="res-btn" :class="{ on: resMenuOpen }" @click="resMenuOpen = !resMenuOpen">
-              <span>{{ resLabel(gameResolution) }}</span>
-              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-                <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </button>
-            <ul v-if="resMenuOpen" class="res-menu">
-              <li class="res-row" :class="{ active: !gameResolution }" @click="chooseResolution(null)">自動</li>
-              <li v-for="r in GAME_RESOLUTIONS" :key="`${r[0]}x${r[1]}`"
-                class="res-row" :class="{ active: resLabel(gameResolution) === resLabel(r) }" @click="chooseResolution(r)">
-                {{ resLabel(r) }}
-              </li>
-            </ul>
+          <div class="row">
+            <span class="row-title"
+              data-tip="快速登入填帳密時，照這個解析度找遊戲的帳號欄。&#10;・自動：照遊戲視窗大小，一般都用這個。&#10;・遊戲開了延伸介面、登出後快速登入點不到帳號欄時，改成遊戲設定裡的解析度。">遊戲解析度</span>
+            <div ref="resPickerEl" class="res-picker">
+              <button type="button" class="res-btn" :class="{ on: resMenuOpen }" @click="resMenuOpen = !resMenuOpen">
+                <span>{{ resLabel(gameResolution) }}</span>
+                <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                  <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+              <ul v-if="resMenuOpen" class="res-menu">
+                <li class="res-row" :class="{ active: !gameResolution }" @click="chooseResolution(null)">自動</li>
+                <li v-for="r in GAME_RESOLUTIONS" :key="`${r[0]}x${r[1]}`"
+                  class="res-row" :class="{ active: resLabel(gameResolution) === resLabel(r) }" @click="chooseResolution(r)">
+                  {{ resLabel(r) }}
+                </li>
+              </ul>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
 
       <div class="card lg" :class="{ unfolded: openCard === 'notify' }">
