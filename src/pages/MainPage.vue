@@ -7,6 +7,7 @@ import { useAccountsStore, type BeanfunAccount, type GameAccount } from "../stor
 import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useDiscord";
 import { useHidden } from "../composables/useHidden";
 import { useMainAction } from "../composables/useMainAction";
+import { useGameResolution } from "../composables/useGameResolution";
 import ExportProgress from "../components/ExportProgress.vue";
 
 const HUES = [210, 150, 270, 35, 0, 190];
@@ -121,7 +122,7 @@ async function proxyLaunch() {
       toast("剪貼簿沒有有效的登入金鑰，請先複製對方傳來的資料", { kind: "error" });
       return;
     }
-    await invoke<string>("proxy_launch", { uri: clip });
+    await invoke<string>("proxy_launch", { uri: clip, loginArea: gameResolution.value });
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), { kind: "error" });
   } finally {
@@ -130,6 +131,7 @@ async function proxyLaunch() {
 }
 
 const { mainAction } = useMainAction();
+const { gameResolution } = useGameResolution();
 
 // 「啟動遊戲」模式下那顆按鈕的兩種結局：遊戲沒開就開它，開著就問要不要強制關掉。
 // 先問後端遊戲在不在，讓同一顆按鈕自己決定要做哪一件。
@@ -570,6 +572,7 @@ async function autoLogin(account: BeanfunAccount, game: { sn: string; sid: strin
       accountSn: game.sn,
       accountSid: game.sid,
       accountSname: game.sname,
+      loginArea: gameResolution.value,
     });
     store.markUsed(game.sn);
     sentMap.value[game.sn] = outcome;

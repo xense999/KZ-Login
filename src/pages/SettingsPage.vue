@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -10,6 +10,7 @@ import { useTheme } from "../composables/useTheme";
 import { useMainAction, type MainAction } from "../composables/useMainAction";
 import { useDiscordShare } from "../composables/useDiscord";
 import { useMinimizeMode } from "../composables/useMinimizeMode";
+import { useGameResolution, GAME_RESOLUTIONS } from "../composables/useGameResolution";
 import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
 
 const AUTHOR_DISCORD = "xense999";
@@ -49,9 +50,30 @@ const webhookUrl = ref("");
 const gamePath = ref("");
 const saved = ref(false);
 
-const systemOpen = ref(false);
-const notifyOpen = ref(false);
-const gamePathOpen = ref(false);
+// 折疊卡片一次只展開一張：點開另一張時前一張自動收起。
+type FoldCard = "system" | "notify" | "gamePath";
+const openCard = ref<FoldCard | null>(null);
+
+function toggleCard(c: FoldCard) {
+  openCard.value = openCard.value === c ? null : c;
+}
+
+const { gameResolution, setGameResolution } = useGameResolution();
+const resMenuOpen = ref(false);
+const resPickerEl = ref<HTMLElement | null>(null);
+
+function resLabel(r: readonly [number, number] | null) {
+  return r ? `${r[0]} × ${r[1]}` : "自動";
+}
+
+function chooseResolution(r: readonly [number, number] | null) {
+  setGameResolution(r);
+  resMenuOpen.value = false;
+}
+
+function closeResMenuOutside(e: PointerEvent) {
+  if (resMenuOpen.value && !resPickerEl.value?.contains(e.target as Node)) resMenuOpen.value = false;
+}
 
 const showAbout = ref(false);
 const appVersion = ref("");
@@ -104,7 +126,10 @@ function toggleShareKey() {
   setShareKeyToDiscord(!shareKeyToDiscord.value);
 }
 
+onUnmounted(() => document.removeEventListener("pointerdown", closeResMenuOutside));
+
 onMounted(async () => {
+  document.addEventListener("pointerdown", closeResMenuOutside);
   webhookUrl.value = localStorage.getItem(WEBHOOK_KEY) ?? "";
   // onMounted 之後才掛 watch，否則初始化那次讀取會反過來寫一次 localStorage
   watch(webhookUrl, (v) => {
@@ -253,14 +278,14 @@ async function supportAuthor() {
       </div>
 
       <!-- 設一次就不太會再動的幾張：平常只露標題，點標題列才展開 -->
-      <div class="card lg" :class="{ unfolded: systemOpen }">
-        <div class="row foldhead" @click="systemOpen = !systemOpen">
+      <div class="card lg" :class="{ unfolded: openCard === 'system' }">
+        <div class="row foldhead" @click="toggleCard('system')">
           <span class="row-title">系統設定</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
             <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </div>
-        <template v-if="systemOpen">
+        <template v-if="openCard === 'system'">
           <div class="row-sep"></div>
           <div class="row">
             <span class="row-title">按鈕設定</span>
@@ -287,8 +312,31 @@ async function supportAuthor() {
         </template>
       </div>
 
-      <div class="card lg" :class="{ unfolded: notifyOpen }">
-        <div class="row foldhead" @click="notifyOpen = !notifyOpen">
+      <!-- 下拉清單要浮出卡片外，這張不能裁切 -->
+      <div class="card lg unclipped">
+        <div class="row">
+          <span class="row-title"
+            data-tip="快速登入填帳密時，照這個解析度找遊戲的帳號欄。&#10;・自動：照遊戲視窗大小，一般都用這個。&#10;・遊戲開了延伸介面、登出後快速登入點不到帳號欄時，改成遊戲設定裡的解析度。">遊戲解析度</span>
+          <div ref="resPickerEl" class="res-picker">
+            <button type="button" class="res-btn" :class="{ on: resMenuOpen }" @click="resMenuOpen = !resMenuOpen">
+              <span>{{ resLabel(gameResolution) }}</span>
+              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <ul v-if="resMenuOpen" class="res-menu">
+              <li class="res-row" :class="{ active: !gameResolution }" @click="chooseResolution(null)">自動</li>
+              <li v-for="r in GAME_RESOLUTIONS" :key="`${r[0]}x${r[1]}`"
+                class="res-row" :class="{ active: resLabel(gameResolution) === resLabel(r) }" @click="chooseResolution(r)">
+                {{ resLabel(r) }}
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="card lg" :class="{ unfolded: openCard === 'notify' }">
+        <div class="row foldhead" @click="toggleCard('notify')">
           <span class="row-title tappable" @click="onNotifyTitleTap" data-tip="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
           <div class="foldend">
             <button
@@ -306,7 +354,7 @@ async function supportAuthor() {
             </svg>
           </div>
         </div>
-        <template v-if="notifyOpen">
+        <template v-if="openCard === 'notify'">
           <div class="row-sep"></div>
           <div class="path-row">
             <input
@@ -320,14 +368,14 @@ async function supportAuthor() {
         </template>
       </div>
 
-      <div class="card lg" :class="{ unfolded: gamePathOpen }">
-        <div class="row foldhead" @click="gamePathOpen = !gamePathOpen">
+      <div class="card lg" :class="{ unfolded: openCard === 'gamePath' }">
+        <div class="row foldhead" @click="toggleCard('gamePath')">
           <span class="row-title">遊戲路徑</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
             <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </div>
-        <template v-if="gamePathOpen">
+        <template v-if="openCard === 'gamePath'">
           <div class="row-sep"></div>
           <div class="path-row">
             <input
@@ -543,6 +591,77 @@ async function supportAuthor() {
   font-size: 12px;
   color: var(--text3);
   line-height: 1.4;
+}
+
+/* 卡片的 backdrop-filter 各自成一層，後面的卡片會蓋住浮出來的清單，所以墊高一層 */
+.card.unclipped {
+  overflow: visible;
+  position: relative;
+  z-index: 2;
+}
+
+/* ── 下拉選單（遊戲解析度） ── */
+.res-picker {
+  position: relative;
+}
+.res-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 124px;
+  height: 30px;
+  padding: 0 10px 0 12px;
+  background: var(--surface2);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  transition: border-color 0.12s;
+}
+.res-btn svg {
+  flex: none;
+  color: var(--text3);
+  transition: transform 0.15s;
+}
+.res-btn.on {
+  border-color: var(--primary-border);
+}
+.res-btn.on svg {
+  transform: rotate(180deg);
+}
+.res-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  min-width: 100%;
+  list-style: none;
+  padding: 4px;
+  margin: 0;
+  background: var(--ctx-menu-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--ctx-shadow);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.res-row {
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--text2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.res-row:hover {
+  background: var(--ctx-hover);
+  color: var(--text);
+}
+.res-row.active {
+  color: var(--primary-color);
+  font-weight: 500;
 }
 
 .row-sep {

@@ -399,7 +399,7 @@ mod win {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows,
-        GetClientRect, GetSystemMetrics, GetWindowRect, GetWindowTextW,
+        GetClientRect, GetSystemMetrics, GetWindow, GetWindowRect, GetWindowTextW, GW_OWNER,
         IsWindowVisible, PostMessageW,
         SetForegroundWindow, ShowWindow, SW_RESTORE,
         SM_CXSCREEN, SM_CYSCREEN,
@@ -561,6 +561,9 @@ mod win {
 
     unsafe extern "system" fn game_title_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if IsWindowVisible(hwnd) == 0 { return 1; }
+        // A detached chat window carries the same title and class as the game;
+        // the only difference is that it is owned by the main window.
+        if !GetWindow(hwnd, GW_OWNER).is_null() { return 1; }
         let mut buf = [0u16; 256];
         let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256);
         if len > 0 {
@@ -720,7 +723,12 @@ mod win {
     }
 
     /// Type the account id + OTP into the running MapleStory login form.
-    pub fn fill_login_form(account_id: &str, otp: &str) -> Result<(), String> {
+    /// `login_area` is the game resolution the player picked in settings. With
+    /// the extended UI on, the client grows after character select but the login
+    /// screen stays drawn at that size from the top-left, so the field has to be
+    /// located within it rather than within the whole client. `None` = use the
+    /// client size.
+    pub fn fill_login_form(account_id: &str, otp: &str, login_area: Option<(i32, i32)>) -> Result<(), String> {
         let hwnd = unsafe { find_game_window() };
         if hwnd.is_null() {
             return Err("找不到遊戲視窗，請先開啟楓之谷".to_string());
@@ -741,10 +749,11 @@ mod win {
         let nc_y = win_h - cli_rect.bottom - nc_x;
         let cli_sx = win_rect.left + nc_x;
         let cli_sy = win_rect.top + nc_y;
+        let (area_w, area_h) = login_area.unwrap_or((cli_rect.right, cli_rect.bottom));
 
-        // Click the account field (~50%, 40%) via SendInput to bypass UIPI.
-        let mid_x = cli_sx + cli_rect.right / 2;
-        let acc_y = cli_sy + cli_rect.bottom * 40 / 100;
+        // Click the account field (~50%, 40% of the login screen) via SendInput to bypass UIPI.
+        let mid_x = cli_sx + area_w / 2;
+        let acc_y = cli_sy + area_h * 40 / 100;
         unsafe { send_mouse_click(mid_x, acc_y) };
         std::thread::sleep(std::time::Duration::from_millis(350));
 
@@ -780,6 +789,7 @@ async fn smart_launch(
     account_sn: String,
     account_sid: String,
     account_sname: String,
+    login_area: Option<(i32, i32)>,
 ) -> Result<String, String> {
     let cookie_store = {
         let stores = state.session_stores.lock().await;
@@ -800,7 +810,7 @@ async fn smart_launch(
         {
             let sid = result.sid.clone();
             let otp = result.otp.clone();
-            tokio::task::spawn_blocking(move || win::fill_login_form(&sid, &otp))
+            tokio::task::spawn_blocking(move || win::fill_login_form(&sid, &otp, login_area))
                 .await
                 .map_err(|e| e.to_string())??;
         }
@@ -984,7 +994,7 @@ fn verify_hidden_key(key: String) -> Option<String> {
 /// login form; otherwise launch the game via GGM. The scheme is validated so this
 /// can never be coerced into opening arbitrary clipboard content.
 #[tauri::command]
-async fn proxy_launch(uri: String) -> Result<String, String> {
+async fn proxy_launch(uri: String, login_area: Option<(i32, i32)>) -> Result<String, String> {
     let uri = uri.trim().to_string();
     if !uri.starts_with("gamaniagames://") {
         return Err("剪貼簿內容不是有效的登入金鑰".to_string());
@@ -999,7 +1009,7 @@ async fn proxy_launch(uri: String) -> Result<String, String> {
         let (sid, otp) = beanfun::otp_from_uri(&uri).await.map_err(map_err)?;
         #[cfg(windows)]
         {
-            tokio::task::spawn_blocking(move || win::fill_login_form(&sid, &otp))
+            tokio::task::spawn_blocking(move || win::fill_login_form(&sid, &otp, login_area))
                 .await
                 .map_err(|e| e.to_string())??;
         }
