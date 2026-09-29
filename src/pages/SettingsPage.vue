@@ -300,7 +300,7 @@ async function supportAuthor() {
           </div>
           <div class="row">
             <span class="row-title"
-              data-tip="快速登入填帳密時，照這個解析度找遊戲的帳號欄。&#10;・自動：照遊戲視窗大小，一般都用這個。&#10;・遊戲開了延伸介面、登出後快速登入點不到帳號欄時，改成遊戲設定裡的解析度。">遊戲解析度</span>
+              data-tip="適用於擴展UI模式，若使用擴展UI，請選擇與遊戲設定相同的解析度；未使用則維持「自動」。">遊戲解析度</span>
             <div ref="resPickerEl" class="res-picker">
               <button type="button" class="res-btn" :class="{ on: resMenuOpen }" @click="resMenuOpen = !resMenuOpen">
                 <span>{{ resLabel(gameResolution) }}</span>
