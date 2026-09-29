@@ -15,6 +15,7 @@ import { useAccountsStore, sameLoginAccount, type LoginMethod, type LoginResult 
 // 只為了副作用：這支一載入就把記住的主題套到頁面上。拿掉的話要等進設定頁才會變暗色
 import "./composables/useTheme";
 import { useMinimizeMode } from "./composables/useMinimizeMode";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 type Page = "main" | "login" | "success" | "settings";
 
@@ -125,9 +126,42 @@ async function confirmUpdate() {
   }
 }
 
+// 開程式時提醒一次「有新版本」，照久世管理器那套：只告知、不能點，要更新走設定頁
+// 「關於」那顆按鈕——人剛開程式正要做事時把視窗關掉重開最惹人厭。還沒更新就每次提。
+// 先讓開場的事跑完再去打 GitHub。
+const APP_UPDATE_CHECK_DELAY_MS = 3000;
+
+async function checkAppUpdate() {
+  await new Promise((r) => setTimeout(r, APP_UPDATE_CHECK_DELAY_MS));
+  // 查詢前先讀：收在通知列時程式內的提示沒人看得到，改走系統通知。
+  // 查詢期間才收進通知列的那次會白提醒，機率低、下次開程式還會再提，不處理。
+  const visible = await Window.getCurrent().isVisible();
+
+  let has = false;
+  try {
+    has = (await invoke<{ has_update: boolean }>("check_app_update")).has_update;
+  } catch {
+    // 沒網路、GitHub 掛掉都當作沒有新版：順手的提醒，不值得在開程式時丟錯誤訊息
+  }
+  // dev 永遠查不到新版，強制跳一次才看得到實際樣子；打包時整段會被清掉
+  if (!has && !import.meta.env.DEV) return;
+
+  if (visible) {
+    toast("有新版本可以更新囉");
+    return;
+  }
+  try {
+    const ok = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+    if (ok) sendNotification({ title: "久世登入器", body: "有新版本可以更新囉" });
+  } catch {
+    /* 使用者把通知關掉了就算了 */
+  }
+}
+
 onMounted(async () => {
   checkSessions();
   checkGgmUpdate();
+  checkAppUpdate();
   // 失敗要說出來：開關會自己退回「關」，不講的話使用者只看到設定沒生效
   useMinimizeMode().syncMinimizeMode().catch((e) => {
     toast(`縮小到通知列無法啟用：${e instanceof Error ? e.message : String(e)}`, { kind: "error" });

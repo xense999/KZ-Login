@@ -1458,6 +1458,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             qr_start, qr_check, password_login_start, password_login_resume, captcha_solve, captcha_cancel, gamapass_login, gamapass_code, gamapass_cancel, saved_logins, saved_gamapass, forget_saved_login, forget_gamapass, reorder_saved_logins, get_otp,
             smart_launch, launch_via_ggm, get_launch_uri, proxy_launch, open_url,

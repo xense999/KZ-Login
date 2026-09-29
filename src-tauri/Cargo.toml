@@ -37,6 +37,7 @@ base64 = "0.22"
 regex = "1"
 thiserror = "1"
 sha2 = "0.10"
+tauri-plugin-notification = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
