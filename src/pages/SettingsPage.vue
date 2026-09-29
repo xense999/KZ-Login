@@ -299,19 +299,6 @@ async function supportAuthor() {
             </div>
           </div>
           <div class="row">
-            <span class="row-title">縮小到通知列</span>
-            <button
-              class="pill-switch"
-              role="switch"
-              :class="{ on: minimizeToTray }"
-              :aria-checked="minimizeToTray"
-              data-tip="開啟後，按縮小鈕會把主視窗收進右下角通知列；點圖示叫回來，對圖示按右鍵可結束。關閉鈕不受影響，一律直接結束"
-              @click="toggleMinimizeToTray"
-            >
-              <span class="pill-knob"></span>
-            </button>
-          </div>
-          <div class="row">
             <span class="row-title"
               data-tip="快速登入填帳密時，照這個解析度找遊戲的帳號欄。&#10;・自動：照遊戲視窗大小，一般都用這個。&#10;・遊戲開了延伸介面、登出後快速登入點不到帳號欄時，改成遊戲設定裡的解析度。">遊戲解析度</span>
             <div ref="resPickerEl" class="res-picker">
@@ -329,6 +316,19 @@ async function supportAuthor() {
                 </li>
               </ul>
             </div>
+          </div>
+          <div class="row">
+            <span class="row-title">縮小到通知列</span>
+            <button
+              class="pill-switch"
+              role="switch"
+              :class="{ on: minimizeToTray }"
+              :aria-checked="minimizeToTray"
+              data-tip="開啟後，按縮小鈕會把主視窗收進右下角通知列；點圖示叫回來，對圖示按右鍵可結束。關閉鈕不受影響，一律直接結束"
+              @click="toggleMinimizeToTray"
+            >
+              <span class="pill-knob"></span>
+            </button>
           </div>
         </template>
       </div>
