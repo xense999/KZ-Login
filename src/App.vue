@@ -135,11 +135,16 @@ async function checkAppUpdate() {
   await new Promise((r) => setTimeout(r, APP_UPDATE_CHECK_DELAY_MS));
   // 查詢前先讀：收在通知列時程式內的提示沒人看得到，改走系統通知。
   // 查詢期間才收進通知列的那次會白提醒，機率低、下次開程式還會再提，不處理。
-  const visible = await Window.getCurrent().isVisible();
+  // 縮到工作列的視窗 isVisible 仍是 true，要另外看 isMinimized
+  const win = Window.getCurrent();
+  const visible = (await win.isVisible()) && !(await win.isMinimized());
 
   let has = false;
   try {
-    has = (await invoke<{ has_update: boolean }>("check_app_update")).has_update;
+    // 跟設定頁同一個判準：安裝檔還沒傳上去（CI 發版的空檔）就不算有新版，
+    // 否則這裡說有、設定頁按檢查更新卻說已是最新版
+    const u = await invoke<{ has_update: boolean; url: string; exe_url: string }>("check_app_update");
+    has = u.has_update && !!(u.exe_url || u.url);
   } catch {
     // 沒網路、GitHub 掛掉都當作沒有新版：順手的提醒，不值得在開程式時丟錯誤訊息
   }
