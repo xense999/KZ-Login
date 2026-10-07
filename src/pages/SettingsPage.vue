@@ -419,8 +419,8 @@ async function supportAuthor() {
                   <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
               </button>
-              <button class="btn-browse sm" @click="showSafePin = true"
-                data-tip="密碼是六位數字，加密後存在這台電腦上">{{ hasPin ? "變更" : "設定" }}</button>
+              <button v-if="!hasPin" class="btn-browse sm" @click="showSafePin = true"
+                data-tip="密碼是六位數字，加密後存在這台電腦上">設定</button>
             </div>
           </div>
           <div class="row">
