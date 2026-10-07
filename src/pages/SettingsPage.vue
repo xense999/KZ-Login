@@ -559,7 +559,10 @@ async function supportAuthor() {
   padding: 2px;
   border: none;
   border-radius: 999px;
-  background: var(--surface3);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
+    inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -579,7 +582,7 @@ async function supportAuthor() {
   height: 15px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--switch-knob-shadow);
   transition: transform 0.18s ease;
 }
 .pill-switch.on .pill-knob {
