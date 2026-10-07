@@ -354,42 +354,6 @@ async function supportAuthor() {
         </template>
       </div>
 
-      <div class="card lg" :class="{ unfolded: openCard === 'safe' }">
-        <div class="row foldhead" @click="toggleCard('safe')">
-          <span class="row-title">安全模式</span>
-          <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-            <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </div>
-        <template v-if="openCard === 'safe'">
-          <div class="row-sep"></div>
-          <div class="row">
-            <span class="row-title">開啟安全模式</span>
-            <button class="btn-browse sm" @click="enterSafeMode"
-              data-tip="立刻鎖住登入器，輸入安全模式密碼才能繼續使用。已登入的帳號不會被登出">開啟</button>
-          </div>
-          <div class="row">
-            <span class="row-title">設定安全模式密碼</span>
-            <button class="btn-browse sm" @click="showSafePin = true"
-              data-tip="密碼是六位數字，加密後存在這台電腦上">{{ hasPin ? "變更" : "設定" }}</button>
-          </div>
-          <div class="row">
-            <span class="row-title">開啟時自動進入安全模式</span>
-            <button
-              class="pill-switch"
-              role="switch"
-              :class="{ on: autoLock }"
-              :aria-checked="autoLock"
-              :disabled="!hasPin"
-              :data-tip="hasPin ? '每次開啟登入器都先鎖住，輸入密碼才能使用' : '請先設定安全模式密碼'"
-              @click="toggleAutoLock"
-            >
-              <span class="pill-knob"></span>
-            </button>
-          </div>
-        </template>
-      </div>
-
       <div class="card lg" :class="{ unfolded: openCard === 'notify' }">
         <div class="row foldhead" @click="toggleCard('notify')">
           <span class="row-title tappable" @click="onNotifyTitleTap" data-tip="設定後，登入器可把登入連結自動傳到你的 Discord 頻道。&#10;・QR 登入頁按「連結版本」→ 會把登入網址傳到頻道，方便在手機或其他裝置點開登入。&#10;設定方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 建立，複製網址貼到下方欄位。">通知設定</span>
@@ -440,6 +404,42 @@ async function supportAuthor() {
               spellcheck="false"
             />
             <button class="btn-browse" @click="browse">瀏覽</button>
+          </div>
+        </template>
+      </div>
+
+      <div class="card lg" :class="{ unfolded: openCard === 'safe' }">
+        <div class="row foldhead" @click="toggleCard('safe')">
+          <span class="row-title">安全模式</span>
+          <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+            <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <template v-if="openCard === 'safe'">
+          <div class="row-sep"></div>
+          <div class="row">
+            <span class="row-title">開啟安全模式</span>
+            <button class="btn-browse sm" @click="enterSafeMode"
+              data-tip="立刻鎖住登入器，輸入安全模式密碼才能繼續使用。已登入的帳號不會被登出">開啟</button>
+          </div>
+          <div class="row">
+            <span class="row-title">設定安全模式密碼</span>
+            <button class="btn-browse sm" @click="showSafePin = true"
+              data-tip="密碼是六位數字，加密後存在這台電腦上">{{ hasPin ? "變更" : "設定" }}</button>
+          </div>
+          <div class="row">
+            <span class="row-title">開啟時自動進入安全模式</span>
+            <button
+              class="pill-switch"
+              role="switch"
+              :class="{ on: autoLock }"
+              :aria-checked="autoLock"
+              :disabled="!hasPin"
+              :data-tip="hasPin ? '每次開啟登入器都先鎖住，輸入密碼才能使用' : '請先設定安全模式密碼'"
+              @click="toggleAutoLock"
+            >
+              <span class="pill-knob"></span>
+            </button>
           </div>
         </template>
       </div>
