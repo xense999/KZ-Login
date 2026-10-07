@@ -26,7 +26,7 @@ pub fn name(app, account, kind, nickname) -> Result<(), String>   // 只替已�
 
 ## 不變量
 
-- 整份清單以 DPAPI（CurrentUser 範圍）加密成一個檔案，不寫登錄檔、不另加鹽；檔案搬到別台電腦或別的 Windows 帳號就解不開。
+- 整份清單以 DPAPI（CurrentUser 範圍，見總表 `dpapi` 條）加密成一個檔案，不寫登錄檔、不另加鹽；檔案搬到別台電腦或別的 Windows 帳號就解不開。
 - **兩種登入的帳密同一個檔案但絕不混用**：GamaPass 帳號不是 beanfun 帳號，出現在對方的清單裡只會登入失敗。每次讀寫都帶 `kind`，比對帳號時也要 `kind` 相同才算同一筆。舊檔沒有這個欄位，`#[serde(default)]` 讓它們照舊算 beanfun。
 - **只記對方驗過的密碼**：GamaPass 走「選帳號」那條捷徑、或由使用者接手完成的登入，都不呼叫 `remember`（見總表 `gamapass` 條的 `password_checked`）。
 - **`nickname` 只是顯示用的**（GamaPass 的清單拿它取代手機號碼），不參與「同一個帳號」的判定；舊檔沒有這個欄位＝還不知道，前端退回顯示帳號。`name` 對不存在的帳號什麼都不做——光有暱稱不算一筆登入。再次 `remember` 同一個帳號不會洗掉它。

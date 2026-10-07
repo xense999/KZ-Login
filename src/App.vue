@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import { Window } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import MainPage from "./pages/MainPage.vue";
@@ -10,11 +10,13 @@ import SuccessPage from "./pages/SuccessPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import ToastPop from "./components/ToastPop.vue";
 import AppTooltip from "./components/AppTooltip.vue";
+import LockScreen from "./components/LockScreen.vue";
 import { toast } from "./composables/useToast";
 import { useAccountsStore, sameLoginAccount, type LoginMethod, type LoginResult } from "./stores/accounts";
 // 只為了副作用：這支一載入就把記住的主題套到頁面上。拿掉的話要等進設定頁才會變暗色
 import "./composables/useTheme";
 import { useMinimizeMode } from "./composables/useMinimizeMode";
+import { useSafeMode } from "./composables/useSafeMode";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 type Page = "main" | "login" | "success" | "settings";
@@ -23,6 +25,12 @@ const page = ref<Page>("main");
 const pendingLogin = ref<LoginResult | null>(null);
 const reauthAccountId = ref<string | null>(null);
 const store = useAccountsStore();
+
+// 安全模式：鎖著（或開場還沒問到要不要鎖）的時候，底下的頁面碰不到也不先畫出來。
+// 畫過一次之後就留著，之後再鎖只是蓋住——頁面上做到一半的事解鎖後還在。
+const { locked, initSafeMode } = useSafeMode();
+const pagesReady = ref(false);
+watch(locked, (v) => { if (v === false) pagesReady.value = true; });
 
 const pageTitles: Record<Page, string> = {
   main: "久世登入器",
@@ -164,6 +172,7 @@ async function checkAppUpdate() {
 }
 
 onMounted(async () => {
+  initSafeMode();
   checkSessions();
   checkGgmUpdate();
   checkAppUpdate();
@@ -252,7 +261,7 @@ function onAccountSaved() {
 <template>
   <div class="app-window">
     <div class="titlebar" data-tauri-drag-region>
-      <button class="wbtn settings-btn" @click="page = page === 'settings' ? 'main' : 'settings'" :class="{ active: page === 'settings' }">
+      <button class="wbtn settings-btn" :disabled="locked !== false" @click="page = page === 'settings' ? 'main' : 'settings'" :class="{ active: page === 'settings' }">
         <!-- 14px 而非 15px：.wbtn 是 26×22，奇數尺寸會留下半像素邊距，捨入後圖示偏右上 -->
         <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
           <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7"/>
@@ -260,7 +269,8 @@ function onAccountSaved() {
             stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <button v-if="page === 'login'" class="title title-btn" :disabled="loginBusy" @click="switchLoginMode">
+      <span v-if="locked !== false" class="title" data-tauri-drag-region>{{ pageTitles.main }}</span>
+      <button v-else-if="page === 'login'" class="title title-btn" :disabled="loginBusy" @click="switchLoginMode">
         {{ pageTitles[page] }}
       </button>
       <span v-else class="title" data-tauri-drag-region>{{ pageTitles[page] }}</span>
@@ -271,17 +281,21 @@ function onAccountSaved() {
     </div>
 
     <div class="page-container">
-      <MainPage v-if="page === 'main'" @add-account="onAddAccount" @reauth="onReauth" />
-      <template v-else-if="page === 'login'">
-        <QrPage v-if="loginMode === 'qr'" @cancel="cancelLogin" @success="onLoginSuccess" />
-        <GamaPassPage v-else-if="loginMode === 'gamapass'" :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
-        <PasswordPage v-else :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
-      </template>
-      <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />
-      <SettingsPage v-else-if="page === 'settings'" @back="page = 'main'" />
+      <!-- inert：鎖著時底下的頁面連 Tab 鍵都走不進去 -->
+      <div v-if="pagesReady" class="pages" :inert="locked !== false">
+        <MainPage v-if="page === 'main'" @add-account="onAddAccount" @reauth="onReauth" />
+        <template v-else-if="page === 'login'">
+          <QrPage v-if="loginMode === 'qr'" @cancel="cancelLogin" @success="onLoginSuccess" />
+          <GamaPassPage v-else-if="loginMode === 'gamapass'" :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
+          <PasswordPage v-else :initial-account="loginPrefill" @cancel="cancelLogin" @success="onLoginSuccess" @busy="loginBusy = $event" />
+        </template>
+        <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />
+        <SettingsPage v-else-if="page === 'settings'" @back="page = 'main'" />
+      </div>
+      <LockScreen v-if="locked" @reset="page = 'main'" />
     </div>
 
-    <div v-if="updateAsk" class="modal-overlay" @click.self="updateAsk = false">
+    <div v-if="updateAsk && locked === false" class="modal-overlay" @click.self="updateAsk = false">
       <div class="modal-card">
         <div class="modal-title">遊戲管理員更新</div>
         <div class="modal-body">
@@ -348,6 +362,8 @@ function onAccountSaved() {
 .settings-btn:hover { background: var(--glass-hover); color: var(--text2); }
 .settings-btn.active { color: var(--primary-color); background: var(--interactive-active-bg); }
 
+.settings-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+
 .win-controls {
   display: flex;
   gap: 2px;
@@ -359,6 +375,14 @@ function onAccountSaved() {
   position: relative;
   flex: 1;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 頁面原本直接是 .page-container 的子項，這層照樣把整塊空間交給它們 */
+.pages {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }

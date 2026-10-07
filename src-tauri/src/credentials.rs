@@ -4,6 +4,7 @@
 //! file is useless on another machine or under another Windows account. Only
 //! this module ever sees the file or the plaintext JSON.
 
+use crate::dpapi;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
@@ -77,6 +78,15 @@ pub fn forget<R: Runtime>(app: &AppHandle<R>, account: &str, kind: LoginKind) ->
     let mut logins = list(app)?;
     remove(&mut logins, account, kind);
     store(app, &logins)
+}
+
+/// Forget every saved login of every kind. A file that was never there is
+/// already forgotten.
+pub fn clear<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    match std::fs::remove_file(file_path(app)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("清除帳密失敗：{e}")),
+        _ => Ok(()),
+    }
 }
 
 /// beanfun does not tell "Abc" from "abc", so neither does the list. Account
@@ -158,51 +168,6 @@ fn store<R: Runtime>(app: &AppHandle<R>, logins: &[SavedLogin]) -> Result<(), St
     let plain = serde_json::to_vec(logins).map_err(|e| e.to_string())?;
     let cipher = dpapi::protect(&plain)?;
     std::fs::write(&path, cipher).map_err(|e| format!("儲存帳密失敗：{e}"))
-}
-
-#[cfg(windows)]
-mod dpapi {
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
-    use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-    };
-
-    pub fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
-        run(plain, |input, output| unsafe {
-            CryptProtectData(input, None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, output)
-        })
-        .map_err(|e| format!("加密帳密失敗：{e}"))
-    }
-
-    pub fn unprotect(cipher: &[u8]) -> Result<Vec<u8>, String> {
-        run(cipher, |input, output| unsafe {
-            CryptUnprotectData(input, None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, output)
-        })
-        .map_err(|e| format!("解密帳密失敗：{e}"))
-    }
-
-    fn run(
-        data: &[u8],
-        call: impl FnOnce(*const CRYPT_INTEGER_BLOB, *mut CRYPT_INTEGER_BLOB) -> windows_core::Result<()>,
-    ) -> windows_core::Result<Vec<u8>> {
-        let input = CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 };
-        let mut output = CRYPT_INTEGER_BLOB::default();
-        call(&input, &mut output)?;
-        // The output buffer is LocalAlloc'd by the API; copy it out and free it.
-        let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-        unsafe { LocalFree(Some(HLOCAL(output.pbData as _))) };
-        Ok(bytes)
-    }
-}
-
-#[cfg(not(windows))]
-mod dpapi {
-    pub fn protect(_plain: &[u8]) -> Result<Vec<u8>, String> {
-        Err("只支援 Windows".into())
-    }
-    pub fn unprotect(_cipher: &[u8]) -> Result<Vec<u8>, String> {
-        Err("只支援 Windows".into())
-    }
 }
 
 #[cfg(test)]

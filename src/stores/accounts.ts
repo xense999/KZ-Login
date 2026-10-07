@@ -85,6 +85,12 @@ export const useAccountsStore = defineStore("accounts", () => {
     if (idx !== -1) accounts.value.splice(idx, 1);
   }
 
+  // 安全模式的「忘記密碼」用：畫面上的帳號全部拿掉。後端的登入狀態由那邊自己清。
+  function clear() {
+    accounts.value = [];
+    lastUsedSn.value = null;
+  }
+
   function moveAccount(fromIdx: number, toIdx: number) {
     if (fromIdx === toIdx) return;
     const list = [...accounts.value];
@@ -136,5 +142,5 @@ export const useAccountsStore = defineStore("accounts", () => {
     acc.gameAccounts = [...preserved, ...added];
   }
 
-  return { accounts, lastUsedSn, findByGames, findByLoginAccount, markUsed, addAccount, updateAlias, removeAccount, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
+  return { accounts, lastUsedSn, findByGames, findByLoginAccount, markUsed, addAccount, updateAlias, removeAccount, clear, moveAccount, moveGameAccount, updateGameName, invalidateToken, updateToken };
 });

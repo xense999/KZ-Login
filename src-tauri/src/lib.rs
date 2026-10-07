@@ -2,8 +2,10 @@ mod beanfun;
 mod browser;
 mod captcha;
 mod credentials;
+mod dpapi;
 mod gamapass;
 mod overlay;
+mod safe_mode;
 mod hidden;
 mod icon;
 mod keyhook;
@@ -1243,6 +1245,38 @@ fn minimize_main(app: tauri::AppHandle) -> Result<(), String> {
     tray::minimize_main(&app)
 }
 
+// ─── Safe mode ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn safe_mode_status(app: tauri::AppHandle) -> Result<safe_mode::Status, String> {
+    safe_mode::status(&app)
+}
+
+#[tauri::command]
+fn safe_mode_set_pin(app: tauri::AppHandle, pin: String, current: Option<String>) -> Result<(), String> {
+    safe_mode::set_pin(&app, &pin, current.as_deref())
+}
+
+#[tauri::command]
+fn safe_mode_verify(app: tauri::AppHandle, pin: String) -> Result<bool, String> {
+    safe_mode::verify(&app, &pin)
+}
+
+#[tauri::command]
+fn safe_mode_set_auto_lock(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    safe_mode::set_auto_lock(&app, on)
+}
+
+/// The way out for a forgotten password: it goes, and so does everything it was
+/// guarding — saved logins and every live session. The saved logins go first, so
+/// a failure there leaves the lock in place rather than opening it onto them.
+#[tauri::command]
+async fn safe_mode_reset(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    credentials::clear(&app)?;
+    state.session_stores.lock().await.clear();
+    safe_mode::clear(&app)
+}
+
 // ─── App self-update ──────────────────────────────────────────────────────────
 
 /// Check GitHub for a newer app release. Current version comes from Tauri's
@@ -1467,7 +1501,8 @@ pub fn run() {
             check_ggm_update, update_ggm, get_game_path, set_game_path, ping_session, forget_session,
             open_account_browser, browser_navigate, browser_tab,
             check_app_update, update_app, update_app_inplace,
-            set_minimize_to_tray, minimize_main
+            set_minimize_to_tray, minimize_main,
+            safe_mode_status, safe_mode_set_pin, safe_mode_verify, safe_mode_set_auto_lock, safe_mode_reset
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
