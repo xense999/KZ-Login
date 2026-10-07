@@ -61,7 +61,7 @@ function toggleCard(c: FoldCard) {
   resMenuOpen.value = false;
 }
 
-const { hasPin, autoLock, setAutoLock } = useSafeMode();
+const { hasPin, autoLock, lock, setAutoLock } = useSafeMode();
 const showSafePin = ref(false);
 
 async function toggleAutoLock() {
@@ -410,9 +410,18 @@ async function supportAuthor() {
         <template v-if="openCard === 'safe'">
           <div class="row-sep"></div>
           <div class="row">
-            <span class="row-title">設定安全模式密碼</span>
-            <button class="btn-browse sm" @click="showSafePin = true"
-              data-tip="密碼是六位數字，加密後存在這台電腦上">{{ hasPin ? "變更" : "設定" }}</button>
+            <span class="row-title">設定安全模式</span>
+            <div class="row-btns">
+              <button class="btn-browse sm icon" :disabled="!hasPin" @click="lock"
+                :data-tip="hasPin ? '立刻進入安全模式，輸入密碼才能繼續使用。已登入的帳號不會被登出' : '請先設定安全模式密碼'">
+                <svg viewBox="0 0 24 24" fill="none" width="14" height="14" aria-hidden="true">
+                  <rect x="5" y="10.5" width="14" height="9.5" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button class="btn-browse sm" @click="showSafePin = true"
+                data-tip="密碼是六位數字，加密後存在這台電腦上">{{ hasPin ? "變更" : "設定" }}</button>
+            </div>
           </div>
           <div class="row">
             <span class="row-title">開啟時自動進入安全模式</span>
@@ -761,6 +770,10 @@ async function supportAuthor() {
   border-radius: 7px;
   font-size: 12px;
 }
+.btn-browse.sm.icon { width: 28px; padding: 0; }
+.btn-browse:disabled { opacity: 0.45; cursor: default; }
+.btn-browse:disabled:hover { background: var(--surface2); color: var(--text2); }
+.row-btns { display: flex; gap: 6px; flex: none; }
 
 /* ── 贊助愛心 ── */
 .btn-heart {
