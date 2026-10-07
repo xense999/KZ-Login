@@ -47,6 +47,7 @@
   --pill-hover-border: rgba(20, 40, 80, 0.16);
   --switch-knob-shadow: 0 2px 8px rgb(0 0 0 / 0.14), 0 0.5px 1.5px rgb(0 0 0 / 0.12), inset 0 1px 0 rgb(255 255 255 / 0.55),
     inset 0 -1px 0 rgb(0 0 0 / 0.04);
+  --seg-knob-bg: rgb(255 255 255 / 0.78);
 }
 
 /* ── 暗色主題 ── slate 深藍 */
@@ -91,6 +92,7 @@
   --pill-hover-border: rgba(170, 195, 235, 0.20);
   --switch-knob-shadow: 0 2px 8px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(255 255 255 / 0.13),
     inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  --seg-knob-bg: rgb(52 63 80 / 0.78);
 }
 
 html, body, #app {
