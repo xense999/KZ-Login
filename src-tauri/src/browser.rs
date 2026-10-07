@@ -79,6 +79,19 @@ fn is_browser_label(label: &str) -> bool {
     label.starts_with(TOOLBAR_LABEL_PREFIX) || label.starts_with(TAB_LABEL_PREFIX)
 }
 
+/// 把帳號瀏覽器的視窗全部收掉，不管是哪一組的。不等它們真的消失。
+pub fn close_all<R: Runtime>(app: &AppHandle<R>) {
+    let windows: Vec<_> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| is_browser_label(label))
+        .map(|(_, win)| win)
+        .collect();
+    for win in windows {
+        let _ = win.destroy();
+    }
+}
+
 /// 標題列與導覽列的高度。
 const TITLEBAR_H: f64 = 42.0;
 const NAVBAR_H: f64 = 42.0;
@@ -723,15 +736,7 @@ pub fn open<R: Runtime>(
     // 還在，那些視窗沒有標題列、不進工作列，留下來就是一片關不掉的東西賴在桌面上。
     // 這裡**不等**它們真的消失（也等不到——見 `TOOLBAR_LABEL_PREFIX`），新視窗的
     // label 號碼本來就跟它們不同。
-    let orphans: Vec<_> = app
-        .webview_windows()
-        .into_iter()
-        .filter(|(label, _)| is_browser_label(label))
-        .map(|(_, win)| win)
-        .collect();
-    for win in orphans {
-        let _ = win.destroy();
-    }
+    close_all(app);
 
     // 沒有一顆 beanfun cookie＝這個 session 已經不帶登入態，開下去只會停在未登入
     // 首頁。先擋掉，讓使用者知道要重新登入，而不是自己去猜為什麼沒登入。

@@ -165,11 +165,7 @@ pub async fn wait_for_login<R: Runtime>(
     let url: Url = format!("https://login.beanfun.com/Login/Index?pSKey={skey}")
         .parse()
         .map_err(|e| format!("登入頁網址錯誤：{e}"))?;
-    let data_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("取不到資料夾：{e}"))?
-        .join("gamapass-webview");
+    let data_dir = data_dir(app)?;
 
     // An older login loses its window, without that counting as a cancel of
     // this one.
@@ -299,6 +295,36 @@ pub fn submit_code<R: Runtime>(app: &AppHandle<R>, code: &str) -> Result<(), Str
     window
         .eval(format!("window.__kzCode && window.__kzCode(\"{digits}\")"))
         .map_err(|e| format!("驗證碼送不進去：{e}"))
+}
+
+/// The login window's own WebView2 folder — where Gamania's memory of this
+/// device lives.
+fn data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|d| d.join("gamapass-webview"))
+        .map_err(|e| format!("取不到資料夾：{e}"))
+}
+
+/// Make Gamania forget this device: without the folder, the next visit asks for
+/// the password again instead of offering the account list.
+///
+/// WebView2 keeps the folder open for a moment after its window is gone, so the
+/// delete is retried before giving up.
+pub async fn forget_device<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    const TRIES: u32 = 15;
+    cancel(app);
+    let dir = data_dir(app)?;
+    let mut last = String::new();
+    for _ in 0..TRIES {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => last = e.to_string(),
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Err(format!("清除 GamaPass 登入資料失敗，請稍後再試一次：{last}"))
 }
 
 /// Give up the login in progress, wherever it has got to — including one that

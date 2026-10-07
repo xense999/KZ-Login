@@ -6,8 +6,6 @@ import { useAccountsStore } from "../stores/accounts";
 
 // 安全模式的鎖定畫面：蓋住標題列以下的整個程式，密碼對了才拿開。
 // 忘記密碼的出路是清掉全部資料——留著資料放行就等於沒鎖。
-const emit = defineEmits<{ reset: [] }>();
-
 const { unlock, resetSafeMode } = useSafeMode();
 const store = useAccountsStore();
 
@@ -53,10 +51,11 @@ async function reset() {
   busy.value = true;
   error.value = "";
   try {
-    await resetSafeMode();
-    store.clear();
-    for (const key of ACCOUNT_MEMORY_KEYS) localStorage.removeItem(key);
-    emit("reset");
+    // 順序不能換：resetSafeMode 一解鎖這個畫面就被拿掉了，帳號要在那之前清完
+    await resetSafeMode(() => {
+      store.clear();
+      for (const key of ACCOUNT_MEMORY_KEYS) localStorage.removeItem(key);
+    });
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {

@@ -28,9 +28,15 @@ const store = useAccountsStore();
 
 // 安全模式：鎖著（或開場還沒問到要不要鎖）的時候，底下的頁面碰不到也不先畫出來。
 // 畫過一次之後就留著，之後再鎖只是蓋住——頁面上做到一半的事解鎖後還在。
-const { locked, initSafeMode } = useSafeMode();
+const { locked, wasReset, initSafeMode } = useSafeMode();
 const pagesReady = ref(false);
 watch(locked, (v) => { if (v === false) pagesReady.value = true; });
+// 忘記密碼重設後資料全空了，停在原本那一頁（多半是設定頁）沒有意義
+watch(wasReset, () => {
+  reauthAccountId.value = null;
+  pendingLogin.value = null;
+  page.value = "main";
+});
 
 const pageTitles: Record<Page, string> = {
   main: "久世登入器",
@@ -292,7 +298,7 @@ function onAccountSaved() {
         <SuccessPage v-else-if="page === 'success'" :login="pendingLogin!" @saved="onAccountSaved" />
         <SettingsPage v-else-if="page === 'settings'" @back="page = 'main'" />
       </div>
-      <LockScreen v-if="locked" @reset="page = 'main'" />
+      <LockScreen v-if="locked" />
     </div>
 
     <div v-if="updateAsk && locked === false" class="modal-overlay" @click.self="updateAsk = false">

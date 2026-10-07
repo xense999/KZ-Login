@@ -47,10 +47,10 @@ async function submit() {
 
 <template>
   <Teleport to=".page-container">
-  <div class="overlay" @click.self="emit('close')" @keydown.enter="submit" @keydown.escape="emit('close')">
+  <div class="overlay" @click.self="emit('close')" @keydown.escape="emit('close')">
     <div class="card">
       <div class="title">{{ changing ? "變更安全模式密碼" : "設定安全模式密碼" }}</div>
-      <div class="fields" @input="error = ''">
+      <div class="fields" @input="error = ''" @keydown.enter="submit">
         <PinField v-if="changing" ref="first" v-model="current" placeholder="目前的密碼" />
         <PinField v-if="changing" v-model="next" placeholder="新密碼（六位數字）" />
         <PinField v-else ref="first" v-model="next" placeholder="密碼（六位數字）" />

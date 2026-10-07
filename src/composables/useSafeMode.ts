@@ -11,6 +11,8 @@ type Status = { has_pin: boolean; auto_lock: boolean };
 const hasPin = ref(false);
 const autoLock = ref(false);
 const locked = ref<boolean | null>(null);
+// 每重設一次加一：資料被清空了，殼層要把頁面帶回主頁
+const wasReset = ref(0);
 
 async function refresh() {
   const s = await invoke<Status>("safe_mode_status");
@@ -49,13 +51,16 @@ export function useSafeMode() {
     autoLock.value = on;
   }
 
-  // 忘記密碼的出路：後端把密碼、記住的帳密、登入狀態全清掉。畫面上的帳號由呼叫端清。
-  async function resetSafeMode() {
+  // 忘記密碼的出路：後端把密碼、記住的帳密、登入狀態全清掉。畫面上的帳號由呼叫端
+  // 在 clearLocal 裡清——要趕在解鎖之前，解鎖那一刻底下的頁面就露出來了。
+  async function resetSafeMode(clearLocal: () => void) {
     await invoke("safe_mode_reset");
+    clearLocal();
+    wasReset.value += 1;
     hasPin.value = false;
     autoLock.value = false;
     locked.value = false;
   }
 
-  return { hasPin, autoLock, locked, initSafeMode, lock, unlock, setPin, setAutoLock, resetSafeMode };
+  return { hasPin, autoLock, locked, wasReset, initSafeMode, lock, unlock, setPin, setAutoLock, resetSafeMode };
 }
