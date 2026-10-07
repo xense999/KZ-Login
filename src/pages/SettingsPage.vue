@@ -559,10 +559,7 @@ async function supportAuthor() {
   padding: 2px;
   border: none;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
-    inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--surface3);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -582,7 +579,7 @@ async function supportAuthor() {
   height: 15px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: var(--switch-knob-shadow);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   transition: transform 0.18s ease;
 }
 .pill-switch.on .pill-knob {
@@ -891,47 +888,29 @@ async function supportAuthor() {
 .contact-sub.copied { color: var(--primary-color); }
 
 /* ── 分段控制器 ── */
-/* Two options only: the knob slides by one column when the second is active. */
 .seg {
-  position: relative;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  display: flex;
+  background: var(--surface2);
+  border-radius: 8px;
   padding: 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
-    inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
+  gap: 1px;
 }
-.seg::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 3px;
-  width: calc((100% - 6px) / 2);
-  border-radius: 999px;
-  background: var(--seg-knob-bg);
-  box-shadow: var(--switch-knob-shadow);
-  transition: transform 0.38s cubic-bezier(0.34, 1.4, 0.64, 1), scale 0.18s ease;
-}
-.seg:has(button:last-child.active)::before { transform: translateX(100%); }
-.seg:active::before { scale: 1.06 1.1; }
 .seg button {
-  position: relative;
   padding: 6px 18px;
   white-space: nowrap;
-  border-radius: 999px;
+  border-radius: 6px;
   border: none;
   background: none;
   font-size: 13px;
-  line-height: 1;
   font-weight: 500;
-  color: var(--text);
-  transition: font-weight 0.2s ease;
+  color: var(--text2);
+  transition: background 0.12s, color 0.12s;
 }
-.seg button.active { font-weight: 700; }
+.seg button.active {
+  background: var(--surface3);
+  color: var(--text);
+}
+.seg button:not(.active):hover { color: var(--text); }
 
 /* ── 底部按鈕 ── */
 .bottom-bar {
