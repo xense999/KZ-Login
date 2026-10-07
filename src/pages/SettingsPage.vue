@@ -400,7 +400,7 @@ async function supportAuthor() {
         </template>
       </div>
 
-      <div class="card lg" :class="{ unfolded: openCard === 'safe' }">
+      <div class="card lg dense" :class="{ unfolded: openCard === 'safe' }">
         <div class="row foldhead" @click="toggleCard('safe')">
           <span class="row-title">安全模式</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
