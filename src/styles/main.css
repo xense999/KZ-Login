@@ -175,12 +175,13 @@ input {
 .btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
 
 .btn-solid {
-  flex: 1; background: var(--primary-bg); border: 1px solid var(--primary-border);
+  flex: 1; background: color-mix(in srgb, var(--primary-bg) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary-border) 65%, transparent);
   border-radius: 12px; padding: 12px;
   font-size: 14px; font-weight: 600; color: var(--primary-color);
   transition: background 0.15s;
 }
-.btn-solid:hover:not(:disabled) { background: var(--primary-bg-hover); }
+.btn-solid:hover:not(:disabled) { background: var(--primary-bg); }
 .btn-ghost:disabled, .btn-solid:disabled { opacity: 0.45; cursor: default; }
 
 /* Inline busy spinner, shared by every page that shows one. */
