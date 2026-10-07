@@ -365,12 +365,12 @@ async function supportAuthor() {
           <div class="row-sep"></div>
           <div class="row">
             <span class="row-title">開啟安全模式</span>
-            <button class="btn-browse" @click="enterSafeMode"
+            <button class="btn-browse sm" @click="enterSafeMode"
               data-tip="立刻鎖住登入器，輸入安全模式密碼才能繼續使用。已登入的帳號不會被登出">開啟</button>
           </div>
           <div class="row">
             <span class="row-title">設定安全模式密碼</span>
-            <button class="btn-browse" @click="showSafePin = true"
+            <button class="btn-browse sm" @click="showSafePin = true"
               data-tip="密碼是六位數字，加密後存在這台電腦上">{{ hasPin ? "變更" : "設定" }}</button>
           </div>
           <div class="row">
@@ -768,6 +768,12 @@ async function supportAuthor() {
   transition: background 0.12s, color 0.12s;
 }
 .btn-browse:hover { background: var(--surface3); color: var(--text); }
+.btn-browse.sm {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
+}
 
 /* ── 贊助愛心 ── */
 .btn-heart {
