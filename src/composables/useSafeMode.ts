@@ -29,10 +29,6 @@ export function useSafeMode() {
     }
   }
 
-  function lock() {
-    if (hasPin.value) locked.value = true;
-  }
-
   async function unlock(pin: string) {
     const ok = await invoke<boolean>("safe_mode_verify", { pin });
     if (ok) locked.value = false;
@@ -57,5 +53,5 @@ export function useSafeMode() {
     locked.value = false;
   }
 
-  return { hasPin, autoLock, locked, initSafeMode, lock, unlock, setPin, setAutoLock, resetSafeMode };
+  return { hasPin, autoLock, locked, initSafeMode, unlock, setPin, setAutoLock, resetSafeMode };
 }

@@ -61,16 +61,8 @@ function toggleCard(c: FoldCard) {
   resMenuOpen.value = false;
 }
 
-const { hasPin, autoLock, lock, setAutoLock } = useSafeMode();
+const { hasPin, autoLock, setAutoLock } = useSafeMode();
 const showSafePin = ref(false);
-
-function enterSafeMode() {
-  if (!hasPin.value) {
-    toast("請先設定安全模式密碼");
-    return;
-  }
-  lock();
-}
 
 async function toggleAutoLock() {
   try {
@@ -417,11 +409,6 @@ async function supportAuthor() {
         </div>
         <template v-if="openCard === 'safe'">
           <div class="row-sep"></div>
-          <div class="row">
-            <span class="row-title">開啟安全模式</span>
-            <button class="btn-browse sm" @click="enterSafeMode"
-              data-tip="立刻鎖住登入器，輸入安全模式密碼才能繼續使用。已登入的帳號不會被登出">開啟</button>
-          </div>
           <div class="row">
             <span class="row-title">設定安全模式密碼</span>
             <button class="btn-browse sm" @click="showSafePin = true"
