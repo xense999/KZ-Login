@@ -5,8 +5,9 @@
 //! the file never shows the digits. Only this module reads or writes it, and the
 //! password never leaves it: the frontend hands one in and gets back yes or no.
 //!
-//! Whether the window is locked right now is the frontend's business — this
-//! module only knows what the password is.
+//! Whether a running window is locked is the frontend's business. What this
+//! module adds is memory across restarts: a lock put on by hand is written down,
+//! so closing the app and opening it again does not walk around it.
 
 use crate::dpapi;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,9 @@ struct Saved {
     pin: Option<String>,
     #[serde(default)]
     auto_lock: bool,
+    /// Locked by hand and not unlocked since.
+    #[serde(default)]
+    locked: bool,
 }
 
 /// What the settings page and the startup check need to know. Never the digits.
@@ -28,11 +32,18 @@ struct Saved {
 pub struct Status {
     pub has_pin: bool,
     pub auto_lock: bool,
+    /// Whether a window opening now should start locked.
+    pub lock_on_start: bool,
 }
 
 pub fn status<R: Runtime>(app: &AppHandle<R>) -> Result<Status, String> {
     let saved = load(app)?;
-    Ok(Status { has_pin: saved.pin.is_some(), auto_lock: saved.pin.is_some() && saved.auto_lock })
+    let has_pin = saved.pin.is_some();
+    Ok(Status {
+        has_pin,
+        auto_lock: has_pin && saved.auto_lock,
+        lock_on_start: has_pin && (saved.auto_lock || saved.locked),
+    })
 }
 
 /// Set the password, or change it — changing needs the one already set.
@@ -50,9 +61,28 @@ pub fn set_pin<R: Runtime>(app: &AppHandle<R>, pin: &str, current: Option<&str>)
     store(app, &saved)
 }
 
-/// Whether `pin` is the password. With none set, nothing is.
+/// Note that the window was locked by hand, so the next start is locked too.
+pub fn lock<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let mut saved = load(app)?;
+    if saved.pin.is_none() {
+        return Err("請先設定安全模式密碼".into());
+    }
+    saved.locked = true;
+    store(app, &saved)
+}
+
+/// Whether `pin` is the password. With none set, nothing is. The right one also
+/// lifts a lock put on by hand.
 pub fn verify<R: Runtime>(app: &AppHandle<R>, pin: &str) -> Result<bool, String> {
-    Ok(load(app)?.pin.as_deref() == Some(pin))
+    let mut saved = load(app)?;
+    if saved.pin.as_deref() != Some(pin) {
+        return Ok(false);
+    }
+    if saved.locked {
+        saved.locked = false;
+        store(app, &saved)?;
+    }
+    Ok(true)
 }
 
 pub fn set_auto_lock<R: Runtime>(app: &AppHandle<R>, on: bool) -> Result<(), String> {
@@ -85,10 +115,15 @@ fn file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
 
 /// A missing file is "no password". So is one we cannot decrypt (copied from
 /// another Windows account, corrupted): refusing to start over it would lock
-/// the owner out for good.
+/// the owner out for good. A file that is there but cannot be read just now is
+/// neither — calling that "no password" would let the next save replace it.
 fn load<R: Runtime>(app: &AppHandle<R>) -> Result<Saved, String> {
     let path = file_path(app)?;
-    let Ok(cipher) = std::fs::read(&path) else { return Ok(Saved::default()) };
+    let cipher = match std::fs::read(&path) {
+        Ok(cipher) => cipher,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Saved::default()),
+        Err(e) => return Err(format!("讀取安全模式設定失敗：{e}")),
+    };
     Ok(dpapi::unprotect(&cipher)
         .ok()
         .and_then(|plain| serde_json::from_slice(&plain).ok())
@@ -102,7 +137,12 @@ fn store<R: Runtime>(app: &AppHandle<R>, saved: &Saved) -> Result<(), String> {
     }
     let plain = serde_json::to_vec(saved).map_err(|e| e.to_string())?;
     let cipher = dpapi::protect(&plain)?;
-    std::fs::write(&path, cipher).map_err(|e| format!("儲存安全模式密碼失敗：{e}"))
+    // Written beside it and swapped in: another instance reading at this moment
+    // sees the old file or the new one, never half of one.
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, cipher)
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .map_err(|e| format!("儲存安全模式密碼失敗：{e}"))
 }
 
 #[cfg(test)]
@@ -122,7 +162,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_stored_blob_hides_the_digits() {
-        let saved = Saved { pin: Some("482915".into()), auto_lock: true };
+        let saved = Saved { pin: Some("482915".into()), auto_lock: true, locked: false };
         let cipher = dpapi::protect(&serde_json::to_vec(&saved).unwrap()).unwrap();
         assert!(!cipher.windows(6).any(|w| w == b"482915"));
         let back: Saved = serde_json::from_slice(&dpapi::unprotect(&cipher).unwrap()).unwrap();

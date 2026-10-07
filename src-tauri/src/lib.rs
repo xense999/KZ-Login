@@ -1258,6 +1258,11 @@ fn safe_mode_set_pin(app: tauri::AppHandle, pin: String, current: Option<String>
 }
 
 #[tauri::command]
+fn safe_mode_lock(app: tauri::AppHandle) -> Result<(), String> {
+    safe_mode::lock(&app)
+}
+
+#[tauri::command]
 fn safe_mode_verify(app: tauri::AppHandle, pin: String) -> Result<bool, String> {
     safe_mode::verify(&app, &pin)
 }
@@ -1268,13 +1273,14 @@ fn safe_mode_set_auto_lock(app: tauri::AppHandle, on: bool) -> Result<(), String
 }
 
 /// The way out for a forgotten password: it goes, and so does everything it was
-/// guarding — saved logins, the device Gamania remembers, every live session and
-/// the browser windows riding on them. The password goes last, so a failure
-/// anywhere leaves the lock in place rather than opening it onto what is left.
+/// guarding — the device Gamania remembers, saved logins, every live session and
+/// the browser windows riding on them. The step that can fail for outside
+/// reasons (a folder still in use) goes first, so failing there changes nothing;
+/// the password goes last, so the lock never opens onto what is left.
 #[tauri::command]
 async fn safe_mode_reset(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    credentials::clear(&app)?;
     gamapass::forget_device(&app).await?;
+    credentials::clear(&app)?;
     browser::close_all(&app);
     state.session_stores.lock().await.clear();
     safe_mode::clear(&app)
@@ -1505,7 +1511,7 @@ pub fn run() {
             open_account_browser, browser_navigate, browser_tab,
             check_app_update, update_app, update_app_inplace,
             set_minimize_to_tray, minimize_main,
-            safe_mode_status, safe_mode_set_pin, safe_mode_verify, safe_mode_set_auto_lock, safe_mode_reset
+            safe_mode_status, safe_mode_set_pin, safe_mode_lock, safe_mode_verify, safe_mode_set_auto_lock, safe_mode_reset
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

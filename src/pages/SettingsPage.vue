@@ -64,6 +64,14 @@ function toggleCard(c: FoldCard) {
 const { hasPin, autoLock, lock, setAutoLock } = useSafeMode();
 const showSafePin = ref(false);
 
+async function enterSafeMode() {
+  try {
+    await lock();
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  }
+}
+
 async function toggleAutoLock() {
   try {
     await setAutoLock(!autoLock.value);
@@ -412,7 +420,7 @@ async function supportAuthor() {
           <div class="row">
             <span class="row-title">設定安全模式</span>
             <div class="row-btns">
-              <button class="btn-browse sm icon" :disabled="!hasPin" @click="lock"
+              <button class="btn-browse sm icon" :disabled="!hasPin" @click="enterSafeMode"
                 :data-tip="hasPin ? '立刻進入安全模式，輸入密碼才能繼續使用。已登入的帳號不會被登出' : '請先設定安全模式密碼'">
                 <svg viewBox="0 0 24 24" fill="none" width="14" height="14" aria-hidden="true">
                   <rect x="5" y="10.5" width="14" height="9.5" rx="2.5" stroke="currentColor" stroke-width="1.8"/>

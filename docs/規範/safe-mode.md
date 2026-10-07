@@ -5,14 +5,15 @@
 ## 公開介面
 
 ```rust
-pub fn status(app) -> Result<Status, String>          // { has_pin, auto_lock }
+pub fn status(app) -> Result<Status, String>          // { has_pin, auto_lock, lock_on_start }
 pub fn set_pin(app, pin, current: Option<&str>) -> Result<(), String>
+pub fn lock(app) -> Result<(), String>
 pub fn verify(app, pin) -> Result<bool, String>
 pub fn set_auto_lock(app, on) -> Result<(), String>
 pub fn clear(app) -> Result<(), String>
 ```
 
-對應的指令：`safe_mode_status`、`safe_mode_set_pin(pin, current)`、`safe_mode_verify(pin)`、
+對應的指令：`safe_mode_status`、`safe_mode_set_pin(pin, current)`、`safe_mode_lock()`、`safe_mode_verify(pin)`、
 `safe_mode_set_auto_lock(on)`、`safe_mode_reset()`。
 
 前端只透過 `src/composables/useSafeMode.ts` 呼叫這些指令；鎖定畫面是
@@ -23,7 +24,9 @@ pub fn clear(app) -> Result<(), String>
 
 - **密碼與「開啟時自動進入」**只存在 `safe_mode.dat`（`app_local_data_dir`），整份是一個 DPAPI blob
   （見總表 `dpapi` 條）。只有 `safe_mode.rs` 讀寫這個檔。
-- **現在鎖著沒有**只存在前端 `useSafeMode` 的 `locked`。後端不記鎖定狀態。
+- **這個視窗現在鎖著沒有**只存在前端 `useSafeMode` 的 `locked`。
+- **手動鎖了還沒解**記在同一個檔裡（`locked`）：`lock` 寫下、`verify` 對了才清掉。開場要不要鎖
+  ＝`status` 的 `lock_on_start`（開了自動進入，或手動鎖了還沒解），所以關掉重開、再開一個實例都繞不過去。
 - **密碼格式**（六位 ASCII 數字）由 `safe_mode.rs` 的 `valid_pin` 判定；前端的 `PIN_LENGTH` 只管輸入框長度。
 
 ## 不變量
@@ -32,9 +35,12 @@ pub fn clear(app) -> Result<(), String>
 - 已經有密碼時，變更密碼必須帶對目前的密碼。
 - 沒有密碼就不能開「開啟時自動進入」，`status` 在沒有密碼時一律回報 `auto_lock: false`。
 - 檔案不存在或解不開（別的 Windows 帳號複製來的、損毀）都當成「沒有密碼」——擋在外面會讓擁有者永遠進不來。
-- `safe_mode_reset`（忘記密碼）依序清掉：記住的帳密 → GamaPass 那邊對這台裝置的記憶
-  （`gamapass::forget_device`，不清的話重設後仍可免密碼登入）→ 帳號瀏覽器視窗 → 所有登入狀態
-  → 安全模式密碼。密碼最後清，中途任何一步失敗就不解鎖。
+  其他讀檔錯誤（暫時讀不到）回報錯誤，不當成沒有密碼。存檔是寫到旁邊再換上去，別的實例不會讀到寫一半的。
+- `safe_mode_reset`（忘記密碼）依序清掉：GamaPass 那邊對這台裝置的記憶
+  （`gamapass::forget_device`，不清的話重設後仍可免密碼登入；會因資料夾被佔用而失敗，所以排第一，
+  失敗時什麼都還沒動）→ 記住的帳密 → 帳號瀏覽器視窗 → 所有登入狀態 → 安全模式密碼。
+  密碼最後清，中途任何一步失敗就不解鎖。
+- 重設只清得到執行它的那個實例：同時開著的其他實例，畫面上的帳號與登入狀態不受影響（已知、未處理）。
 - 前端在解鎖**之前**清掉畫面上的帳號與各頁記住的帳號資訊，並由 `App.vue` 看 `wasReset` 把頁面帶回主頁
   ——鎖定畫面一解鎖就被卸載，它自己發的事件送不出去。
 - 鎖定期間已登入的帳號不登出，背景保活照常跑；底下的頁面設為 `inert`，鍵盤走不進去。

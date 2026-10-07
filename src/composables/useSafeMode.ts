@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 // 現在鎖著沒有＝這裡的 locked；null 是開場還沒問到後端，那段時間一律當成鎖著。
 export const PIN_LENGTH = 6;
 
-type Status = { has_pin: boolean; auto_lock: boolean };
+type Status = { has_pin: boolean; auto_lock: boolean; lock_on_start: boolean };
 
 const hasPin = ref(false);
 const autoLock = ref(false);
@@ -18,21 +18,23 @@ async function refresh() {
   const s = await invoke<Status>("safe_mode_status");
   hasPin.value = s.has_pin;
   autoLock.value = s.auto_lock;
+  return s;
 }
 
 export function useSafeMode() {
   // 開場呼叫一次。問不到後端就不鎖：鎖了也沒有密碼可以對，等於把人關在外面。
   async function initSafeMode() {
     try {
-      await refresh();
-      locked.value = hasPin.value && autoLock.value;
+      locked.value = (await refresh()).lock_on_start;
     } catch {
       locked.value = false;
     }
   }
 
-  function lock() {
-    if (hasPin.value) locked.value = true;
+  // 先讓後端記下來再鎖：記不下來的話，關掉重開就繞過去了，不如不鎖並把錯誤說出來
+  async function lock() {
+    await invoke("safe_mode_lock");
+    locked.value = true;
   }
 
   async function unlock(pin: string) {
