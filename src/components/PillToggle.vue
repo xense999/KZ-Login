@@ -39,8 +39,8 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   width: 124px;
   height: 36px;
   /* 外框的做法跟解析度的下拉選單一模一樣（1px 透明邊＋8px 圓角），內框的弧度才會相同。
-     滑塊四周留 3px（1px 邊＋2px 內距）：只留 2px 時貼著框，沒有喘息的空間 */
-  padding: 2px;
+     滑塊四周留 4px（1px 邊＋3px 內距）：2px、3px 都試過，使用者覺得貼著框太擠 */
+  padding: 3px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: var(--trough);
@@ -48,10 +48,10 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
 }
 .knob {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / var(--n));
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--n));
   border-radius: 6px;
   background: var(--seg-on);
   box-shadow: var(--switch-knob-shadow);
