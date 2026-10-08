@@ -293,7 +293,7 @@ async function supportAuthor() {
 
       <!-- 設一次就不太會再動的幾張：平常只露標題，點標題列才展開 -->
       <!-- 遊戲解析度的下拉清單要浮出卡片外，這張不能裁切 -->
-      <div class="card lg unclipped dense" :class="{ unfolded: openCard === 'system' }">
+      <div class="card lg unclipped" :class="{ unfolded: openCard === 'system' }">
         <div class="row foldhead" @click="toggleCard('system')">
           <span class="row-title">系統設定</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
@@ -400,7 +400,7 @@ async function supportAuthor() {
         </template>
       </div>
 
-      <div class="card lg dense" :class="{ unfolded: openCard === 'safe' }">
+      <div class="card lg" :class="{ unfolded: openCard === 'safe' }">
         <div class="row foldhead" @click="toggleCard('safe')">
           <span class="row-title">安全模式</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
@@ -584,12 +584,6 @@ async function supportAuthor() {
 .lg .row {
   min-height: 56px;
   padding: 10px 16px;
-}
-/* 展開後的內容列收緊一點；標題列維持跟其他卡片一樣高 */
-.lg.dense .row:not(.foldhead) {
-  min-height: 46px;
-  padding-top: 5px;
-  padding-bottom: 5px;
 }
 .lg .seg button {
   height: 30px;
