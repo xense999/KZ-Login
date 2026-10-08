@@ -655,7 +655,7 @@ function cleanError(msg: string): string {
       v-for="(acc, accIdx) in store.accounts" :key="acc.id"
       class="card"
       :data-acc-idx="accIdx"
-      @contextmenu.stop
+      @contextmenu.stop.prevent
       :class="{
         'acc-drag-over': draggingAcc !== null && dragTargetAcc === accIdx && draggingAcc !== accIdx,
         'acc-is-dragging': draggingAcc === accIdx
