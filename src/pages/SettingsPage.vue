@@ -602,10 +602,8 @@ async function supportAuthor() {
   padding: 2px;
   border: none;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
-    inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--trough);
+  box-shadow: var(--trough-ring);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -656,7 +654,9 @@ async function supportAuthor() {
   min-width: 124px;
   height: 30px;
   padding: 0 10px 0 12px;
-  background: var(--surface2);
+  /* 同一道凹槽：跟上面的分段鈕、下面的開關擺在一起才是一家的 */
+  background: var(--trough);
+  box-shadow: var(--trough-ring);
   border: 1px solid transparent;
   border-radius: 8px;
   font-size: 13px;
@@ -945,11 +945,12 @@ async function supportAuthor() {
 .contact-sub.copied { color: var(--primary-color); }
 
 /* ── 分段控制器 ── */
-/* 深淺照久世管理器的分段鈕：底是一道凹槽，選中的那格是浮起來的亮塊（形狀維持原本的方角） */
+/* 跟膠囊開關同一套：底是同一道凹槽（底色與內框都一樣），選中的那格是浮起來的亮塊、
+   帶圓鈕的那組陰影。形狀維持原本的方角 */
 .seg {
   display: flex;
-  background: var(--seg-track);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--trough);
+  box-shadow: var(--trough-ring);
   border-radius: 8px;
   padding: 3px;
   gap: 1px;

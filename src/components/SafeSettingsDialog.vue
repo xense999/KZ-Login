@@ -238,10 +238,8 @@ async function toggleAutoLock() {
   padding: 2px;
   border: none;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
-    inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--trough);
+  box-shadow: var(--trough-ring);
   cursor: pointer;
   display: flex;
   align-items: center;
