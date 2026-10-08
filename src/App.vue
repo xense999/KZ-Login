@@ -409,7 +409,7 @@ function onAccountSaved() {
 .modal-card {
   width: 100%;
   max-width: 320px;
-  background: var(--surface);
+  background: var(--float);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 20px;

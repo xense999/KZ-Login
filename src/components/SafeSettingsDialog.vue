@@ -123,7 +123,7 @@ async function toggleAutoLock() {
   max-height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--float);
   border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: var(--ctx-shadow);
