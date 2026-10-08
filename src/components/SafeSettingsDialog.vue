@@ -46,7 +46,7 @@ async function toggleAutoLock() {
         </div>
         <div class="body">
           <section class="ccard">
-            <div class="chead">密碼</div>
+            <div class="chead">{{ hasPin ? "安全模式" : "密碼" }}</div>
             <div v-if="hasPin" class="setrow">
               <span class="setkey">進入安全模式</span>
               <button class="setbtn icon" @click="enterSafeMode"
