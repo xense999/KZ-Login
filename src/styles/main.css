@@ -9,11 +9,11 @@
   /* 面的梯度：六階，s-1 最深、s-6 最亮，全部掛在同一個藍灰色相上。下面的語意 token
      一律引用它，不另外寫色碼——照久世管理器的做法，階數夠多每一階才不必拉得很開。
      標題列 s-1 → 底部按鈕列 s-2 → 畫布 s-3 → 凹槽 s-4 → 卡片 s-5 → 浮層 s-6 */
-  --s-1: #e4e8f0;
-  --s-2: #ebeef4;
-  --s-3: #f2f4f9;
-  --s-4: #f6f7fb;
-  --s-5: #fbfcfd;
+  --s-1: #dfe4ed;
+  --s-2: #e7ebf2;
+  --s-3: #eef1f6;
+  --s-4: #f2f4f9;
+  --s-5: #fcfdfe;
   --s-6: #ffffff;
   --bg:       var(--s-3);
   --bar:      var(--s-2);
@@ -38,7 +38,7 @@
   --card-filter:  none;
   --card-border:  none;
   --scrollbar:    rgba(20, 40, 80, 0.16);
-  --titlebar-bg:  rgb(228 232 240 / 0.88);
+  --titlebar-bg:  rgb(223 228 237 / 0.88);
   --titlebar-blur: blur(20px) saturate(160%);
   --primary-color:    #334155;
   --primary-bg:       rgba(51, 65, 85, 0.10);
@@ -68,7 +68,7 @@
   --s-1: #0c111a;
   --s-2: #10151f;
   --s-3: #131924;
-  --s-4: #161d29;
+  --s-4: #141b26;
   --s-5: #1a222f;
   --s-6: #202a39;
   --bg:       var(--s-3);
