@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "../composables/useToast";
-import { useTheme } from "../composables/useTheme";
+import { useTheme, type Theme } from "../composables/useTheme";
 import { useMainAction, type MainAction } from "../composables/useMainAction";
 import { useDiscordShare } from "../composables/useDiscord";
 import { useMinimizeMode } from "../composables/useMinimizeMode";
@@ -14,6 +14,7 @@ import { useGameResolution, GAME_RESOLUTIONS } from "../composables/useGameResol
 import { useSafeMode } from "../composables/useSafeMode";
 import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
 import SafeSettingsDialog from "../components/SafeSettingsDialog.vue";
+import PillToggle from "../components/PillToggle.vue";
 
 const AUTHOR_DISCORD = "xense999";
 const GITHUB_URL = "https://github.com/xense999";
@@ -22,6 +23,10 @@ const KZ_MANA_URL = "https://github.com/xense999/kz-mana";
 const emit = defineEmits<{ back: [] }>();
 
 const { theme, setTheme } = useTheme();
+const THEME_OPTIONS: { value: Theme; label: string }[] = [
+  { value: "neutral", label: "亮色" },
+  { value: "dark", label: "暗色" },
+];
 const { mainAction, setMainAction } = useMainAction();
 
 // 主畫面在另一頁，切換的結果當下看不到，所以就地說一聲那顆按鈕變成什麼了。
@@ -29,6 +34,11 @@ const MAIN_ACTION_LABEL: Record<MainAction, string> = {
   proxy: "代理登入",
   game: "啟動遊戲",
 };
+
+const MAIN_ACTION_OPTIONS: { value: MainAction; label: string; tip: string }[] = [
+  { value: "proxy", label: "登入", tip: "主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲" },
+  { value: "game", label: "啟動", tip: "主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉" },
+];
 
 function chooseMainAction(a: MainAction) {
   if (mainAction.value === a) return;
@@ -284,10 +294,7 @@ async function supportAuthor() {
       <div class="card lg">
         <div class="row">
           <span class="row-title tappable" @click="onThemeTitleTap">主題</span>
-          <div class="seg">
-            <button :class="{ active: theme === 'neutral' }" @click="setTheme('neutral')">亮色</button>
-            <button :class="{ active: theme === 'dark' }" @click="setTheme('dark')">暗色</button>
-          </div>
+          <PillToggle :model-value="theme" :options="THEME_OPTIONS" @update:model-value="setTheme" />
         </div>
       </div>
 
@@ -304,12 +311,7 @@ async function supportAuthor() {
           <div class="row-sep"></div>
           <div class="row">
             <span class="row-title">按鈕設定</span>
-            <div class="seg">
-              <button :class="{ active: mainAction === 'proxy' }" @click="chooseMainAction('proxy')"
-                data-tip="主畫面按鈕＝代理登入：讀取剪貼簿裡對方分享的登入連結並啟動遊戲">登入</button>
-              <button :class="{ active: mainAction === 'game' }" @click="chooseMainAction('game')"
-                data-tip="主畫面按鈕＝啟動遊戲：直接開啟遊戲；遊戲已在執行時改為詢問是否強制關閉">啟動</button>
-            </div>
+            <PillToggle :model-value="mainAction" :options="MAIN_ACTION_OPTIONS" @update:model-value="chooseMainAction" />
           </div>
           <div class="row">
             <span class="row-title"
@@ -588,10 +590,6 @@ async function supportAuthor() {
 /* 展開後的內容列比標題列矮一點；標題列維持 56 */
 .lg .foldhead ~ .row {
   min-height: 52px;
-}
-.lg .seg button {
-  height: 30px;
-  padding: 0 16px;
 }
 
 /* ── 膠囊開關 ── */
@@ -943,35 +941,6 @@ async function supportAuthor() {
   white-space: nowrap;
 }
 .contact-sub.copied { color: var(--primary-color); }
-
-/* ── 分段控制器 ── */
-/* 跟膠囊開關同一套：底是同一道凹槽（底色與內框都一樣），選中的那格是浮起來的亮塊、
-   帶圓鈕的那組陰影。形狀維持原本的方角 */
-.seg {
-  display: flex;
-  background: var(--trough);
-  box-shadow: var(--trough-ring);
-  border-radius: 8px;
-  padding: 3px;
-  gap: 1px;
-}
-.seg button {
-  padding: 6px 18px;
-  white-space: nowrap;
-  border-radius: 6px;
-  border: none;
-  background: none;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text2);
-  transition: background 0.12s, color 0.12s;
-}
-.seg button.active {
-  background: var(--seg-on);
-  box-shadow: var(--switch-knob-shadow);
-  color: var(--text);
-}
-.seg button:not(.active):hover { color: var(--text); }
 
 /* ── 底部按鈕 ── */
 .bottom-bar {
