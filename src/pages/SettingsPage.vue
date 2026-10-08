@@ -585,6 +585,10 @@ async function supportAuthor() {
   min-height: 56px;
   padding: 10px 16px;
 }
+/* 展開後的內容列比標題列矮一點；標題列維持 56 */
+.lg .foldhead ~ .row {
+  min-height: 52px;
+}
 .lg .seg button {
   height: 30px;
   padding: 0 16px;
