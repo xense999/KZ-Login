@@ -81,7 +81,8 @@
   --surface2: var(--s-4);
   /* 選中的那一格在暗色是往亮的方向跳，比浮層還亮，不在梯度裡 */
   --surface3: #28313e;
-  --seg-track: var(--s-2);
+  /* s-2 太深、s-4 又分不出來，取 s-2 與 s-3 中間 */
+  --seg-track: #121722;
   --seg-on:    var(--surface3);
   --border:   rgba(170, 195, 235, 0.18);
   --border2:  rgba(170, 195, 235, 0.11);
