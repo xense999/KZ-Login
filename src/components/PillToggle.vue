@@ -35,6 +35,8 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
+  /* 跟下拉選單同寬，同一張卡片裡上下對齊 */
+  width: 124px;
   height: 34px;
   /* 外框的做法跟解析度的下拉選單一模一樣（1px 透明邊＋8px 圓角），內框的弧度才會相同 */
   padding: 1px;
@@ -62,7 +64,7 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
 button {
   position: relative;
   height: 100%;
-  padding: 0 18px;
+  padding: 0;
   /* 中文字型的上下留白不對稱，行高不設 1 的話字會被推得偏一點 */
   line-height: 1;
   border: none;
