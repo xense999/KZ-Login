@@ -1,7 +1,7 @@
 <script setup lang="ts" generic="T extends string | number | boolean">
 import { computed } from "vue";
 
-// 膠囊切換，照久世管理器的主題切換：所有選項都顯示，選中的那個被一塊浮起來的膠囊
+// 滑動切換，照久世管理器的主題切換（外形是圓角矩形，不是膠囊——使用者要的）：所有選項都顯示，選中的那個被一塊浮起來的膠囊
 // 托著，切換時滑過去、帶一點回彈。底槽跟膠囊開關、下拉選單共用同一道凹槽。
 // 每個選項一樣寬（滑塊靠這個算位置），以最長的那個為準。
 const props = defineProps<{
@@ -37,7 +37,7 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   grid-auto-columns: 1fr;
   height: 34px;
   padding: 2px;
-  border-radius: 999px;
+  border-radius: 8px;
   background: var(--trough);
   box-shadow: var(--trough-ring);
 }
@@ -47,7 +47,7 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   bottom: 2px;
   left: 2px;
   width: calc((100% - 4px) / var(--n));
-  border-radius: 999px;
+  border-radius: 6px;
   background: var(--seg-on);
   box-shadow: var(--switch-knob-shadow);
   transform: translateX(calc(var(--i) * 100%));
@@ -64,7 +64,7 @@ button {
   /* 中文字型的上下留白不對稱，行高不設 1 的話字會被推得偏一點 */
   line-height: 1;
   border: none;
-  border-radius: 999px;
+  border-radius: 6px;
   background: transparent;
   font-size: 13px;
   /* 沒選中跟選中同一個字色、只差粗細，同管理器 */
