@@ -400,7 +400,7 @@ async function supportAuthor() {
         </template>
       </div>
 
-      <div class="card lg" :class="{ unfolded: openCard === 'safe' }">
+      <div class="card lg fill" :class="{ unfolded: openCard === 'safe' }">
         <div class="row foldhead" @click="toggleCard('safe')">
           <span class="row-title">安全模式</span>
           <svg class="foldchev" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
@@ -584,6 +584,10 @@ async function supportAuthor() {
 .lg .row {
   min-height: 56px;
   padding: 10px 16px;
+}
+/* 最下面那張展開後往下撐滿：底下留的空（.scroll-area 的下內距）跟卡片之間的間隔一樣是 12 */
+.card.fill.unfolded {
+  flex: 1 0 auto;
 }
 /* 展開後的內容列比標題列矮一點；標題列維持 56 */
 .lg .foldhead ~ .row {
