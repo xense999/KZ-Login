@@ -36,17 +36,19 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
   height: 34px;
-  padding: 2px;
+  /* 外框的做法跟解析度的下拉選單一模一樣（1px 透明邊＋8px 圓角），內框的弧度才會相同 */
+  padding: 1px;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: var(--trough);
   box-shadow: var(--trough-ring);
 }
 .knob {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / var(--n));
+  top: 1px;
+  bottom: 1px;
+  left: 1px;
+  width: calc((100% - 2px) / var(--n));
   border-radius: 6px;
   background: var(--seg-on);
   box-shadow: var(--switch-knob-shadow);
