@@ -13,7 +13,7 @@ import { useMinimizeMode } from "../composables/useMinimizeMode";
 import { useGameResolution, GAME_RESOLUTIONS } from "../composables/useGameResolution";
 import { useSafeMode } from "../composables/useSafeMode";
 import HiddenKeyDialog from "../components/HiddenKeyDialog.vue";
-import SafePinDialog from "../components/SafePinDialog.vue";
+import SafeSettingsDialog from "../components/SafeSettingsDialog.vue";
 
 const AUTHOR_DISCORD = "xense999";
 const GITHUB_URL = "https://github.com/xense999";
@@ -61,20 +61,12 @@ function toggleCard(c: FoldCard) {
   resMenuOpen.value = false;
 }
 
-const { hasPin, autoLock, lock, setAutoLock } = useSafeMode();
-const showSafePin = ref(false);
+const { hasPin, lock } = useSafeMode();
+const showSafeSettings = ref(false);
 
 async function enterSafeMode() {
   try {
     await lock();
-  } catch (e) {
-    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
-  }
-}
-
-async function toggleAutoLock() {
-  try {
-    await setAutoLock(!autoLock.value);
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), { kind: "error" });
   }
@@ -418,39 +410,24 @@ async function supportAuthor() {
         <template v-if="openCard === 'safe'">
           <div class="row-sep"></div>
           <div class="row">
-            <span class="row-title">設定安全模式</span>
+            <span class="row-title">安全模式設定</span>
             <div class="row-btns">
-              <button class="btn-browse sm icon" :disabled="!hasPin" @click="enterSafeMode"
-                :data-tip="hasPin ? '立刻進入安全模式，輸入密碼才能繼續使用。已登入的帳號不會被登出' : '請先設定安全模式密碼'">
+              <button v-if="hasPin" class="btn-browse sm icon" @click="enterSafeMode"
+                data-tip="立刻進入安全模式，輸入密碼才能繼續使用。已登入的帳號不會被登出">
                 <svg viewBox="0 0 24 24" fill="none" width="14" height="14" aria-hidden="true">
                   <rect x="5" y="10.5" width="14" height="9.5" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
                   <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
               </button>
-              <button v-if="!hasPin" class="btn-browse sm" @click="showSafePin = true"
-                data-tip="密碼是六位數字，加密後存在這台電腦上">設定</button>
+              <button class="btn-browse sm" @click="showSafeSettings = true">設定</button>
             </div>
-          </div>
-          <div class="row">
-            <span class="row-title">開啟時自動進入安全模式</span>
-            <button
-              class="pill-switch"
-              role="switch"
-              :class="{ on: autoLock }"
-              :aria-checked="autoLock"
-              :disabled="!hasPin"
-              :data-tip="hasPin ? '每次開啟登入器都先鎖住，輸入密碼才能使用' : '請先設定安全模式密碼'"
-              @click="toggleAutoLock"
-            >
-              <span class="pill-knob"></span>
-            </button>
           </div>
         </template>
       </div>
     </div>
 
     <HiddenKeyDialog v-if="showHiddenKey" @close="showHiddenKey = false" />
-    <SafePinDialog v-if="showSafePin" @close="showSafePin = false" />
+    <SafeSettingsDialog v-if="showSafeSettings" @close="showSafeSettings = false" />
 
     <div class="bottom-bar">
       <button class="btn-save" :class="{ done: saved }" @click="save">

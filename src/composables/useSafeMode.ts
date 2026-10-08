@@ -11,6 +11,10 @@ type Status = { has_pin: boolean; auto_lock: boolean; lock_on_start: boolean };
 const hasPin = ref(false);
 const autoLock = ref(false);
 const locked = ref<boolean | null>(null);
+// 主頁右鍵選單要不要多一條「進入安全模式」。只是選單上露不露出來的偏好，不是密碼的
+// 一部分，所以留在前端；真的能不能鎖還是後端說了算（沒密碼就鎖不了）。
+const QUICK_LOCK_KEY = "kusei:safe_quick_lock";
+const quickLock = ref(localStorage.getItem(QUICK_LOCK_KEY) === "1");
 // 每重設一次加一：資料被清空了，殼層要把頁面帶回主頁
 const wasReset = ref(0);
 
@@ -53,6 +57,12 @@ export function useSafeMode() {
     autoLock.value = on;
   }
 
+  function setQuickLock(on: boolean) {
+    quickLock.value = on;
+    if (on) localStorage.setItem(QUICK_LOCK_KEY, "1");
+    else localStorage.removeItem(QUICK_LOCK_KEY);
+  }
+
   // 忘記密碼的出路：後端把密碼、記住的帳密、登入狀態全清掉。畫面上的帳號由呼叫端
   // 在 clearLocal 裡清——要趕在解鎖之前，解鎖那一刻底下的頁面就露出來了。
   async function resetSafeMode(clearLocal: () => void) {
@@ -61,8 +71,12 @@ export function useSafeMode() {
     wasReset.value += 1;
     hasPin.value = false;
     autoLock.value = false;
+    setQuickLock(false);
     locked.value = false;
   }
 
-  return { hasPin, autoLock, locked, wasReset, initSafeMode, lock, unlock, setPin, setAutoLock, resetSafeMode };
+  return {
+    hasPin, autoLock, quickLock, locked, wasReset,
+    initSafeMode, lock, unlock, setPin, setAutoLock, setQuickLock, resetSafeMode,
+  };
 }

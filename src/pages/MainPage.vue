@@ -8,6 +8,7 @@ import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useD
 import { useHidden } from "../composables/useHidden";
 import { useMainAction } from "../composables/useMainAction";
 import { useGameResolution } from "../composables/useGameResolution";
+import { useSafeMode } from "../composables/useSafeMode";
 import ExportProgress from "../components/ExportProgress.vue";
 
 const HUES = [210, 150, 270, 35, 0, 190];
@@ -22,12 +23,27 @@ defineEmits<{ addAccount: []; reauth: [string] }>();
 const store = useAccountsStore();
 const expanded = ref<Set<string>>(new Set());
 
-const contextMenu = ref<{ x: number; y: number; accountId: string } | null>(null);
+// accountId 是 null＝在帳號以外的地方按的右鍵，選單裡只有「進入安全模式」。
+const contextMenu = ref<{ x: number; y: number; accountId: string | null } | null>(null);
+
+const { hasPin, quickLock, lock } = useSafeMode();
+const canQuickLock = computed(() => quickLock.value && hasPin.value);
+
+// 選單貼著視窗下緣時往上收，不然最後一條會掉到視窗外。高度照 .ctx-menu 的樣式算。
+const MENU_BOTTOM = 623;
+const MENU_PAD = 10;
+const MENU_ITEM_H = 31;
+const MENU_SEP_H = 7;
+
 const menuStyle = computed(() => {
   if (!contextMenu.value) return {};
+  const onAccount = contextMenu.value.accountId !== null;
+  const items = (onAccount ? 2 : 0) + (canQuickLock.value ? 1 : 0);
+  const seps = (onAccount ? 1 : 0) + (onAccount && canQuickLock.value ? 1 : 0);
+  const height = MENU_PAD + items * MENU_ITEM_H + seps * MENU_SEP_H;
   return {
     left: `${Math.min(contextMenu.value.x, 252)}px`,
-    top: `${Math.min(contextMenu.value.y, 544)}px`,
+    top: `${Math.min(contextMenu.value.y, MENU_BOTTOM - height)}px`,
   };
 });
 
@@ -35,7 +51,21 @@ function openContextMenu(e: MouseEvent, accountId: string) {
   e.stopPropagation();
   contextMenu.value = { x: e.clientX, y: e.clientY, accountId };
 }
+// 空白處的右鍵：沒開快捷就沒有東西可以列，不開一個空的選單出來
+function openPageMenu(e: MouseEvent) {
+  if (!canQuickLock.value) return;
+  contextMenu.value = { x: e.clientX, y: e.clientY, accountId: null };
+}
 function closeContextMenu() { contextMenu.value = null; }
+
+async function enterSafeMode() {
+  closeContextMenu();
+  try {
+    await lock();
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  }
+}
 
 function deleteAccount(accountId: string) {
   store.removeAccount(accountId);
@@ -609,7 +639,7 @@ function cleanError(msg: string): string {
 
 <template>
   <div class="page-layout">
-  <div class="scroll">
+  <div class="scroll" @contextmenu.prevent="openPageMenu">
     <div v-if="store.accounts.length === 0" class="empty">
       <div class="empty-icon">
         <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="40" height="40">
@@ -810,14 +840,21 @@ function cleanError(msg: string): string {
     </div>
 
     <template v-if="contextMenu">
-      <div class="ctx-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu"></div>
-      <div class="ctx-menu" :style="menuStyle">
-        <button class="ctx-item" @click="startRenameAlias(contextMenu.accountId, store.accounts.find(a => a.id === contextMenu!.accountId)?.alias ?? '')">
-          重新命名
-        </button>
-        <div class="ctx-sep"></div>
-        <button class="ctx-item danger" @click="deleteAccount(contextMenu.accountId)">
-          刪除帳號
+      <!-- .stop：這兩塊都在 .scroll 裡面，冒上去會被當成又在空白處按了一次右鍵 -->
+      <div class="ctx-overlay" @click="closeContextMenu" @contextmenu.prevent.stop="closeContextMenu"></div>
+      <div class="ctx-menu" :style="menuStyle" @contextmenu.prevent.stop>
+        <template v-if="contextMenu.accountId !== null">
+          <button class="ctx-item" @click="startRenameAlias(contextMenu.accountId, store.accounts.find(a => a.id === contextMenu!.accountId)?.alias ?? '')">
+            重新命名
+          </button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item danger" @click="deleteAccount(contextMenu.accountId)">
+            帳號登出
+          </button>
+          <div v-if="canQuickLock" class="ctx-sep"></div>
+        </template>
+        <button v-if="canQuickLock" class="ctx-item" @click="enterSafeMode">
+          進入安全模式
         </button>
       </div>
     </template>

@@ -18,7 +18,8 @@ pub fn clear(app) -> Result<(), String>
 
 前端只透過 `src/composables/useSafeMode.ts` 呼叫這些指令；鎖定畫面是
 `src/components/LockScreen.vue`，設定密碼的視窗是 `src/components/SafePinDialog.vue`，
-兩者共用輸入框 `src/components/PinField.vue`。
+兩者共用輸入框 `src/components/PinField.vue`。設定頁的「安全模式」卡片只有一列入口（設好密碼後多一顆
+鎖頭），所有選項都在 `src/components/SafeSettingsDialog.vue` 這個設定視窗裡。
 
 ## 單一來源
 
@@ -27,6 +28,9 @@ pub fn clear(app) -> Result<(), String>
 - **這個視窗現在鎖著沒有**只存在前端 `useSafeMode` 的 `locked`。
 - **手動鎖了還沒解**記在同一個檔裡（`locked`）：`lock` 寫下、`verify` 對了才清掉。開場要不要鎖
   ＝`status` 的 `lock_on_start`（開了自動進入，或手動鎖了還沒解），所以關掉重開、再開一個實例都繞不過去。
+- **快捷開啟安全模式**（主頁右鍵選單要不要多一條「進入安全模式」）只存在前端 `useSafeMode` 的 `quickLock`
+  （localStorage `kusei:safe_quick_lock`）。它只決定選單露不露出來，不是鎖定條件；沒有密碼時一律不露，
+  重設時一起關掉。
 - **密碼格式**（六位 ASCII 數字）由 `safe_mode.rs` 的 `valid_pin` 判定；前端的 `PIN_LENGTH` 只管輸入框長度。
 
 ## 不變量
