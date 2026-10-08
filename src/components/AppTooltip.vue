@@ -87,7 +87,8 @@ onUnmounted(() => {
    圓角 14＝單行時剛好是膠囊，多行時是圓角方塊 */
 .tip {
   position: fixed;
-  z-index: 1100;
+  /* 要蓋過應用內的視窗（2000～2100），裡面的按鈕也有說明；鎖定畫面（3000）之下 */
+  z-index: 2500;
   transform: translateX(-50%);
   width: max-content;
   max-width: calc(100% - 16px);
