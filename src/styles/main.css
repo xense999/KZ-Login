@@ -84,7 +84,7 @@
   --surface2: var(--s-4);
   /* 選中的那一格在暗色是往亮的方向跳，比浮層還亮，不在梯度裡 */
   --surface3: #28313e;
-  --trough:      color-mix(in srgb, var(--text) 5%, transparent);
+  --trough:      color-mix(in srgb, var(--text) 3%, transparent);
   --trough-ring: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
     inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
   /* 暗色不用純白（太刺眼），用比凹槽亮一截的灰藍 */
