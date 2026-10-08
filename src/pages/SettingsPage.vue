@@ -755,7 +755,8 @@ async function supportAuthor() {
 .btn-browse:hover { background: var(--surface3); color: var(--text); }
 .btn-browse.sm {
   height: 28px;
-  padding: 0 12px;
+  /* 下面多 1px：中文字在行裡偏下，量過比框的正中間低 0.6px，墊一下往上推回去 */
+  padding: 0 12px 1px;
   border-radius: 7px;
   font-size: 12px;
 }
@@ -944,9 +945,11 @@ async function supportAuthor() {
 .contact-sub.copied { color: var(--primary-color); }
 
 /* ── 分段控制器 ── */
+/* 深淺照久世管理器的分段鈕：底是一道凹槽，選中的那格是浮起來的亮塊（形狀維持原本的方角） */
 .seg {
   display: flex;
-  background: var(--surface2);
+  background: var(--seg-track);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent);
   border-radius: 8px;
   padding: 3px;
   gap: 1px;
@@ -963,7 +966,8 @@ async function supportAuthor() {
   transition: background 0.12s, color 0.12s;
 }
 .seg button.active {
-  background: var(--surface3);
+  background: var(--seg-on);
+  box-shadow: var(--switch-knob-shadow);
   color: var(--text);
 }
 .seg button:not(.active):hover { color: var(--text); }

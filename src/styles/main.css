@@ -23,6 +23,9 @@
   --surface2: var(--s-4);
   /* 按下去／選中的那一格：比凹槽深，往梯度深的那頭拿 */
   --surface3: var(--s-2);
+  /* 分段鈕：底槽與選中的那格 */
+  --seg-track: color-mix(in srgb, var(--text) 8%, transparent);
+  --seg-on:    var(--s-6);
   --border:   rgba(20, 40, 80, 0.14);
   --border2:  rgba(20, 40, 80, 0.11);
   --text:     rgba(10, 20, 40, 0.90);
@@ -78,6 +81,8 @@
   --surface2: var(--s-4);
   /* 選中的那一格在暗色是往亮的方向跳，比浮層還亮，不在梯度裡 */
   --surface3: #28313e;
+  --seg-track: var(--s-2);
+  --seg-on:    var(--surface3);
   --border:   rgba(170, 195, 235, 0.18);
   --border2:  rgba(170, 195, 235, 0.11);
   --text:     rgba(232, 238, 250, 0.95);

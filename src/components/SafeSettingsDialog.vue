@@ -205,7 +205,8 @@ async function toggleAutoLock() {
 .setbtn {
   flex: none;
   height: 28px;
-  padding: 0 14px;
+  /* 下面多 1px：同設定頁的小按鈕，中文字量過偏下 0.6px */
+  padding: 0 14px 1px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -227,7 +228,7 @@ async function toggleAutoLock() {
   padding-top: 12px;
   border-top: 1px solid var(--border2);
 }
-.foot .setbtn { height: 32px; padding: 0 22px; font-size: 13px; }
+.foot .setbtn { height: 32px; padding: 0 22px 1px; font-size: 13px; }
 
 /* 開關跟設定頁同一顆（外觀與 34×19 的大小都照那邊） */
 .pill-switch {
