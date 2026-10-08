@@ -28,7 +28,7 @@ pub fn clear(app) -> Result<(), String>
 - **這個視窗現在鎖著沒有**只存在前端 `useSafeMode` 的 `locked`。
 - **手動鎖了還沒解**記在同一個檔裡（`locked`）：`lock` 寫下、`verify` 對了才清掉。開場要不要鎖
   ＝`status` 的 `lock_on_start`（開了自動進入，或手動鎖了還沒解），所以關掉重開、再開一個實例都繞不過去。
-- **快捷開啟安全模式**（主頁右鍵選單要不要多一條「進入安全模式」）只存在前端 `useSafeMode` 的 `quickLock`
+- **右鍵快捷安全模式**（主頁空白處按右鍵要不要出現「進入安全模式」；帳號卡片上的右鍵選單不放）只存在前端 `useSafeMode` 的 `quickLock`
   （localStorage `kusei:safe_quick_lock`）。它只決定選單露不露出來，不是鎖定條件；沒有密碼時一律不露，
   重設時一起關掉。
 - **密碼格式**（六位 ASCII 數字）由 `safe_mode.rs` 的 `valid_pin` 判定；前端的 `PIN_LENGTH` 只管輸入框長度。

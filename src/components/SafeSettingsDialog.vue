@@ -61,14 +61,14 @@ async function toggleAutoLock() {
               </button>
             </div>
             <div class="setrow">
-              <span class="setkey">快捷開啟安全模式</span>
+              <span class="setkey">右鍵快捷安全模式</span>
               <button
                 class="pill-switch"
                 role="switch"
                 :class="{ on: quickLock && hasPin }"
                 :aria-checked="quickLock && hasPin"
                 :disabled="!hasPin"
-                :data-tip="hasPin ? '開啟後，在主頁面按右鍵會多一條「進入安全模式」' : NEED_PIN"
+                :data-tip="hasPin ? '開啟後，在主頁面的空白處按右鍵會出現「進入安全模式」' : NEED_PIN"
                 @click="setQuickLock(!quickLock)"
               >
                 <span class="pill-knob"></span>
