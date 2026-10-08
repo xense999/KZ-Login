@@ -54,7 +54,7 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   width: calc((100% - 6px) / var(--n));
   border-radius: 6px;
   background: var(--seg-on);
-  box-shadow: var(--switch-knob-shadow);
+  box-shadow: var(--seg-shadow);
   transform: translateX(calc(var(--i) * 100%));
   transition: transform 0.38s cubic-bezier(0.34, 1.4, 0.64, 1), scale 0.18s ease;
 }

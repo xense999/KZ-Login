@@ -29,6 +29,8 @@
     inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
   /* 分段鈕選中的那格：跟開關的圓鈕一樣是浮在凹槽上的亮塊 */
   --seg-on:    var(--s-6);
+  /* 滑塊的陰影收得很緊：開關圓鈕那組會暈開 8px，蓋滿滑塊四周的留白，看起來像貼著框 */
+  --seg-shadow: 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.06), inset 0 1px 0 rgb(255 255 255 / 0.55);
   --border:   rgba(20, 40, 80, 0.14);
   --border2:  rgba(20, 40, 80, 0.11);
   --text:     rgba(10, 20, 40, 0.90);
@@ -89,6 +91,7 @@
     inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
   /* 暗色不用純白（太刺眼），用比凹槽亮一截的灰藍 */
   --seg-on:    color-mix(in srgb, var(--text) 22%, var(--s-5));
+  --seg-shadow: 0 1px 2px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.14), inset 0 0 0 1px rgb(255 255 255 / 0.06);
   --border:   rgba(170, 195, 235, 0.18);
   --border2:  rgba(170, 195, 235, 0.11);
   --text:     rgba(232, 238, 250, 0.95);
