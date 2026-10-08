@@ -9,12 +9,12 @@
   /* 面的梯度：六階，s-1 最深、s-6 最亮，全部掛在同一個暖色相上。下面的語意 token
      一律引用它，不另外寫色碼——照久世管理器的做法，階數夠多每一階才不必拉得很開。
      標題列 s-1 → 底部按鈕列 s-2 → 畫布 s-3 → 凹槽 s-4 → 卡片 s-5 → 浮層 s-6 */
-  --s-1: hsl(36 36% 85%);
-  --s-2: hsl(37 38% 88.5%);
-  --s-3: hsl(38 42% 91.5%);
-  --s-4: hsl(38 44% 94%);
-  --s-5: hsl(39 52% 96.5%);
-  --s-6: hsl(40 60% 98.5%);
+  --s-1: hsl(36 19% 85%);
+  --s-2: hsl(37 20% 88.5%);
+  --s-3: hsl(38 22% 91.5%);
+  --s-4: hsl(38 23% 94%);
+  --s-5: hsl(39 27% 96.5%);
+  --s-6: hsl(40 32% 98.5%);
   --bg:       var(--s-3);
   --bar:      var(--s-2);
   /* 程式內的小視窗（設定、確認框）：比卡片再亮一階，從遮罩上浮出來 */
@@ -32,13 +32,13 @@
   --hover-tint:   rgba(96, 62, 28, 0.05);
   --input-bg:     rgba(96, 62, 28, 0.05);
   --input-border: rgba(96, 62, 28, 0.14);
-  --ctx-menu-bg:  hsl(40 60% 98.5% / 0.96);
+  --ctx-menu-bg:  hsl(40 32% 98.5% / 0.96);
   --ctx-shadow:   0 8px 24px rgba(72, 44, 16, 0.16), 0 2px 6px rgba(72, 44, 16, 0.08);
   --card-shadow:  0 1px 3px rgba(72, 44, 16, 0.09), 0 0 0 1px rgba(96, 62, 28, 0.07);
   --card-filter:  none;
   --card-border:  none;
   --scrollbar:    rgba(96, 62, 28, 0.18);
-  --titlebar-bg:  hsl(36 36% 85% / 0.88);
+  --titlebar-bg:  hsl(36 19% 85% / 0.88);
   --titlebar-blur: blur(20px) saturate(160%);
   /* 主色＝圖標外框那個棕 */
   --primary-color:    #8a5a36;
@@ -65,11 +65,19 @@
 
 /* ── 暗色主題 ── slate 深藍 */
 :root[data-theme="dark"] {
-  --bg:       #131924;
-  --bar:      #131924;
-  --float:    #1a222f;
-  --surface:  #1a222f;
-  --surface2: #131924;
+  /* 同一套六階（s-1 最深、s-6 最亮），用途跟亮色一一對應 */
+  --s-1: #0c111a;
+  --s-2: #10151f;
+  --s-3: #131924;
+  --s-4: #161d29;
+  --s-5: #1a222f;
+  --s-6: #202a39;
+  --bg:       var(--s-3);
+  --bar:      var(--s-2);
+  --float:    var(--s-6);
+  --surface:  var(--s-5);
+  --surface2: var(--s-4);
+  /* 選中的那一格在暗色是往亮的方向跳，比浮層還亮，不在梯度裡 */
   --surface3: #28313e;
   --border:   rgba(170, 195, 235, 0.18);
   --border2:  rgba(170, 195, 235, 0.11);
@@ -80,13 +88,13 @@
   --hover-tint:   rgba(160, 190, 230, 0.06);
   --input-bg:     rgba(160, 190, 230, 0.07);
   --input-border: rgba(170, 195, 235, 0.18);
-  --ctx-menu-bg:  #1a222f;
+  --ctx-menu-bg:  var(--s-6);
   --ctx-shadow:   0 8px 32px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.4);
   --card-shadow:  0 2px 10px rgba(0,0,0,0.55), 0 0 0 1px rgba(170,195,235,0.08);
   --card-filter:  none;
   --card-border:  none;
   --scrollbar:    rgba(170, 195, 235, 0.18);
-  --titlebar-bg:  rgba(11, 18, 31, 0.88);
+  --titlebar-bg:  rgb(12 17 26 / 0.88);
   --titlebar-blur: blur(20px) saturate(160%);
   --primary-color:    #3dd6c3;
   --primary-bg:       rgba(61, 214, 195, 0.12);
