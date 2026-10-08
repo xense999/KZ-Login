@@ -37,10 +37,9 @@ const MENU_SEP_H = 7;
 
 const menuStyle = computed(() => {
   if (!contextMenu.value) return {};
-  const onAccount = contextMenu.value.accountId !== null;
-  const items = (onAccount ? 2 : 0) + (canQuickLock.value ? 1 : 0);
-  const seps = (onAccount ? 1 : 0) + (onAccount && canQuickLock.value ? 1 : 0);
-  const height = MENU_PAD + items * MENU_ITEM_H + seps * MENU_SEP_H;
+  const height = contextMenu.value.accountId !== null
+    ? MENU_PAD + 2 * MENU_ITEM_H + MENU_SEP_H
+    : MENU_PAD + MENU_ITEM_H;
   return {
     left: `${Math.min(contextMenu.value.x, 252)}px`,
     top: `${Math.min(contextMenu.value.y, MENU_BOTTOM - height)}px`,
@@ -51,7 +50,8 @@ function openContextMenu(e: MouseEvent, accountId: string) {
   e.stopPropagation();
   contextMenu.value = { x: e.clientX, y: e.clientY, accountId };
 }
-// 空白處的右鍵：沒開快捷就沒有東西可以列，不開一個空的選單出來
+// 空白處的右鍵（帳號卡片上的不算，卡片自己擋掉了）：沒開快捷就沒有東西可以列，
+// 不開一個空的選單出來
 function openPageMenu(e: MouseEvent) {
   if (!canQuickLock.value) return;
   contextMenu.value = { x: e.clientX, y: e.clientY, accountId: null };
@@ -655,6 +655,7 @@ function cleanError(msg: string): string {
       v-for="(acc, accIdx) in store.accounts" :key="acc.id"
       class="card"
       :data-acc-idx="accIdx"
+      @contextmenu.stop
       :class="{
         'acc-drag-over': draggingAcc !== null && dragTargetAcc === accIdx && draggingAcc !== accIdx,
         'acc-is-dragging': draggingAcc === accIdx
@@ -851,9 +852,8 @@ function cleanError(msg: string): string {
           <button class="ctx-item danger" @click="deleteAccount(contextMenu.accountId)">
             帳號登出
           </button>
-          <div v-if="canQuickLock" class="ctx-sep"></div>
         </template>
-        <button v-if="canQuickLock" class="ctx-item" @click="enterSafeMode">
+        <button v-else class="ctx-item" @click="enterSafeMode">
           進入安全模式
         </button>
       </div>
