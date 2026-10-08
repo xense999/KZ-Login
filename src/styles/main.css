@@ -21,8 +21,8 @@
   --float:    var(--s-6);
   --surface:  var(--s-5);
   --surface2: var(--s-4);
-  /* 按下去／選中的那一格：比凹槽深，落在 s-1 與 s-2 之間 */
-  --surface3: #e7ebf2;
+  /* 按下去／選中的那一格：比凹槽深，往梯度深的那頭拿 */
+  --surface3: var(--s-2);
   --border:   rgba(20, 40, 80, 0.14);
   --border2:  rgba(20, 40, 80, 0.11);
   --text:     rgba(10, 20, 40, 0.90);
