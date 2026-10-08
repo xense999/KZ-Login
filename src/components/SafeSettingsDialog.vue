@@ -8,8 +8,18 @@ import { toast } from "../composables/useToast";
 // （卡片標題左邊一條主色直線）、最下面一條線分開的按鈕列。改了就存，沒有儲存鈕。
 const emit = defineEmits<{ close: [] }>();
 
-const { hasPin, autoLock, quickLock, setAutoLock, setQuickLock } = useSafeMode();
+const { hasPin, autoLock, quickLock, lock, setAutoLock, setQuickLock } = useSafeMode();
 const showPin = ref(false);
+
+// 鎖上之後把這個視窗收掉：解鎖回來不該還停在設定視窗裡
+async function enterSafeMode() {
+  try {
+    await lock();
+    emit("close");
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), { kind: "error" });
+  }
+}
 
 const NEED_PIN = "請先設定安全模式密碼";
 
@@ -37,10 +47,19 @@ async function toggleAutoLock() {
         <div class="body">
           <section class="ccard">
             <div class="chead">密碼</div>
-            <div class="setrow">
+            <div v-if="hasPin" class="setrow">
+              <span class="setkey">進入安全模式</span>
+              <button class="setbtn icon" @click="enterSafeMode"
+                data-tip="立刻進入安全模式，輸入密碼才能繼續使用。已登入的帳號不會被登出">
+                <svg viewBox="0 0 24 24" fill="none" width="14" height="14" aria-hidden="true">
+                  <rect x="5" y="10.5" width="14" height="9.5" rx="2.5" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div v-else class="setrow">
               <span class="setkey">安全模式密碼</span>
-              <span v-if="hasPin" class="setstate">已設定</span>
-              <button v-else class="setbtn" data-tip="密碼是六位數字，加密後存在這台電腦上"
+              <button class="setbtn" data-tip="密碼是六位數字，加密後存在這台電腦上"
                 @click="showPin = true">設定</button>
             </div>
           </section>
@@ -182,10 +201,7 @@ async function toggleAutoLock() {
   color: var(--text);
   white-space: nowrap;
 }
-.setstate {
-  font-size: 13px;
-  color: var(--text3);
-}
+.setbtn.icon { width: 28px; padding: 0; }
 .setbtn {
   flex: none;
   height: 28px;
