@@ -70,44 +70,38 @@
     inset 0 -1px 0 rgb(0 0 0 / 0.04);
 }
 
-/* ── 暗色主題 ── 近黑的藍，主色青綠 */
+/* ── 暗色主題 ── slate 深藍 */
 :root[data-theme="dark"] {
-  /* 同一套六階（s-1 最深、s-6 最亮），用途跟亮色一一對應 */
-  --s-1: #06090f;
-  --s-2: #0a0e15;
-  --s-3: #0d121a;
-  --s-4: #11161f;
-  --s-5: #151b26;
-  --s-6: #1b2330;
-  --bg:       var(--s-3);
-  --bar:      var(--s-2);
-  --float:    var(--s-6);
-  --surface:  var(--s-5);
-  --surface2: var(--s-4);
-  /* 選中的那一格在暗色是往亮的方向跳，比浮層還亮，不在梯度裡 */
-  --surface3: #242d3b;
+  --bg:       #131924;
+  --surface:  #1a222f;
+  --surface2: #131924;
+  --surface3: #28313e;
+  /* 底部按鈕列、程式內小視窗：暗色維持原本的做法，分別跟頁面、卡片同色 */
+  --bar:      #131924;
+  --float:    #1a222f;
+  /* 凹槽：開關、切換鈕、下拉選單共用同一個底與內框 */
   --trough:      color-mix(in srgb, var(--text) 2%, transparent);
   --trough-ring: inset 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
     inset 0 1px 1px color-mix(in srgb, var(--text) 6%, transparent);
-  /* 暗色不用純白（太刺眼），用比凹槽亮一截的灰藍 */
-  --seg-on:    color-mix(in srgb, var(--text) 22%, var(--s-5));
+  /* 切換鈕的滑塊：暗色不用純白（太刺眼），用比凹槽亮一截的灰藍；陰影收得很緊，不蓋住四周的留白 */
+  --seg-on:    color-mix(in srgb, var(--text) 22%, var(--surface));
   --seg-shadow: 0 1px 2px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.14), inset 0 0 0 1px rgb(255 255 255 / 0.06);
-  --border:   rgba(160, 185, 230, 0.18);
-  --border2:  rgba(160, 185, 230, 0.11);
-  --text:     rgba(230, 236, 250, 0.95);
-  --text2:    rgba(230, 236, 250, 0.80);
-  --text3:    rgba(230, 236, 250, 0.58);
-  --edge:     rgba(160, 185, 230, 0.28);
-  --hover-tint:   rgba(160, 185, 230, 0.06);
-  --input-bg:     rgba(160, 185, 230, 0.07);
-  --input-border: rgba(160, 185, 230, 0.18);
-  --ctx-menu-bg:  var(--s-6);
+  --border:   rgba(170, 195, 235, 0.18);
+  --border2:  rgba(170, 195, 235, 0.11);
+  --text:     rgba(232, 238, 250, 0.95);
+  --text2:    rgba(232, 238, 250, 0.80);
+  --text3:    rgba(232, 238, 250, 0.58);
+  --edge:     rgba(170, 195, 235, 0.28);
+  --hover-tint:   rgba(160, 190, 230, 0.06);
+  --input-bg:     rgba(160, 190, 230, 0.07);
+  --input-border: rgba(170, 195, 235, 0.18);
+  --ctx-menu-bg:  #1a222f;
   --ctx-shadow:   0 8px 32px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.4);
-  --card-shadow:  0 2px 10px rgba(0,0,0,0.55), 0 0 0 1px rgba(160,185,230,0.08);
+  --card-shadow:  0 2px 10px rgba(0,0,0,0.55), 0 0 0 1px rgba(170,195,235,0.08);
   --card-filter:  none;
   --card-border:  none;
-  --scrollbar:    rgba(160, 185, 230, 0.18);
-  --titlebar-bg:  rgb(6 9 15 / 0.88);
+  --scrollbar:    rgba(170, 195, 235, 0.18);
+  --titlebar-bg:  rgba(11, 18, 31, 0.88);
   --titlebar-blur: blur(20px) saturate(160%);
   --primary-color:    #3dd6c3;
   --primary-bg:       rgba(61, 214, 195, 0.12);
@@ -120,12 +114,12 @@
   --blue:  #3dd6c3;
   --amber: #ff9f0a;
   --last-used: #3dd6c3;
-  --glass:      rgba(160, 185, 230, 0.06);
-  --glass-hover: rgba(160, 185, 230, 0.10);
-  --ctx-hover:       rgba(160, 185, 230, 0.08);
-  --ctx-sep-color:   rgba(160, 185, 230, 0.09);
-  --spin-track:      rgba(160, 185, 230, 0.20);
-  --pill-hover-border: rgba(160, 185, 230, 0.20);
+  --glass:      rgba(160, 190, 230, 0.06);
+  --glass-hover: rgba(160, 190, 230, 0.10);
+  --ctx-hover:       rgba(160, 190, 230, 0.08);
+  --ctx-sep-color:   rgba(170, 195, 235, 0.09);
+  --spin-track:      rgba(170, 195, 235, 0.20);
+  --pill-hover-border: rgba(170, 195, 235, 0.20);
   --switch-knob-shadow: 0 2px 8px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(255 255 255 / 0.13),
     inset 0 0 0 1px rgb(255 255 255 / 0.06);
 }
