@@ -43,8 +43,9 @@ const index = computed(() => Math.max(0, props.options.findIndex((o) => o.value 
   padding: 3px;
   border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--trough);
-  box-shadow: var(--trough-ring);
+  /* 只有一圈細框、沒有底色；選中的那格是凹下去的深色塊（使用者從幾版設計裡選的） */
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 .knob {
   position: absolute;

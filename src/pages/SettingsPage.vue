@@ -652,10 +652,9 @@ async function supportAuthor() {
   min-width: 124px;
   height: 30px;
   padding: 0 10px 0 12px;
-  /* 同一道凹槽：跟上面的分段鈕、下面的開關擺在一起才是一家的 */
-  background: var(--trough);
-  box-shadow: var(--trough-ring);
-  border: 1px solid transparent;
+  /* 跟上面的切換鈕同一種細框、沒有底色，擺在一起才是一家的 */
+  background: transparent;
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
