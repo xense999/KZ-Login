@@ -659,10 +659,7 @@ pub async fn launch_uri_for(
         ])
         .send().await?.text().await?;
 
-    let (region, sn, data) = match parse_m_objdata(&body) {
-        Ok(v) => v,
-        Err(e) => return Err(classify(&client, e).await),
-    };
+    let (region, sn, data) = parse_m_objdata(&body)?;
     Ok(format!("gamaniagames://Region={region}&&&&SN={sn}&&&&Cmd=06004&&&&Data={data}"))
 }
 
@@ -679,16 +676,18 @@ fn parse_m_objdata(html: &str) -> Result<(String, String, String), BeanfunError>
     };
     match (grab("region"), grab("sn"), grab("data")) {
         (Some(region), Some(sn), Some(data)) => Ok((region, sn, data)),
-        // Deliberately does not guess *why*: beanfun serves a login page, a
-        // redirect, or an error blob depending on how the session died, and this
-        // used to catch only the one that says 尚未登入 — every other shape was
-        // reported as a generic error, leaving a dead token marked as connected.
-        // The caller asks the session endpoint instead; see `classify`.
-        _ => Err(BeanfunError::Parse("遊戲啟動頁沒有 m_objData（beanfun 可能改版）".into())),
+        // Always a logout, whatever the page says instead: beanfun serves a
+        // login page, a redirect, or an error blob depending on how the session
+        // died. Asking the session endpoint to confirm (see `classify`) missed
+        // an account signed in on another machine — the endpoint did not call
+        // that token gone, so the user got a parse error and a card still
+        // marked connected (2026-10-10). A page that merely failed to load
+        // costs a rescan this way; the user chose that over the dead card.
+        _ => Err(BeanfunError::SessionExpired),
     }
 }
 
-/// Decide whether a failed launch/OTP step actually means "logged out".
+/// Decide whether a failed OTP exchange actually means "logged out".
 ///
 /// Only an authoritative answer overrides `fallback`: if the probe itself fails,
 /// or says the session is fine, the original error is what the user sees. A
@@ -802,10 +801,7 @@ pub async fn otp_for(
             ("dt", dt_compact().as_str()),
         ])
         .send().await?.text().await?;
-    let (_region, sn, data) = match parse_m_objdata(&body) {
-        Ok(v) => v,
-        Err(e) => return Err(classify(&client, e).await),
-    };
+    let (_region, sn, data) = parse_m_objdata(&body)?;
 
     // 2. Decrypt the blob and exchange the LaunchTicket for the OTP (v2). Only
     // the exchange is ambiguous: a session that dies there comes back as a
