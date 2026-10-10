@@ -633,11 +633,17 @@ pub async fn prime_game_zone(
 ) -> Result<(), BeanfunError> {
     let client = build_client_from_store(cookie_store)?;
     let inner = format!("game_start.aspx?service_code_and_region={}_{}", SERVICE_CODE, SERVICE_REGION);
-    let _ = client
+    let sent = client
         .get(&format!("{}beanfun_block/auth.aspx", PORTAL_BASE))
         .query(&[("channel", "game_zone"), ("page_and_query", inner.as_str()), ("web_token", token)])
         .send().await;
-    Ok(())
+    // A request that never got through leaves the session cold, and the launch
+    // page then comes back without m_objData — which reads as a logout. Where
+    // the redirect chain ends up is beanfun's business and was never checked.
+    match sent {
+        Err(e) if !e.is_redirect() => Err(e.into()),
+        _ => Ok(()),
+    }
 }
 
 /// The per-account half, on a session already primed above. Unlike the OTP

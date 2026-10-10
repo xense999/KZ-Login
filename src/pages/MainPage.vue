@@ -237,8 +237,9 @@ function tsvCell(text: string) {
 }
 
 // beanfun 偶爾會對某幾筆回一包「解得開但不是密碼」的東西（實測是 5381，也出現過
-// 9 碼），隨機分佈、隔一下再要一次多半就正常。所以失敗的那一筆就地重試一次——
-// 但登入已失效不重試，那個重試幾次都一樣，只是白燒八分鐘。
+// 9 碼），隨機分佈、隔一下再要一次多半就正常。所以失敗的那一筆就地重試一次。
+// 登入已失效也重試：啟動頁沒給資料一律算登出，單獨一筆沒回好不該賠掉整批。
+// 真的失效也只多問這一次，之後 sessionDead 會擋掉剩下的。
 const RETRY_DELAY_MS = 500;
 
 async function fetchCell(kind: ExportKind, token: string, game: GameAccount): Promise<string> {
@@ -248,9 +249,7 @@ async function fetchCell(kind: ExportKind, token: string, game: GameAccount): Pr
       : invoke<string>("otp_of", { token, accountSn: game.sn, accountSid: game.sid });
   try {
     return await once();
-  } catch (e) {
-    const msg = cleanError(e instanceof Error ? e.message : String(e));
-    if (msg === "SESSION_EXPIRED") throw e;
+  } catch {
     await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
     return await once();
   }
