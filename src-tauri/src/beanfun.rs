@@ -640,8 +640,10 @@ pub async fn prime_game_zone(
     // A request that never got through leaves the session cold, and the launch
     // page then comes back without m_objData — which reads as a logout. Where
     // the redirect chain ends up is beanfun's business and was never checked.
+    // The URL carries the web token and reqwest prints it in the message, which
+    // goes straight to the screen.
     match sent {
-        Err(e) if !e.is_redirect() => Err(e.into()),
+        Err(e) if !e.is_redirect() => Err(e.without_url().into()),
         _ => Ok(()),
     }
 }
