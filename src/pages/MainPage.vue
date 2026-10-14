@@ -513,6 +513,7 @@ async function shareLaunch(account: BeanfunAccount, game: { sn: string; sname: s
       accountSn: sn,
     });
     await writeText(uri);
+    store.markUsed(sn);
     copiedOtp.value.add(sn);
     setTimeout(() => copiedOtp.value.delete(sn), 1800);
 
