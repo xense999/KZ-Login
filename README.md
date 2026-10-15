@@ -46,6 +46,10 @@
 
 從 [GitHub Releases](../../releases) 下載最新版本的 `.exe` 安裝檔。
 
+## 訂閱＆贊助
+
+覺得好用的話，歡迎透過 [訂閱＆贊助連結（Portaly）](https://portaly.cc/xense999/support) 支持作者。
+
 ## 使用方式
 
 :small_orange_diamond:**手動模式**
