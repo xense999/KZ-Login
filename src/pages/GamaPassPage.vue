@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { sameLoginAccount, type LoginGame, type LoginResult } from "../stores/accounts";
+import { contextMenuStyle } from "../composables/contextMenu";
 
 // 從某張卡片按「重新登入」進來時，是那張卡片的 GamaPass 帳號；否則是空字串。
 const props = defineProps<{ initialAccount: string }>();
@@ -69,15 +70,12 @@ function readSwapped() {
   try { return localStorage.getItem(SWAP_KEY) === "1"; } catch { return false; }
 }
 
-// 選單貼著視窗邊緣時往內收（數字同 MainPage：視窗寬高扣掉一列選單）。
 const ctxMenu = ref<{ x: number; y: number } | null>(null);
-const ctxStyle = computed(() => ctxMenu.value
-  ? { left: `${Math.min(ctxMenu.value.x, 252)}px`, top: `${Math.min(ctxMenu.value.y, 623 - 41)}px` }
-  : {});
+const ctxStyle = computed(() => ctxMenu.value ? contextMenuStyle(ctxMenu.value.x, ctxMenu.value.y, 1) : {});
 
-// 只有選帳號那一頁有兩顆可以對調的按鈕；登入中、新增帳號頁不開選單。
+// 只有選帳號那一頁、而且有記住的帳號時，才有兩顆可以對調的按鈕。
 function openCtxMenu(e: MouseEvent) {
-  if (running.value || adding.value) return;
+  if (running.value || adding.value || !saved.value.length) return;
   menuOpen.value = false;
   ctxMenu.value = { x: e.clientX, y: e.clientY };
 }

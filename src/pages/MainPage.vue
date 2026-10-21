@@ -7,6 +7,7 @@ import { useAccountsStore, type BeanfunAccount, type GameAccount } from "../stor
 import { sendEmbed, useDiscordShare, EMBED_COLOR_KEY } from "../composables/useDiscord";
 import { useHidden } from "../composables/useHidden";
 import { useMainAction } from "../composables/useMainAction";
+import { contextMenuStyle } from "../composables/contextMenu";
 import { useGameResolution } from "../composables/useGameResolution";
 import { useSafeMode } from "../composables/useSafeMode";
 import ExportProgress from "../components/ExportProgress.vue";
@@ -29,21 +30,10 @@ const contextMenu = ref<{ x: number; y: number; accountId: string | null } | nul
 const { hasPin, quickLock, lock } = useSafeMode();
 const canQuickLock = computed(() => quickLock.value && hasPin.value);
 
-// 選單貼著視窗下緣時往上收，不然最後一條會掉到視窗外。高度照 .ctx-menu 的樣式算。
-const MENU_BOTTOM = 623;
-const MENU_PAD = 10;
-const MENU_ITEM_H = 31;
-const MENU_SEP_H = 7;
-
 const menuStyle = computed(() => {
   if (!contextMenu.value) return {};
-  const height = contextMenu.value.accountId !== null
-    ? MENU_PAD + 2 * MENU_ITEM_H + MENU_SEP_H
-    : MENU_PAD + MENU_ITEM_H;
-  return {
-    left: `${Math.min(contextMenu.value.x, 252)}px`,
-    top: `${Math.min(contextMenu.value.y, MENU_BOTTOM - height)}px`,
-  };
+  const { x, y, accountId } = contextMenu.value;
+  return accountId !== null ? contextMenuStyle(x, y, 2, 1) : contextMenuStyle(x, y, 1);
 });
 
 function openContextMenu(e: MouseEvent, accountId: string) {
@@ -1130,7 +1120,6 @@ function cleanError(msg: string): string {
 
 .err-row  { font-size: 11px; color: var(--warn);  padding: 5px 13px 7px 20px; }
 .sent-row { font-size: 11px; color: var(--text3); padding: 5px 13px 7px 20px; font-variant-numeric: tabular-nums; }
-
 
 /* Bottom bar buttons */
 .btn-add {

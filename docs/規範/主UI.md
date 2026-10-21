@@ -9,6 +9,9 @@
 - 頁面 `login` 下有三個子頁：`QrPage`、`PasswordPage`、`GamaPassPage`。三者都 emit `cancel` 與 `success(LoginResult)`；後兩者另外 emit `busy(boolean)`。
 - 標題列：只有在 `login` 頁時，標題才是「切換登入方式」按鈕；其他頁都是純文字（成功頁維持「新增帳號」）。
 
+- GamaPass 頁右鍵「切換按鈕」對調「登入」與「新增帳號」，存在 localStorage `kusei:gamapass_swap`；契約見總表 `gamapass` 條（2026-10-21）。
+- 右鍵選單的定位只有一個出口：`composables/contextMenu.ts` 的 `contextMenuStyle`（主頁與 GamaPass 頁共用，2026-10-21）。外觀見總表 `共用樣式` 條。
+
 - 帳密頁的帳號欄：左側圓點（主頁有對應卡片就是綠色，不論 token 是否失效），右側 ▾ 打開記住的帳密清單（每列都有圓點和 ✕ 刪除；**按住圓點拖曳可排序**，放開時存檔）。
 
 ## 單一來源
