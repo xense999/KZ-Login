@@ -61,6 +61,33 @@ const TIP_LINES = [
 
 // 新增帳號是另一頁：平常這一頁只有「選一個記住的帳號」，輸入框要按了才出現。
 const adding = ref(false);
+
+// 「登入」與「新增帳號」誰在中間、誰在右下角，右鍵選單切換，下次進來照舊。
+const SWAP_KEY = "kusei:gamapass_swap";
+const swapped = ref(readSwapped());
+function readSwapped() {
+  try { return localStorage.getItem(SWAP_KEY) === "1"; } catch { return false; }
+}
+
+// 選單貼著視窗邊緣時往內收（數字同 MainPage：視窗寬高扣掉一列選單）。
+const ctxMenu = ref<{ x: number; y: number } | null>(null);
+const ctxStyle = computed(() => ctxMenu.value
+  ? { left: `${Math.min(ctxMenu.value.x, 252)}px`, top: `${Math.min(ctxMenu.value.y, 623 - 41)}px` }
+  : {});
+
+// 只有選帳號那一頁有兩顆可以對調的按鈕；登入中、新增帳號頁不開選單。
+function openCtxMenu(e: MouseEvent) {
+  if (running.value || adding.value) return;
+  menuOpen.value = false;
+  ctxMenu.value = { x: e.clientX, y: e.clientY };
+}
+
+function toggleSwap() {
+  ctxMenu.value = null;
+  swapped.value = !swapped.value;
+  try { localStorage.setItem(SWAP_KEY, swapped.value ? "1" : "0"); } catch { /* 記不住就只這次有效 */ }
+}
+
 const account = ref("");
 const password = ref("");
 const accountInput = ref<HTMLInputElement | null>(null);
@@ -238,7 +265,7 @@ function onCancel() {
 </script>
 
 <template>
-  <div class="gp-page">
+  <div class="gp-page" @contextmenu.prevent="openCtxMenu">
     <div ref="regionEl" class="gp-main">
       <template v-if="!running">
         <div class="gp-hd tip-host">
@@ -342,7 +369,10 @@ function onCancel() {
         </div>
 
         <div class="form">
-          <button class="btn-add" @click="openAdd">新增帳號</button>
+          <template v-if="swapped">
+            <button v-if="saved.length" class="btn-add" :disabled="!chosen" @click="chosen && login(chosen, false)">登入</button>
+          </template>
+          <button v-else class="btn-add" @click="openAdd">新增帳號</button>
           <div v-if="errorMsg" class="err">{{ errorMsg }}</div>
         </div>
       </template>
@@ -352,10 +382,18 @@ function onCancel() {
       <button class="btn-ghost" @click="onCancel">取消</button>
       <template v-if="!running">
         <button v-if="adding" class="btn-solid" :disabled="!canAdd" @click="addAndLogin">新增並登入</button>
+        <button v-else-if="swapped" class="btn-solid" @click="openAdd">新增帳號</button>
         <!-- 登入的是上面選單裡選的那個記住的帳號。 -->
         <button v-else-if="saved.length" class="btn-solid" :disabled="!chosen" @click="chosen && login(chosen, false)">登入</button>
       </template>
     </div>
+
+    <template v-if="ctxMenu">
+      <div class="ctx-overlay" @click="ctxMenu = null" @contextmenu.prevent.stop="ctxMenu = null"></div>
+      <div class="ctx-menu" :style="ctxStyle" @contextmenu.prevent.stop>
+        <button class="ctx-item" @click="toggleSwap">切換按鈕</button>
+      </div>
+    </template>
   </div>
 </template>
 

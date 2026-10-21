@@ -1131,37 +1131,6 @@ function cleanError(msg: string): string {
 .err-row  { font-size: 11px; color: var(--warn);  padding: 5px 13px 7px 20px; }
 .sent-row { font-size: 11px; color: var(--text3); padding: 5px 13px 7px 20px; font-variant-numeric: tabular-nums; }
 
-/* Context menu */
-.ctx-overlay {
-  position: fixed; inset: 0; z-index: 90;
-}
-
-.ctx-menu {
-  position: fixed; z-index: 91;
-  background: var(--ctx-menu-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 4px;
-  min-width: 148px;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: var(--ctx-shadow);
-}
-
-.ctx-item {
-  display: flex; align-items: center; justify-content: flex-start;
-  width: 100%;
-  padding: 7px 10px; font-size: 13px; font-weight: 400;
-  background: none; border: none; border-radius: 6px;
-  color: var(--text); transition: background 0.12s;
-}
-.ctx-item:hover { background: var(--ctx-hover); }
-.ctx-item.danger { color: var(--red); }
-.ctx-item.danger:hover { background: rgba(255,69,58,0.12); }
-
-.ctx-sep {
-  height: 1px; background: var(--ctx-sep-color); margin: 3px 6px;
-}
 
 /* Bottom bar buttons */
 .btn-add {
