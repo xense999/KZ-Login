@@ -672,6 +672,42 @@ fn decide(owner: Option<&str>, requested: &str, alive: bool) -> Decision {
     }
 }
 
+// ─── WebView2 environment ─────────────────────────────────────────────────────
+
+/// 主視窗正在用的 WebView2 environment，借給工具列與手動開的分頁。
+///
+/// ★**為什麼不讓它們各自建一個**：wry 沒拿到 environment 就會自己
+/// `CreateCoreWebView2Environment`，而那會挑**當下安裝的最新版** runtime。程式開著
+/// 的期間 Edge 在背景把 WebView2 更新掉之後（2026-11-14 實機：11/12 開的程式跑在
+/// 157.0.4341.46，11/13 系統裝了 .57），新版 runtime 進不了舊版瀏覽器行程還佔著的
+/// 資料夾，建立直接失敗——而 tauri 把主執行緒上的建立失敗吞掉（只 `log::error!`），
+/// `build()` 照樣回 `Ok`，要到第一個會問視窗本人的呼叫才爆，也就是分頁的
+/// `owner()`：「綁定瀏覽器視窗失敗」，要重開整個程式才會好。
+/// 沿用主視窗那一個就永遠跟執行中的瀏覽器行程同版。
+#[cfg(windows)]
+struct SharedEnvironment(webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment);
+
+// SAFETY：這個指標只被「搬」過執行緒。clone 在主執行緒（`with_webview` 的閉包裡），
+// 用掉也在主執行緒（wry 在那裡建 webview）；中間的執行緒不碰它。
+#[cfg(windows)]
+unsafe impl Send for SharedEnvironment {}
+
+/// 拿不到就回 `None`，讓 wry 照舊自己建——平常那條路是通的，不該因為這裡問不到
+/// 就整個開不了。
+#[cfg(windows)]
+fn main_environment<R: Runtime>(app: &AppHandle<R>) -> Option<SharedEnvironment> {
+    let main = app.get_webview_window("main")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = main.with_webview(move |platform| {
+        let _ = tx.send(SharedEnvironment(platform.environment()));
+    });
+    let environment = asked.ok().and_then(|_| rx.recv().ok());
+    if environment.is_none() {
+        eprintln!("[browser] 拿不到主視窗的 WebView2 environment，改由新視窗自己建");
+    }
+    environment
+}
+
 // ─── 視窗 ─────────────────────────────────────────────────────────────────────
 
 /// 開啟帶著這個帳號登入態的瀏覽器。同帳號已開著就帶到前景；別的帳號還開著
@@ -783,7 +819,8 @@ pub fn open<R: Runtime>(
         urlencode(alias)
     );
     let label = toolbar_label(generation);
-    let toolbar = WebviewWindowBuilder::new(app, label, WebviewUrl::App(shell_url.into()))
+    #[allow(unused_mut)]
+    let mut toolbar_builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(shell_url.into()))
         .title(alias)
         .inner_size(DEFAULT_W, DEFAULT_H)
         .min_inner_size(MIN_W, MIN_H)
@@ -792,9 +829,21 @@ pub fn open<R: Runtime>(
         .shadow(false)
         .resizable(true)
         .center()
-        .visible(false)
+        .visible(false);
+    #[cfg(windows)]
+    if let Some(environment) = main_environment(app) {
+        toolbar_builder = toolbar_builder.with_environment(environment.0);
+    }
+    let toolbar = toolbar_builder
         .build()
         .map_err(|e| format!("開啟瀏覽器視窗失敗：{e}"))?;
+    // `build()` 回 `Ok` 不代表視窗真的建起來了：主執行緒上的建立失敗 tauri 只記
+    // log。問一次視窗本人，建不起來就在這裡講清楚，不要等到分頁那一步才用別的
+    // 名目爆出來。
+    #[cfg(windows)]
+    toolbar
+        .hwnd()
+        .map_err(|e| format!("開啟瀏覽器視窗失敗，請重新啟動程式再試（{e}）"))?;
 
     // 系統文字大小放大的是頁面，視窗要跟著長大，否則版面被裁——跟主視窗同一條
     // 路徑（`win::size_for_text_scale`），連「不可大過工作區」的保護也共用：
@@ -956,8 +1005,15 @@ fn open_tab<R: Runtime>(
 
     // 網頁要求的新視窗必須沿用來源 webview 的 WebView2 environment（`Create` 的
     // 硬性要求），`window_features` 會把它接好。
-    if let Some(features) = features {
-        builder = builder.window_features(features);
+    // 手動開的分頁沒有來源 webview，改借主視窗的（見 `SharedEnvironment`）。
+    match features {
+        Some(features) => builder = builder.window_features(features),
+        None => {
+            #[cfg(windows)]
+            if let Some(environment) = main_environment(app) {
+                builder = builder.with_environment(environment.0);
+            }
+        }
     }
     #[cfg(windows)]
     {

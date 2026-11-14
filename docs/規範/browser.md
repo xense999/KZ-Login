@@ -57,6 +57,7 @@
 - 旗標一律照抄 jar，**唯一例外是 `bfWebToken` 要拿掉 HttpOnly**（`is_js_readable_cookie`）：SSO 檢查點 `tw.newlogin.beanfun.com/checkin_step2.aspx` 的 `DealWebToken()` 是用 `document.cookie` 讀這顆的，讀不到就 `GotoLoginPage()` 把使用者打回掃碼登入頁。詳見 docs/瀏覽器登入態診斷.md。要再加例外必須先有「哪段網頁 JS 讀它」的證據。
 - 分頁視窗（`browser-tab-*`）**不得出現在任何 capability 檔**＝零 IPC——它載外部網站。
 - **工具列 label 每開一組換一個號碼**（`toolbar_label(generation)`），不得改回固定字串。`destroy()` 一律走 `proxy.send_event`（tauri-runtime-wry 2.11 的 `destroy` 明文不走 `send_user_message`），tauri 的 webview 簿記要等 event loop 收到 `Destroyed` 才清 label——「砍幽靈→立刻用同一個 label 建新視窗」**必定**報 `a webview with label ... already exists`。Edge 在背景更新收掉 WebView2 留下幽靈時走的就是這條路。capability 因此是 glob `browser-shell-*`（`capabilities/browser.json`）。
+- **工具列與手動開的分頁必須沿用主視窗的 WebView2 environment**（`main_environment` → `with_environment`），不得讓 wry 自己建。自己建會挑當下安裝的最新版 runtime；程式開著的期間 WebView2 被背景更新之後，新版進不了舊版瀏覽器行程還佔著的資料夾，建立失敗，而 tauri 把主執行緒上的建立失敗吞掉、`build()` 照回 `Ok`（2026-11-14 實機：症狀是「綁定瀏覽器視窗失敗」，要重開程式才好）。因此工具列 `build()` 之後要問一次 `hwnd()`，建不起來就在那裡報錯。
 - 開新一組前掃殘骸靠 `is_browser_label`（舊工具列＋所有分頁），**不等它們消失**。
 - 工具列視窗一動（Moved/Resized/ScaleFactorChanged）就 `relayout_tabs` 把**所有**分頁貼回框裡（隱藏中的也排，切換時才不閃舊位置）。
 - **算貼合位置要用 `css_to_px(scale_factor())`，不是裸的 `scale_factor()`**：Windows 的「協助工具 → 文字大小」不進 tao 回報的 DPI，卻被 WebView2 併進整頁縮放，殼層畫出來的標題列因此比 `TOOLBAR_H * scale_factor()` 高——少算就讓分頁視窗往上蓋掉分頁列與網址列。
