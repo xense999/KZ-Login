@@ -687,23 +687,28 @@ fn decide(owner: Option<&str>, requested: &str, alive: bool) -> Decision {
 #[cfg(windows)]
 struct SharedEnvironment(webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment);
 
-// SAFETY：這個指標只被「搬」過執行緒。clone 在主執行緒（`with_webview` 的閉包裡），
-// 用掉也在主執行緒（wry 在那裡建 webview）；中間的執行緒不碰它。
+// SAFETY：clone 在主執行緒（`with_webview` 的閉包裡），正常用掉也在主執行緒（wry
+// 在那裡建 webview）。唯一會在別的執行緒碰到它的是失敗路徑：builder 還沒送出去就
+// 被丟掉，那裡只做一次 `Release`——只是把計數減一，而被借的那個視窗自己還握著
+// 一份，所以這一次永遠不是最後一份，物件不會在別的執行緒上被解構。
 #[cfg(windows)]
 unsafe impl Send for SharedEnvironment {}
 
-/// 拿不到就回 `None`，讓 wry 照舊自己建——平常那條路是通的，不該因為這裡問不到
-/// 就整個開不了。
+/// `window` 正在用的 environment。拿不到就回 `None`，讓 wry 照舊自己建——平常那條
+/// 路是通的，不該因為這裡問不到就整個開不了；真的建不起來，建完之後的 `hwnd()`
+/// 檢查會報出來。
 #[cfg(windows)]
-fn main_environment<R: Runtime>(app: &AppHandle<R>) -> Option<SharedEnvironment> {
-    let main = app.get_webview_window("main")?;
+fn environment_of<R: Runtime>(window: &WebviewWindow<R>) -> Option<SharedEnvironment> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let asked = main.with_webview(move |platform| {
+    let asked = window.with_webview(move |platform| {
         let _ = tx.send(SharedEnvironment(platform.environment()));
     });
     let environment = asked.ok().and_then(|_| rx.recv().ok());
     if environment.is_none() {
-        eprintln!("[browser] 拿不到主視窗的 WebView2 environment，改由新視窗自己建");
+        eprintln!(
+            "[browser] 拿不到 {} 的 WebView2 environment，改由新視窗自己建",
+            window.label()
+        );
     }
     environment
 }
@@ -831,7 +836,7 @@ pub fn open<R: Runtime>(
         .center()
         .visible(false);
     #[cfg(windows)]
-    if let Some(environment) = main_environment(app) {
+    if let Some(environment) = app.get_webview_window("main").and_then(|main| environment_of(&main)) {
         toolbar_builder = toolbar_builder.with_environment(environment.0);
     }
     let toolbar = toolbar_builder
@@ -1005,12 +1010,13 @@ fn open_tab<R: Runtime>(
 
     // 網頁要求的新視窗必須沿用來源 webview 的 WebView2 environment（`Create` 的
     // 硬性要求），`window_features` 會把它接好。
-    // 手動開的分頁沒有來源 webview，改借主視窗的（見 `SharedEnvironment`）。
+    // 手動開的分頁沒有來源 webview，改借工具列的（它借的是主視窗那一個，見
+    // `SharedEnvironment`），分頁就一定跟自己的 owner 同一個 environment。
     match features {
         Some(features) => builder = builder.window_features(features),
         None => {
             #[cfg(windows)]
-            if let Some(environment) = main_environment(app) {
+            if let Some(environment) = environment_of(&toolbar) {
                 builder = builder.with_environment(environment.0);
             }
         }
@@ -1027,6 +1033,15 @@ fn open_tab<R: Runtime>(
     let tab = builder
         .build()
         .map_err(|e| format!("開啟分頁失敗：{e}"))?;
+    // 跟工具列一樣：`build()` 回 `Ok` 不代表真的建起來了。沒建起來就把剛登記的
+    // 分頁拿掉，不然分頁列上會留一個永遠「載入中…」的空殼。
+    #[cfg(windows)]
+    if let Err(e) = tab.hwnd() {
+        if let Ok(mut state) = STATE.lock() {
+            state.tabs.retain(|t| t.id != id);
+        }
+        return Err(format!("開啟分頁失敗，請重新啟動程式再試（{e}）"));
+    }
 
     hook_tab_shortcuts(&tab, app, Some(id));
     // 先排進框裡再顯示，不然會在預設位置閃一下
