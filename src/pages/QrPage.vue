@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { Image } from "@tauri-apps/api/image";
+import { writeText, writeImage } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "../composables/useToast";
 import { sendEmbed, EMBED_COLOR_LINK } from "../composables/useDiscord";
 import type { LoginGame, LoginResult } from "../stores/accounts";
@@ -104,6 +105,32 @@ async function copyDeeplink() {
   );
 }
 
+// The server's PNG has no quiet zone of its own (the frame's CSS padding
+// supplies it on screen), and a transparent pixel pastes as black in some
+// apps, so the copy is redrawn onto a white canvas with a margin.
+const COPY_MARGIN = 16;
+
+async function copyQrImage(e: MouseEvent) {
+  const img = (e.currentTarget as HTMLElement).querySelector("img");
+  if (!img || !img.naturalWidth) return;
+  const w = img.naturalWidth + COPY_MARGIN * 2;
+  const h = img.naturalHeight + COPY_MARGIN * 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, COPY_MARGIN, COPY_MARGIN);
+  try {
+    const rgba = new Uint8Array(ctx.getImageData(0, 0, w, h).data.buffer);
+    await writeImage(await Image.new(rgba, w, h));
+    toast("已複製 QR Code 圖片");
+  } catch (err) {
+    toast(`複製圖片失敗：${err}`, { kind: "error" });
+  }
+}
+
 function schedulePoll() { pollTimer = setTimeout(poll, 2000); }
 
 async function poll() {
@@ -136,7 +163,7 @@ async function poll() {
         </template>
 
         <template v-else-if="status === 'waiting'">
-          <div class="qr-frame" @click="startQr" data-tip="點擊刷新">
+          <div class="qr-frame" @click="startQr" @contextmenu.prevent.stop="copyQrImage" :data-tip="'點擊刷新\n右鍵複製圖片'">
             <img :src="qrImage" class="qr-img" alt="QR Code" />
             <div class="qr-refresh">↺ 刷新</div>
           </div>
