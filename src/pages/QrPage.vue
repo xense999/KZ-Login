@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { Image } from "@tauri-apps/api/image";
 import { writeText, writeImage } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "../composables/useToast";
 import { sendEmbed, EMBED_COLOR_LINK } from "../composables/useDiscord";
@@ -105,29 +104,35 @@ async function copyDeeplink() {
   );
 }
 
-// The server's PNG has no quiet zone of its own (the frame's CSS padding
-// supplies it on screen), and a transparent pixel pastes as black in some
-// apps, so the copy is redrawn onto a white canvas with a margin.
-const COPY_MARGIN = 16;
+// On screen the frame's CSS padding is the QR's quiet zone, and a transparent
+// pixel pastes as black in some apps, so the copy is redrawn onto a white
+// canvas with a margin. The margin scales with the image because the module
+// size is unknown: a login QR is dense enough that a tenth of its width
+// clears the four modules scanners expect.
+const COPY_MARGIN_RATIO = 0.1;
 
-async function copyQrImage(e: MouseEvent) {
-  const img = (e.currentTarget as HTMLElement).querySelector("img");
-  if (!img || !img.naturalWidth) return;
-  const w = img.naturalWidth + COPY_MARGIN * 2;
-  const h = img.naturalHeight + COPY_MARGIN * 2;
-  const canvas = document.createElement("canvas");
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, w, h);
-  ctx.drawImage(img, COPY_MARGIN, COPY_MARGIN);
+async function copyQrImage() {
   try {
-    const rgba = new Uint8Array(ctx.getImageData(0, 0, w, h).data.buffer);
-    await writeImage(await Image.new(rgba, w, h));
-    toast("已複製 QR Code 圖片");
+    const img = new Image();
+    img.src = qrImage.value;
+    await img.decode();
+    const margin = Math.round(Math.max(img.naturalWidth, img.naturalHeight) * COPY_MARGIN_RATIO);
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth + margin * 2;
+    canvas.height = img.naturalHeight + margin * 2;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("canvas unavailable");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, margin, margin);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("PNG encoding failed");
+    // PNG bytes, not raw RGBA: IPC serialises a nested byte array as JSON
+    // numbers, and encoded bytes also need no backend Image resource to free.
+    await writeImage(new Uint8Array(await blob.arrayBuffer()));
+    if (!disposed) toast("已複製 QR Code 圖片");
   } catch (err) {
-    toast(`複製圖片失敗：${err}`, { kind: "error" });
+    if (!disposed) toast(`複製圖片失敗：${err}`, { kind: "error" });
   }
 }
 

@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # image-ico：系統匣圖示用 Image::from_bytes 解 .ico（見 tray 模組）；tray-icon：系統匣本身
-tauri = { version = "2", features = ["image-ico", "tray-icon"] }
+tauri = { version = "2", features = ["image-ico", "image-png", "tray-icon"] }
 tauri-plugin-store = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
