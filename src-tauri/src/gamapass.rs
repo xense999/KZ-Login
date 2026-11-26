@@ -211,6 +211,7 @@ pub async fn wait_for_login<R: Runtime>(
     let mut stage = Stage::Working;
     let mut password_sent = false;
     let mut nickname: Option<String> = None;
+    let mut trail: Vec<String> = Vec::new();
     let outcome = loop {
         if started.elapsed() >= TIMEOUT || ticket != self::ticket() {
             break Outcome::Cancelled;
@@ -233,6 +234,12 @@ pub async fn wait_for_login<R: Runtime>(
             let Ok((harvested, report)) = asked else { continue };
             // 先收這一輪的回報再看 token：兩個同一輪到手的時候，暱稱不該因為
             // 先跳出去而丟掉。
+            for line in report.iter().flat_map(|r| &r.trail) {
+                if !trail.contains(line) {
+                    eprintln!("[gamapass] {line}");
+                    trail.push(line.clone());
+                }
+            }
             password_sent |= report.as_ref().is_some_and(|r| r.sent);
             if let Some(nick) = report.as_ref().map(|r| r.nick.trim()).filter(|n| !n.is_empty()) {
                 nickname = Some(nick.to_owned());
@@ -381,6 +388,10 @@ struct Report {
     /// The account's nickname, once the script has come across it.
     #[serde(default)]
     nick: String,
+    /// What the script has seen and done so far on this origin, each thing
+    /// once. Only ever printed.
+    #[serde(default)]
+    trail: Vec<String>,
 }
 
 /// `None` while there is nothing to hear — the page is between documents, or
@@ -452,6 +463,18 @@ const AUTOFILL_JS: &str = r##"(() => {
 
   const recall = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
   const note = (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) {} };
+
+  // 走過哪些頁、做了什麼，每件事只記一次，後端讀到就印出來。對方改版或改規則
+  // 時，這是唯一看得到「腳本到底走了哪條路」的地方——視窗在畫面外。
+  // 不記密碼、驗證碼；帳號只記對方遮罩過的樣子。
+  const trail = () => { try { return JSON.parse(recall("__kz_trail") || "[]"); } catch (e) { return []; } };
+  const mark = (what) => {
+    const line = location.hostname + location.pathname.replace(/\/+$/, "").toLowerCase() + " | " + what;
+    const seen = trail();
+    if (seen.includes(line)) return;
+    seen.push(line);
+    note("__kz_trail", JSON.stringify(seen.slice(-80)));
+  };
 
   // offsetParent 對 fixed 定位的元素一律是 null，改看有沒有實際畫出來的方框。
   const visible = (el) => !!el && !el.disabled && el.getClientRects().length > 0;
@@ -526,6 +549,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     if (at && Date.now() - at < (every || 2500)) return true;
     note(key, String(Date.now()));
     note(key + "_n", String(Number(recall(key + "_n") || 0) + 1));
+    mark("press " + key);
     press(el);
     return true;
   };
@@ -551,14 +575,14 @@ const AUTOFILL_JS: &str = r##"(() => {
 
   const report = (stage, extra) => {
     window.__kz = Object.assign(
-      { stage, sent: !!recall("__kz_sent"), nick: recall("__kz_nick") || "" }, extra || {});
+      { stage, sent: !!recall("__kz_sent"), nick: recall("__kz_nick") || "", trail: trail() }, extra || {});
   };
   report("working");
 
   // 放手：之後這一頁是使用者的。passkey 的推銷照樣替他婉拒——那是唯一一個
   // 按錯了就回不來的地方。
   let handedOver = false;
-  const handOver = (why) => { handedOver = true; tidy(); say(why); report("user"); };
+  const handOver = (why) => { handedOver = true; mark("hand over: " + why); tidy(); say(why); report("user"); };
 
   // 選帳號那一頁交給使用者時，只留帳號清單：他是來點自己選的那個帳號的，「使用
   // 其他帳號登入」與頁尾的條款在這裡只會讓他走岔。只在放手的時候藏——在那之前
@@ -644,8 +668,15 @@ const AUTOFILL_JS: &str = r##"(() => {
   // ——從最裡面點，不管綁在哪一層都收得到。
   const maskedLeaf = (row) => [...row.querySelectorAll("*")].find((el) =>
     !el.children.length && (el.textContent || "").includes("*") && matchesMask(el.textContent));
+  const matchingRows = () =>
+    [...document.querySelectorAll("#main [role=button]")].filter(visible).filter(maskedLeaf);
+  const expiredRow = (row) => /已過期/.test(row.textContent || "");
+  const insideAnother = (row, rows) => rows.some((other) => other !== row && other.contains(row));
   const rememberedRow = () => {
-    const rows = [...document.querySelectorAll("#main [role=button]")].filter(visible).filter(maskedLeaf);
+    const all = matchingRows();
+    // 同一列算一次（外層跟裡層都掛著 role=button 時會被找到兩次），過期的不算
+    // ——點它只會再跳一次「已過期」，而且它會讓還有效的那一列看起來像有兩個人選。
+    const rows = all.filter((row) => !insideAnother(row, all) && !expiredRow(row));
     // 兩列都對得上就不猜：寧可走一次密碼，也不要登進別人的帳號。
     return rows.length === 1 ? rows[0] : null;
   };
@@ -719,6 +750,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     if (frame) return handOver("請完成圖形驗證");
 
     const path = location.pathname.replace(/\/+$/, "").toLowerCase();
+    mark("page");
 
     // beanfun 的登入頁：按下它自己的「使用 gamapass」，讓它用自己的 session 去
     // 要跳轉網址。我們代打的話，回程的 nonce 會對不起來。
@@ -748,6 +780,10 @@ const AUTOFILL_JS: &str = r##"(() => {
     // 驗證碼那一頁出現過之後它也不會再來，就不再找了——找它要掃整頁。
     if ((recall("__kz_sent") || recall("__kz_row")) && !recall("__kz_code_seen")) {
       const go = labelled("前往驗證", true);
+      if (go) {
+        const box = [...document.querySelectorAll("[role=dialog], .el-message-box")].find(visible);
+        mark("asked to verify: " + ((box || document.body).textContent || "").replace(/\s+/g, " ").trim().slice(0, 160));
+      }
       if (go && presses("__kz_go_verify") >= 3) return handOver("請按「前往驗證」");
       if (pressOnce("__kz_go_verify", go, 5000)) return;
     }
@@ -757,6 +793,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     // 例外，那個我們知道怎麼接。
     const notice = [...document.querySelectorAll("[role=dialog], .el-message-box")].find(visible);
     if (notice && path !== "/login/select-account" && labelled("確定", true)) {
+      mark("notice: " + (notice.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160));
       return handOver("請看畫面上的訊息");
     }
 
@@ -772,6 +809,7 @@ const AUTOFILL_JS: &str = r##"(() => {
     // 還掛在畫面上就被當成這一次的結果。
     if (codeBoxes().length) {
       note("__kz_code_seen", "1");
+      mark("code asked");
       if (Date.now() - Number(recall("__kz_code_at") || 0) < 2500) return;
       return report("code", {
         sentTo: codeSentTo(), error: codeError(), attempt: Number(recall("__kz_code_n") || 0),
@@ -786,6 +824,15 @@ const AUTOFILL_JS: &str = r##"(() => {
         if (ok) { note("__kz_expired", "1"); return void pressOnce("__kz_expired_ok", ok); }
       }
       const row = FRESH || recall("__kz_expired") ? null : rememberedRow();
+      const listed = [...document.querySelectorAll("#main [role=button]")].filter(visible);
+      if (listed.length) {
+        const matching = matchingRows();
+        mark("rows=" + listed.length + " matching=" + matching.length +
+          " fresh=" + FRESH + " expired=" + !!recall("__kz_expired"));
+        matching.forEach((r, i) => mark("row " + i + ": " + maskedLeaf(r).textContent.trim() +
+          " expired=" + expiredRow(r) + " inside-another=" + insideAnother(r, matching) +
+          " nick=" + (rowNickname(r) ? "yes" : "no")));
+      }
       if (row) {
         const nick = rowNickname(row);
         if (nick) note("__kz_nick", nick);
@@ -814,6 +861,7 @@ const AUTOFILL_JS: &str = r##"(() => {
       // 沒勾這個，對方就不會記住這台裝置，下次又得從頭驗一遍。
       const keep = [...document.querySelectorAll("[role=checkbox]")].find(
         (el) => visible(el) && /保持登入/.test(el.textContent || ""));
+      if (acc) mark(keep ? "keep-login box " + keep.getAttribute("aria-checked") : "keep-login box missing");
       // 不連按：狀態晚一拍才反映的話，連按會把它又切回去。
       if (keep && keep.getAttribute("aria-checked") !== "true") return void pressOnce("__kz_keep", keep, 1200);
       if (acc) pressOnce("__kz_next", labelled("下一步", true));
@@ -825,7 +873,7 @@ const AUTOFILL_JS: &str = r##"(() => {
       if (!recall("__kz_sent")) {
         if (pw && fill(pw, PW)) {
           const go = labelled("登入", true);
-          if (go) { note("__kz_sent", "1"); press(go); }
+          if (go) { note("__kz_sent", "1"); mark("password sent"); press(go); }
         }
       }
       // 送出後還留在這一頁：密碼不對，或是對方有話要說。
@@ -903,10 +951,10 @@ mod tests {
     fn reads_what_the_script_reports() {
         let parse = |s: &str| serde_json::from_str::<Option<Report>>(s).unwrap();
         assert_eq!(parse("null"), None);
-        assert_eq!(parse(r#"{"stage":"working"}"#), Some(Report { stage: Stage::Working, sent: false, nick: String::new() }));
+        assert_eq!(parse(r#"{"stage":"working"}"#), Some(Report { stage: Stage::Working, sent: false, nick: String::new(), trail: vec![] }));
         assert_eq!(
             parse(r#"{"stage":"user","sent":true,"nick":"風"}"#),
-            Some(Report { stage: Stage::User, sent: true, nick: "風".into() })
+            Some(Report { stage: Stage::User, sent: true, nick: "風".into(), trail: vec![] })
         );
         assert_eq!(
             parse(r#"{"stage":"code","sent":true,"sentTo":"+886 922 313 293","error":"","attempt":1}"#),
@@ -914,6 +962,7 @@ mod tests {
                 stage: Stage::Code { sent_to: "+886 922 313 293".into(), error: String::new(), attempt: 1 },
                 sent: true,
                 nick: String::new(),
+                trail: vec![],
             })
         );
     }
